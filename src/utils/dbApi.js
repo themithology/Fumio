@@ -8,7 +8,11 @@ export const DB_API_TIMEOUT_MS = 15000;
 export const DB_READ_ANSWER_TIMEOUT_MS = 10000;
 export const AUTH_UNAVAILABLE_CODE = "auth-unavailable";
 
-const API_BASE = String(import.meta.env.VITE_ACCOUNT_API_BASE || "").replace(/\/$/, "");
+// The deployed account service is also the default for the native APK. A
+// build-time VITE_ACCOUNT_API_BASE can still override it for staging or a
+// different deployment.
+const DEFAULT_ACCOUNT_API_BASE = "https://theogpiratebot.online";
+const API_BASE = String(import.meta.env.VITE_ACCOUNT_API_BASE || DEFAULT_ACCOUNT_API_BASE).replace(/\/$/, "");
 const endpoint = (path) => `${API_BASE}${path}`;
 
 const CODE_BY_STATUS = {

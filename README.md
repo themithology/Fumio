@@ -126,17 +126,17 @@ separated) in a `.env.local`.
 
 ### Optional accounts and the Iris data API
 
-The client defaults to same-origin `/api/db`, matching Iris's production Node
-server. If the app is hosted on a different origin from that server, set
-`VITE_ACCOUNT_API_BASE` to the server origin before building (the server must
-allow the app origin for authenticated CORS requests). Firebase's public web
-configuration defaults to the existing Iris project and can be overridden with
-`VITE_FIREBASE_*` variables when a deployment needs a different project. These
-are public client settings; no SQLite credential is placed in the browser.
+The client defaults to `https://theogpiratebot.online/api/db`, matching the
+production Node/SQLite account service. Set `VITE_ACCOUNT_API_BASE` before
+building when staging or another deployment uses a different API origin. The
+server must allow the app origin for authenticated CORS requests. Firebase's
+public web configuration defaults to the existing project and can be overridden
+with `VITE_FIREBASE_*` variables when a deployment needs a different project.
+These are public client settings; no SQLite credential is placed in the browser.
 
 ```bash
-# Only needed when the app and the Iris Node server are on different origins.
-VITE_ACCOUNT_API_BASE=https://your-iris-server.example
+# Optional override for staging or another deployment.
+VITE_ACCOUNT_API_BASE=https://theogpiratebot.online
 
 # Or, for local Vite development with a Node server on port 3014:
 VITE_ACCOUNT_API_DEV_TARGET=http://127.0.0.1:3014
