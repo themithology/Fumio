@@ -52,9 +52,12 @@ export default function Details() {
   const [selectedPair, setSelectedPair] = useState(null);
   const [episodes, setEpisodes] = useState([]);
   const [episodesLoading, setEpisodesLoading] = useState(false);
+  const [episodeRetry, setEpisodeRetry] = useState(0);
   const [irisLoading, setIrisLoading] = useState(false);
   const [irisMeta, setIrisMeta] = useState(null);
   const [episodeSource, setEpisodeSource] = useState(null);
+  const [nextAiring, setNextAiring] = useState(null);
+  const [nowSeconds, setNowSeconds] = useState(() => Math.floor(Date.now() / 1000));
   const [trailerOpen, setTrailerOpen] = useState(false);
 
   useEffect(() => {
@@ -65,6 +68,9 @@ export default function Details() {
     setIrisLoading(false);
     setEpisodes([]);
     setEpisodeSource(null);
+    setEpisodeRetry(0);
+    setNextAiring(null);
+    setNowSeconds(Math.floor(Date.now() / 1000));
     setSelectedSeason(1);
     setSelectedEpisode(null);
     setSelectedPair(null);
@@ -103,7 +109,8 @@ export default function Details() {
   );
 
   // Iris is the source for the selector whenever the title has an Iris/AniList
-  // season chain. Ordinary TV falls back cleanly to TMDB's own season list.
+  // season chain. Ordinary TV falls back cleanly to TMDB's own season list;
+  // a resolved Iris title never falls back to a mismatched TMDB list.
   useEffect(() => {
     if (!details || type !== "tv" || !isAnimeTitle(details)) {
       setIrisLoading(false);
@@ -125,6 +132,7 @@ export default function Details() {
       .then((metadata) => {
         if (cancelled) return;
         setIrisMeta(metadata);
+        setNextAiring(metadata?.nextAiring || null);
         if (metadata?.seasons?.length) {
           setSelectedSeason((current) =>
             metadata.seasons.some((season) => season.season_number === current)
@@ -144,6 +152,15 @@ export default function Details() {
       cancelled = true;
     };
   }, [details, type, tmdbSeasons]);
+
+  // AniList's nextAiringEpisode is a Unix timestamp. Tick every second while
+  // the title is airing so the hero never displays a stale countdown.
+  useEffect(() => {
+    if (!nextAiring?.airingAt) return undefined;
+    setNowSeconds(Math.floor(Date.now() / 1000));
+    const timer = setInterval(() => setNowSeconds(Math.floor(Date.now() / 1000)), 1000);
+    return () => clearInterval(timer);
+  }, [nextAiring]);
 
   const waitingForIris = type === "tv" && isAnimeTitle(details) && irisLoading && !irisMeta;
   const seasons = irisMeta?.seasons?.length
@@ -221,15 +238,21 @@ export default function Details() {
         }
       }
 
-      // Safe fallback for normal TV or an unavailable Iris episode collection.
-      const tmdbPair = irisMeta
-        ? mapIrisEpisodeToTmdb(selectedSeason, 1, irisMeta.seasonsMap, tmdbSeasons)
-        : { season: selectedSeason, episode: 1 };
-      const seasonData = await tmdbGet(`tv/${id}/season/${tmdbPair.season}`).catch(() => null);
+      // An Iris-resolved title is authoritative: an empty/error episode
+      // collection must stay visible as an Iris empty state, never silently
+      // repaint with a different TMDB season list. TMDB is only used when
+      // Iris did not resolve metadata for this title at all.
+      if (irisMeta) {
+        setEpisodes([]);
+        setEpisodeSource("iris");
+        return;
+      }
+
+      const seasonData = await tmdbGet(`tv/${id}/season/${selectedSeason}`).catch(() => null);
       const items = (seasonData?.episodes || []).map((episode) => ({
         ...episode,
-        id: `tmdb-${tmdbPair.season}-${episode.episode_number}`,
-        playerSeason: tmdbPair.season,
+        id: `tmdb-${selectedSeason}-${episode.episode_number}`,
+        playerSeason: selectedSeason,
         playerEpisode: episode.episode_number,
       }));
       setFirstEpisode(items, "tmdb");
@@ -249,7 +272,7 @@ export default function Details() {
     return () => {
       cancelled = true;
     };
-  }, [activeSeason, details, id, irisMeta, selectedSeason, tmdbSeasons, type, waitingForIris]);
+  }, [activeSeason, details, episodeRetry, id, irisMeta, selectedSeason, tmdbSeasons, type, waitingForIris]);
 
   useEffect(() => {
     const title = details?.title || details?.name;
@@ -275,6 +298,32 @@ export default function Details() {
   const runtime = details.runtime || details.episode_run_time?.[0];
   const mediaLabel = type === "tv" ? "Series" : "Movie";
   const selectedEpisodeItem = episodes.find((episode) => episode.episode_number === selectedEpisode);
+  const animeDetails = type === "tv" && isAnimeTitle(details);
+  const nextAirAt = Number(nextAiring?.airingAt) || 0;
+  const secondsUntilAir = nextAirAt - nowSeconds;
+  const formatCountdown = (seconds) => {
+    const remaining = Math.max(0, seconds);
+    const days = Math.floor(remaining / 86400);
+    const hours = Math.floor((remaining % 86400) / 3600);
+    const minutes = Math.floor((remaining % 3600) / 60);
+    const secs = remaining % 60;
+    if (days > 0) return `${days}d ${hours}h ${minutes}m`;
+    if (hours > 0) return `${hours}h ${minutes}m ${secs}s`;
+    if (minutes > 0) return `${minutes}m ${secs}s`;
+    return `${secs}s`;
+  };
+  const airingDate = nextAirAt
+    ? new Intl.DateTimeFormat(undefined, { weekday: "short", hour: "numeric", minute: "2-digit" }).format(new Date(nextAirAt * 1000))
+    : "";
+  const scheduleState = !animeDetails
+    ? "none"
+    : irisLoading && !irisMeta
+      ? "loading"
+      : nextAirAt > nowSeconds
+        ? "upcoming"
+        : irisMeta
+          ? "ended"
+          : "unavailable";
 
   const play = (episodeItem = selectedEpisodeItem) => {
     document.documentElement.requestFullscreen?.().catch(() => {});
@@ -376,6 +425,27 @@ export default function Details() {
               {details.overview || "No overview is available for this title yet."}
             </p>
 
+            {animeDetails && scheduleState !== "none" && (
+              <div className="mt-5 inline-flex max-w-full items-center gap-3 rounded-2xl border border-white/15 bg-black/45 px-3.5 py-2.5 backdrop-blur-md" aria-live="polite">
+                <span className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-full ${scheduleState === "upcoming" ? "bg-white text-black" : "bg-white/10 text-zinc-400"}`}>
+                  <i className={scheduleState === "loading" ? "ri-loader-4-line animate-spin" : scheduleState === "upcoming" ? "ri-calendar-schedule-line" : "ri-calendar-close-line"} />
+                </span>
+                <span className="min-w-0">
+                  {scheduleState === "loading" && <span className="block text-xs font-bold text-zinc-200">Checking next episode…</span>}
+                  {scheduleState === "upcoming" && (
+                    <>
+                      <span className="block text-xs font-black text-white">
+                        Next episode{nextAiring?.episode ? ` · EP ${nextAiring.episode}` : ""} in <span className="tabular-nums">{formatCountdown(secondsUntilAir)}</span>
+                      </span>
+                      <span className="mt-0.5 block truncate text-[10px] font-semibold text-zinc-500">Airs {airingDate}</span>
+                    </>
+                  )}
+                  {scheduleState === "ended" && <span className="block text-xs font-bold text-zinc-400">No upcoming episode scheduled</span>}
+                  {scheduleState === "unavailable" && <span className="block text-xs font-bold text-zinc-500">Episode schedule is unavailable right now</span>}
+                </span>
+              </div>
+            )}
+
             <div className="mt-6 flex flex-wrap items-center gap-3">
               <button
                 type="button"
@@ -458,6 +528,16 @@ export default function Details() {
               startsPlayback
               onEpisodeClick={handleEpisodeClick}
               stillFallback={img(details.backdrop_path || details.poster_path, "w500")}
+              emptyMessage={episodeSource === "iris" ? "The Iris API resolved this season, but did not return any episode records. Try again later instead of showing unrelated TMDB data." : "No episodes are available for this season yet."}
+              emptyAction={episodeSource === "iris" ? (
+                <button
+                  type="button"
+                  onClick={() => setEpisodeRetry((attempt) => attempt + 1)}
+                  className="mt-2 inline-flex min-h-10 items-center gap-2 rounded-full border border-white/15 bg-white/5 px-4 text-xs font-bold text-zinc-200 transition hover:border-white/30 hover:bg-white hover:text-black"
+                >
+                  <i className="ri-refresh-line" /> Retry Iris episodes
+                </button>
+              ) : null}
               searchResetKey={selectedSeason}
             />
           )}

@@ -3,7 +3,7 @@
   "private": true,
   "version": "0.1.0",
   "type": "module",
-  "description": "TheOGPirateBot — movies, series and anime in one fast, clean app with Iris season data and automatic TG Vid failover playback.",
+  "description": "TheOGPirateBot — movies, series, anime and Live TV with Iris season data and TG Vid primary playback plus manual Fumio fallback sources.",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
@@ -15,6 +15,7 @@
     "cap:open": "npx cap open android"
   },
   "dependencies": {
+    "hls.js": "^1.7.3",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "react-infinite-scroll-component": "^7.2.1",

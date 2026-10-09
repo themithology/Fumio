@@ -86,7 +86,18 @@ const numericMap = (value) => {
   );
 };
 
-const normalizeMetadata = (body, transport) => {
+const unwrapApiBody = (body) => {
+  // Iris edge deployments have returned both the route body directly and a
+  // `{ data: routeBody }` envelope during rolling updates. Normalize both so
+  // a valid episode response is not mistaken for "no episodes".
+  if (body?.data && typeof body.data === "object" && body.data.success !== undefined) {
+    return body.data;
+  }
+  return body;
+};
+
+const normalizeMetadata = (rawBody, transport) => {
+  const body = unwrapApiBody(rawBody);
   if (!body?.success || !body.seasons || typeof body.seasons !== "object") return null;
   const seasonsMap = numericMap(body.seasons);
   const seasons = Object.keys(seasonsMap)
@@ -109,7 +120,7 @@ const normalizeMetadata = (body, transport) => {
     segments: body.segments || {},
     rawCounts: body.raw_counts || {},
     anilistId: Number(body.anilist_id) || null,
-    nextAiring: body.next_airing || null,
+    nextAiring: body.next_airing || body.nextAiring || body.nextAiringEpisode || null,
   };
 };
 
@@ -158,7 +169,8 @@ export async function fetchIrisSeasonData({ title, tmdbEpisodes = null, year = n
   return parsed;
 }
 
-const normalizeEpisodes = (body) => {
+const normalizeEpisodes = (rawBody) => {
+  const body = unwrapApiBody(rawBody);
   if (!body?.success || !Array.isArray(body.episodes)) return null;
   const episodes = body.episodes
     .map((episode) => ({

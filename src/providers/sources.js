@@ -2,7 +2,7 @@
 //
 // TG Vid is a separate preferred attempt. If it fails, PlayerStage hands
 // control to FumioPlayerStage, which keeps the original Fumio source list and
-// its existing automatic failover behavior intact.
+// lets the viewer choose a source manually.
 
 function buildSource({ id, name, quality, audioOptions, movieUrl, tvUrl, primary = false }) {
   return {
@@ -38,8 +38,9 @@ export const TG_VID_SOURCE = buildSource({
 });
 
 // Fumio's original player sources. Keep this list exactly as the fallback
-// lane: when TG Vid fails, FumioPlayerStage starts here and walks every source
-// using its existing probe/error/timeout failover.
+// lane: when TG Vid fails, FumioPlayerStage starts here. The viewer chooses
+// another source manually from the top-left server picker; sources never
+// advance themselves.
 export const FUMIO_SOURCES = [
   buildSource({
     id: "vidstuck",

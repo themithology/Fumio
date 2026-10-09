@@ -8,10 +8,11 @@ import FumioPlayerStage from "./FumioPlayerStage.jsx";
 //
 //   1. TG Vid is attempted once as the preferred source.
 //   2. Any TG Vid failure hands off to FumioPlayerStage, which owns Fumio's
-//      original all-source player and its existing failover behavior.
+//      original source list and exposes a manual server picker.
 //
 // This means TG Vid is not mixed into or duplicated inside Fumio's source
-// picker/failover list.
+// picker. Once the fallback lane is mounted, no server changes without a
+// viewer click.
 const TG_LOAD_TIMEOUT_MS = 12000;
 
 export default function PlayerStage({ tmdbId, mediaType, season, episode }) {

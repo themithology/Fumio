@@ -37,6 +37,8 @@ export default function SeasonEpisodeBrowser({
   stillFallback = null,
   downloadHrefFor = null,
   searchResetKey = null,
+  emptyMessage = "No episodes are available for this season yet.",
+  emptyAction = null,
 }) {
   const [episodeSearch, setEpisodeSearch] = useState("");
   const [episodeSort, setEpisodeSort] = useState("asc");
@@ -228,13 +230,19 @@ export default function SeasonEpisodeBrowser({
             ))}
           </div>
         ) : eps.length > 0 ? (
-          <div className="flex flex-col items-center justify-center py-16 gap-2 text-zinc-500">
+          <div className="flex flex-col items-center justify-center gap-2 py-16 text-zinc-500">
             <i className="ri-emotion-sad-line text-3xl" />
-            <span className="text-xs font-bold tracking-widest uppercase">
+            <span className="text-xs font-bold uppercase tracking-widest">
               No episodes match &ldquo;{episodeSearch}&rdquo;
             </span>
           </div>
-        ) : null}
+        ) : (
+          <div className="flex flex-col items-center justify-center gap-2 py-16 text-center text-zinc-500">
+            <i className="ri-information-line text-3xl" />
+            <span className="max-w-md text-xs font-semibold leading-relaxed">{emptyMessage}</span>
+            {emptyAction}
+          </div>
+        )}
       </div>
     </>
   );
