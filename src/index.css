@@ -199,3 +199,10 @@ select {
   content-visibility: auto;
   contain-intrinsic-size: auto 300px;
 }
+
+/* Mobile playback is landscape-only. Native builds lock the OS orientation;
+   this guard covers browsers where Screen Orientation API locking is absent. */
+.player-portrait-guard { display: none; }
+@media (max-width: 767px) and (orientation: portrait) {
+  .player-portrait-guard { display: flex; }
+}

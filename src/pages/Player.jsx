@@ -6,6 +6,7 @@ import { saveContinueWatching, saveContinueWatchingProgress } from "../utils/wat
 import { fetchIrisSeasonData } from "../lib/irisEpisodes.js";
 import { buildAnimeSources, resolveAnimeEmbeds } from "../providers/animeEmbeds.js";
 import { FUMIO_SOURCES } from "../providers/sources.js";
+import { lockPlayerLandscape, unlockPlayerOrientation } from "../utils/playerOrientation.js";
 
 const PLAYER_ORIGINS = new Set([
   "https://tgvid.lovable.app",
@@ -96,6 +97,13 @@ export default function Player() {
   const [animeSources, setAnimeSources] = useState([]);
 
   useEffect(() => {
+    lockPlayerLandscape();
+    return () => {
+      unlockPlayerOrientation();
+    };
+  }, []);
+
+  useEffect(() => {
     tmdbGet(`${type}/${id}`)
       .then(setDetails)
       .catch(() => setDetails(null));
@@ -180,6 +188,7 @@ export default function Player() {
   }, [episode, id, season, type]);
 
   const close = useCallback(() => {
+    unlockPlayerOrientation();
     if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
     navigate(`/details/${type}/${id}`, { replace: true });
   }, [navigate, type, id]);
@@ -212,6 +221,16 @@ export default function Player() {
       >
         ✕
       </button>
+      <div className="player-portrait-guard absolute inset-0 z-[110] flex-col items-center justify-center gap-5 bg-black px-8 text-center">
+        <i className="ri-smartphone-line rotate-90 text-5xl text-white" aria-hidden="true" />
+        <div>
+          <p className="text-base font-black text-white">Rotate your phone to play</p>
+          <p className="mt-2 text-xs leading-relaxed text-zinc-500">The player is available in landscape only.</p>
+        </div>
+        <button type="button" onClick={close} className="rounded-full border border-white/15 px-5 py-2.5 text-xs font-bold text-white transition hover:bg-white/10">
+          Back to title
+        </button>
+      </div>
     </div>
   );
 }

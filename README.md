@@ -46,6 +46,7 @@ copied straight from Iris's `public/` assets.
   coordinates, including split-cour segments and the Demon Slayer MAL
   carve-out. Stable server keys work in deep links and are saved globally and
   per title; sources never advance automatically after a viewer choice.
+  On mobile, playback locks to landscape and shows a rotate-device guard in portrait.
   Exiting fullscreen or tapping the floating ✕ returns to Details. Opening a
   title records local Continue Watching progress context.
 - **Account** (`/account`) — optional Firebase email/password or Google sign-in.

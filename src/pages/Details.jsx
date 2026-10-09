@@ -12,6 +12,7 @@ import Footer from "../components/Footer.jsx";
 import Topnav from "../components/partials/Topnav.jsx";
 import SeasonEpisodeBrowser from "../components/partials/SeasonEpisodeBrowser.jsx";
 import { isInMyList, toggleMyList } from "../utils/myList.js";
+import { lockPlayerLandscape } from "../utils/playerOrientation.js";
 
 const firstTrailer = (videos) =>
   (videos?.results || []).find(
@@ -345,8 +346,13 @@ export default function Details() {
     first_air_date: details.first_air_date || "",
   };
 
-  const play = (episodeItem = selectedEpisodeItem) => {
-    document.documentElement.requestFullscreen?.().catch(() => {});
+  const play = async (episodeItem = selectedEpisodeItem) => {
+    try {
+      await document.documentElement.requestFullscreen?.();
+    } catch {
+      // Fullscreen is optional; native orientation locking still applies.
+    }
+    await lockPlayerLandscape();
     if (type === "movie") {
       navigate(`/watch/movie/${id}`);
       return;
