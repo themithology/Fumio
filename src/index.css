@@ -1,0 +1,201 @@
+@import "tailwindcss";
+
+/* Tailwind v4 ships sm/md/lg/xl/2xl only — `xs` is Iris's extra breakpoint,
+   used by the ported Topnav/FloatingNav for icon-only vs icon+label steps. */
+@theme {
+  --breakpoint-xs: 25rem;
+}
+
+/* ============================================================
+   TheOGPirateBot — Monochrome cinema theme, ported from Iris
+   (src/index.css). Pure black canvas, white ink, neutral grey chrome.
+   ============================================================ */
+:root {
+  color-scheme: dark;
+  --gtv-bg: #000000;
+  --gtv-surface: #0a0a0a;
+  --gtv-surface-2: #141414;
+  --gtv-accent: #ffffff;
+  --gtv-accent-2: #ffffff;
+  --gtv-accent-soft: rgba(255, 255, 255, 0.14);
+  --gtv-accent-ring: rgba(255, 255, 255, 0.35);
+  --gtv-accent-shadow: 0 12px 30px -12px rgba(255, 255, 255, 0.25);
+  --gtv-text: #f5f5f5;
+  --gtv-muted: #9d9d9d;
+  --gtv-border: rgba(255, 255, 255, 0.08);
+}
+
+* {
+  -webkit-tap-highlight-color: transparent;
+}
+
+:focus-visible {
+  outline: 2px solid var(--gtv-accent);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html { scroll-behavior: auto; }
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+html {
+  scroll-behavior: smooth;
+  font-size: 16px;
+}
+
+body {
+  margin: 0;
+  background-color: var(--gtv-bg);
+  color: var(--gtv-text);
+  font-family: "Inter", system-ui, -apple-system, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+  overflow-x: hidden;
+  -webkit-overflow-scrolling: touch;
+}
+
+.font-display {
+  font-family: "Inter", system-ui, -apple-system, sans-serif;
+}
+
+.font-editorial {
+  font-family: "Pally", "Inter", system-ui, sans-serif;
+  font-weight: 700;
+  font-synthesis: none;
+  letter-spacing: -0.025em;
+}
+
+h1, h2, h3 {
+  overflow-wrap: anywhere;
+  min-width: 0;
+}
+
+.gtv-hero-title {
+  font-size: clamp(1.5rem, 5vw, 3rem);
+  line-height: 1.1;
+  overflow-wrap: anywhere;
+}
+
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.12); border-radius: 999px; }
+::-webkit-scrollbar-thumb:hover { background: rgba(255, 255, 255, 0.4); }
+
+.gtv-no-scrollbar, .no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+.gtv-no-scrollbar::-webkit-scrollbar, .no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+
+/* Horizontal content row with snap (ScrollRow.jsx) */
+.gtv-row {
+  display: flex;
+  gap: 0.85rem;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scroll-snap-type: x proximity;
+  padding: 0.5rem 0.25rem 0.75rem;
+  transform: translateZ(0);
+  will-change: scroll-position;
+  cursor: grab;
+}
+.gtv-row > * { scroll-snap-align: start; }
+@media (pointer: coarse) {
+  .gtv-row { scroll-snap-type: x mandatory; }
+}
+.gtv-scroll-wrap { position: relative; }
+.gtv-row-dragging {
+  cursor: grabbing;
+  scroll-snap-type: none;
+  scroll-behavior: auto !important;
+}
+.gtv-row:focus-visible {
+  outline: 2px solid rgba(255, 255, 255, 0.55);
+  outline-offset: 2px;
+  border-radius: 0.5rem;
+}
+
+.gtv-arrow {
+  position: absolute;
+  top: 50%;
+  z-index: 20;
+  display: none;
+  height: 2.75rem;
+  width: 2.75rem;
+  transform: translateY(-50%);
+  align-items: center;
+  justify-content: center;
+  border-radius: 9999px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  background: rgba(0, 0, 0, 0.72);
+  color: #fff;
+  font-size: 1.5rem;
+  line-height: 1;
+  backdrop-filter: blur(6px);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.45);
+  transition: opacity 0.18s ease, background 0.18s ease, transform 0.18s ease;
+}
+.gtv-arrow:hover { background: #fff; color: #000; }
+.gtv-arrow-left { left: 0.15rem; }
+.gtv-arrow-right { right: 0.15rem; }
+.gtv-arrow-off { opacity: 0; pointer-events: none; }
+
+@media (pointer: fine) {
+  .gtv-arrow { display: flex; opacity: 0.92; }
+  .gtv-arrow:hover { opacity: 1; transform: translateY(-50%) scale(1.06); }
+  .gtv-arrow-off { opacity: 0; pointer-events: none; }
+}
+
+/* Section title with the thin editorial rule, streamrip style */
+.section-rule {
+  border-left: 3px solid #fff;
+  padding-left: 0.9rem;
+  line-height: 1.15;
+}
+
+/* Custom <select> chrome (Explore's filter bar) */
+select {
+  -webkit-appearance: none;
+  -moz-appearance: none;
+  appearance: none;
+  outline: 0;
+  box-shadow: none;
+  border: 0;
+  background: var(--gtv-surface-2);
+  color: #fff;
+  cursor: pointer;
+  font-family: "Inter", sans-serif;
+}
+@media (max-width: 767px) {
+  input, textarea, select { font-size: 16px; }
+}
+
+/* Elegant transitions */
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(12px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+@keyframes slideUpFade {
+  0% { opacity: 0; transform: translateY(24px) scale(0.98); }
+  100% { opacity: 1; transform: translateY(0) scale(1); }
+}
+.animate-slide-up-fade {
+  animation: slideUpFade 0.9s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+.animate-fade-in {
+  animation: fadeIn 0.45s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+/* Native browser-level lazy rendering for smooth homepage scrolling */
+.gtv-lazy-section {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 300px;
+}

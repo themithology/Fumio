@@ -1,0 +1,65 @@
+name: Build Android APK
+
+# This sandbox that develops TheOGPirateBot has no Android SDK/Gradle and no network
+# route to Google's / Gradle's download hosts, so the APK cannot be built
+# locally in that environment. GitHub Actions runners have full internet
+# access and the standard Android toolchain, so the APK is built here
+# instead, on every push to this branch (or manually via workflow_dispatch).
+
+on:
+  push:
+    branches:
+      - "arena/**"
+      - main
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - run: npm ci
+      - run: npm run build
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      # GitHub's ubuntu-latest runners ship the Android SDK pre-installed
+      # (ANDROID_HOME, platforms, build-tools, licenses already accepted) —
+      # no separate setup-android action needed.
+      - name: Sync web build into the Android project
+        run: npx cap sync android
+
+      - name: Build debug APK
+        working-directory: android
+        run: |
+          chmod +x ./gradlew
+          ./gradlew assembleDebug --no-daemon
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: theogpiratebot-debug-apk
+          path: android/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+
+      - name: Attach APK to a rolling "latest-apk" release
+        if: github.ref_name == github.event.repository.default_branch || startsWith(github.ref_name, 'arena/')
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: theogpiratebot-apk-${{ github.run_number }}
+          name: "TheOGPirateBot debug APK #${{ github.run_number }} (${{ github.ref_name }}@${{ github.sha }})"
+          body: "Auto-built debug APK — not for release, Details+Player skeleton only. Commit ${{ github.sha }}."
+          prerelease: true
+          files: android/app/build/outputs/apk/debug/app-debug.apk
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
