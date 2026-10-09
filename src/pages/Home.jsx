@@ -8,12 +8,14 @@ import Loading from "../components/Loading.jsx";
 import FetchError from "../components/FetchError.jsx";
 import Footer from "../components/Footer.jsx";
 import axios from "../lib/irisAxios.js";
+import { readMyList } from "../utils/myList.js";
+import { readContinueWatching } from "../utils/watchHistory.js";
 
 // ─── Home ───────────────────────────────────────────────────────────────────
 // Ported from Iris's components/Home.jsx, trimmed: no personalized
-// recommendation engine (built from Continue Watching / My List / recent
-// searches — there are no accounts in this build, see README), no OTT
-// provider-logo row. What's left is the real visual language — rotating
+// recommendation engine or OTT provider-logo row. The local-first My List and
+// Continue Watching rails are kept here and optionally synced by accountSync.
+// What's left is the real visual language — rotating
 // hero, lazy-loaded rows that fetch only once scrolled into view, Trending
 // Searches poster grid — wired to TheOGPirateBot's own TMDB proxy via irisAxios.
 
@@ -27,6 +29,39 @@ const SectionHeader = ({ title, viewMorePath }) => (
     )}
   </div>
 );
+
+const LocalRail = ({ title, data, viewMorePath }) => {
+  if (!data.length) return null;
+  return (
+    <section>
+      <SectionHeader title={title} viewMorePath={viewMorePath} />
+      <div className="px-4 sm:px-8 md:px-12 lg:px-16 xl:px-20">
+        <HorizontalCards data={data} limit={14} />
+      </div>
+    </section>
+  );
+};
+
+const LocalLibraryRails = () => {
+  const [library, setLibrary] = useState(() => ({ myList: readMyList(), continueWatching: readContinueWatching() }));
+
+  useEffect(() => {
+    const refresh = () => setLibrary({ myList: readMyList(), continueWatching: readContinueWatching() });
+    window.addEventListener("mylist-updated", refresh);
+    window.addEventListener("history-updated", refresh);
+    return () => {
+      window.removeEventListener("mylist-updated", refresh);
+      window.removeEventListener("history-updated", refresh);
+    };
+  }, []);
+
+  return (
+    <>
+      <LocalRail title="Continue Watching" data={library.continueWatching} />
+      <LocalRail title="My List" data={library.myList} viewMorePath="/account" />
+    </>
+  );
+};
 
 // Lazy-loaded carousel: fetches only once scrolled near, with a staggered
 // queue so a fast scroll doesn't fire every row's request at once.
@@ -155,6 +190,7 @@ const Home = () => {
       <Topnav />
       <Hero data={heroItems} />
 
+      <LocalLibraryRails />
       <TrendingSearches data={heroItems} title="Trending Now" variant="rail" />
 
       <LazyCarousel title="Popular Movies" viewMorePath="/explore?type=movie" fetchFn={() => fetchResults("/movie/popular")} />

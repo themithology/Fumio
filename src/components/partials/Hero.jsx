@@ -5,8 +5,8 @@ import HeroLogo from "./HeroLogo";
 
 // ─── Hero — Home's rotating backdrop carousel ──────────────────────────────
 // Ported from Iris's partials/Header.jsx (renamed to avoid clashing with
-// TheOGPirateBot's own nav), trimmed: no My List button/useHeroWatchlist (no accounts
-// in this build — see README). Everything else — logo preload, textless
+// TheOGPirateBot's own nav), trimmed: no Hero-level My List button/useHeroWatchlist
+// (the library action lives on Details and the Home rails). Everything else — logo preload, textless
 // backdrop preload, touch/drag swipe, the no-flash title states — is kept,
 // because that polish is exactly what "copy the Iris UI" asked for.
 

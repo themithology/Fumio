@@ -4,7 +4,10 @@ A small streaming app: **Home → Search → Details → Player**, with Iris-sty
 Anime and Live TV hubs. The app keeps TheOGPirateBot branding throughout and
 uses the Iris/AniList data flow for anime seasons, episodes and schedules.
 
-No ads, no party mode, no Discord bot, no admin panel, no Node backend.
+No ads, no party mode, no Discord bot, no admin panel. The frontend stays
+optional-account and local-first: Firebase Auth is used only for sign-in, while
+Iris's existing Node/SQLite `/api/db` service stores the signed-in member's
+library. No Firestore list/history storage is used.
 Branding (logo, name, colors, icons) is the real TheOGPirateBot identity,
 copied straight from Iris's `public/` assets.
 
@@ -31,7 +34,13 @@ copied straight from Iris's `public/` assets.
   hands off to Fumio's existing player as a separate fallback lane. Fumio's
   VidStuck, VidFast, Bingr, Roxy and NXSHA sources are exposed by a clear
   top-left manual server picker and never advance automatically. Exiting
-  fullscreen or tapping the floating ✕ returns to Details.
+  fullscreen or tapping the floating ✕ returns to Details. Opening a title
+  records local Continue Watching progress context.
+- **Account** (`/account`) — optional Firebase email/password or Google sign-in.
+  Signed-out browsing, My List and playback remain local. A signed-in session
+  merges local My List and Continue Watching with `/api/db/user/:uid`, then
+  debounces changes back to Iris's own Node/SQLite service. Timeouts and server
+  errors show a local-safe status and never disable browsing.
 
 This plays **real content today** — it is not a demo/placeholder stream.
 The player keeps Fumio's existing TMDB-keyed sources and episode-number
@@ -49,8 +58,10 @@ src/
     Search.jsx           # TMDB multi-search
     Details.jsx          # Iris-style details UI + API-backed Iris season/episode browser
     Player.jsx            # fullscreen shell: PlayerStage + close/back handling
+    Account.jsx           # optional Firebase sign-in + SQLite sync status
     NotFound.jsx
   components/
+    auth/                 # Firebase session hooks and email/Google form
     partials/Topnav.jsx    # branded top bar
     partials/FloatingNav.jsx # six-slot bottom dock
     partials/Cards.jsx     # poster cards used by browse/search
@@ -61,6 +72,11 @@ src/
     sources.js             # TG Vid primary plus Fumio's original source list
   data/liveTvSnapshot.js   # curated Live TV guide and stream definitions
   utils/liveTv.js          # Live TV API/cache/favorites/recents
+  utils/myList.js          # local-first My List storage/events
+  utils/watchHistory.js    # local-first Continue Watching storage/events
+  utils/accountSync.js     # merge/debounce/error-safe `/api/db` sync
+  utils/dbApi.js           # authenticated Iris Node/SQLite API client
+  utils/auth.js             # Firebase Auth session and sign-in helpers
   pages/Anime.jsx          # API-backed Anime hub
   pages/LiveTv*.jsx        # Live TV guide and theater
   lib/
@@ -92,6 +108,24 @@ android/                  # Capacitor Android project (committed — the
 
 Override with `VITE_PROXY_BASES="https://your-worker.workers.dev"` (comma
 separated) in a `.env.local`.
+
+### Optional accounts and the Iris data API
+
+The client defaults to same-origin `/api/db`, matching Iris's production Node
+server. If Fumio is hosted on a different origin from that server, set
+`VITE_ACCOUNT_API_BASE` to the server origin before building (the server must
+allow the app origin for authenticated CORS requests). Firebase's public web
+configuration defaults to the existing Iris project and can be overridden with
+`VITE_FIREBASE_*` variables when a deployment needs a different project. These
+are public client settings; no SQLite credential is placed in the browser.
+
+```bash
+# Only needed when Fumio and the Iris Node server are on different origins.
+VITE_ACCOUNT_API_BASE=https://your-iris-server.example
+
+# Or, for local Vite development with a Node server on port 3014:
+VITE_ACCOUNT_API_DEV_TARGET=http://127.0.0.1:3014
+```
 
 ```bash
 cp worker/.dev.vars.example worker/.dev.vars   # then fill in TMDB_API_KEY

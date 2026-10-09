@@ -11,6 +11,7 @@ import FetchError from "../components/FetchError.jsx";
 import Footer from "../components/Footer.jsx";
 import Topnav from "../components/partials/Topnav.jsx";
 import SeasonEpisodeBrowser from "../components/partials/SeasonEpisodeBrowser.jsx";
+import { isInMyList, toggleMyList } from "../utils/myList.js";
 
 const firstTrailer = (videos) =>
   (videos?.results || []).find(
@@ -57,6 +58,7 @@ export default function Details() {
   const [irisMeta, setIrisMeta] = useState(null);
   const [episodeSource, setEpisodeSource] = useState(null);
   const [nextAiring, setNextAiring] = useState(null);
+  const [inMyList, setInMyList] = useState(false);
   const [nowSeconds, setNowSeconds] = useState(() => Math.floor(Date.now() / 1000));
   const [trailerOpen, setTrailerOpen] = useState(false);
 
@@ -70,6 +72,7 @@ export default function Details() {
     setEpisodeSource(null);
     setEpisodeRetry(0);
     setNextAiring(null);
+    setInMyList(false);
     setNowSeconds(Math.floor(Date.now() / 1000));
     setSelectedSeason(1);
     setSelectedEpisode(null);
@@ -82,6 +85,7 @@ export default function Details() {
       .then((data) => {
         if (cancelled) return;
         setDetails(data);
+        setInMyList(isInMyList({ id: Number(id), type }));
         // Match Iris's own anime gate: anime seasons/episodes wait for Iris;
         // ordinary TV stays on the normal TMDB fallback immediately.
         if (type === "tv" && isAnimeTitle(data)) setIrisLoading(true);
@@ -275,6 +279,12 @@ export default function Details() {
   }, [activeSeason, details, episodeRetry, id, irisMeta, selectedSeason, tmdbSeasons, type, waitingForIris]);
 
   useEffect(() => {
+    const refreshListState = () => setInMyList(isInMyList({ id: Number(id), type }));
+    window.addEventListener("mylist-updated", refreshListState);
+    return () => window.removeEventListener("mylist-updated", refreshListState);
+  }, [id, type]);
+
+  useEffect(() => {
     const title = details?.title || details?.name;
     document.title = title ? `${title} | TheOGPirateBot` : "TheOGPirateBot — Movies & TV";
   }, [details]);
@@ -324,6 +334,16 @@ export default function Details() {
         : irisMeta
           ? "ended"
           : "unavailable";
+  const libraryItem = {
+    id: Number(id),
+    type,
+    title: details.title || details.name,
+    poster_path: details.poster_path || null,
+    backdrop_path: details.backdrop_path || null,
+    vote_average: details.vote_average || 0,
+    release_date: details.release_date || "",
+    first_air_date: details.first_air_date || "",
+  };
 
   const play = (episodeItem = selectedEpisodeItem) => {
     document.documentElement.requestFullscreen?.().catch(() => {});
@@ -338,6 +358,10 @@ export default function Details() {
           ? mapIrisEpisodeToTmdb(selectedSeason, selectedEpisode || 1, irisMeta.seasonsMap, tmdbSeasons)
           : { season: selectedSeason, episode: selectedEpisode || 1 });
     navigate(`/watch/tv/${id}?season=${pair.season}&episode=${pair.episode}`);
+  };
+
+  const handleLibraryToggle = () => {
+    setInMyList(toggleMyList(libraryItem));
   };
 
   const handleEpisodeClick = (episode) => {
@@ -454,6 +478,15 @@ export default function Details() {
               >
                 <i className="ri-play-fill text-lg" />
                 {type === "tv" && selectedEpisode ? `Play S${selectedSeason}:E${selectedEpisode}` : "Play"}
+              </button>
+              <button
+                type="button"
+                onClick={handleLibraryToggle}
+                aria-pressed={inMyList}
+                className={`inline-flex min-h-11 items-center gap-2 rounded-full border px-5 text-sm font-bold backdrop-blur transition ${inMyList ? "border-white bg-white text-black hover:bg-zinc-200" : "border-white/20 bg-white/10 text-white hover:bg-white/20"}`}
+              >
+                <i className={inMyList ? "ri-check-line" : "ri-add-line"} />
+                {inMyList ? "In My List" : "Add to My List"}
               </button>
               {trailer?.key && (
                 <button

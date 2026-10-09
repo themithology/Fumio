@@ -12,7 +12,7 @@ import { clampTotalPages, isTitle, searchPageUrl, walkPages } from "../utils/sea
 
 // ─── /search — Hotstar-style dedicated search page ───
 // Ported from Iris's components/Search.jsx, trimmed: no Users/member-profile
-// category (no accounts in this build, see README) and no Random Watch
+// directory category and no Random Watch
 // link (that page isn't ported). All/Movies/Series tabs, recent-search
 // chips, debounced live results and the Trending Searches empty state are
 // kept as-is.

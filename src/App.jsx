@@ -9,6 +9,8 @@ import NotFound from "./pages/NotFound.jsx";
 import LiveTv from "./pages/LiveTv.jsx";
 import LiveTvWatch from "./pages/LiveTvWatch.jsx";
 import Anime from "./pages/Anime.jsx";
+import Account from "./pages/Account.jsx";
+import { useAccountSync } from "./components/auth/useAccount.js";
 
 // TheOGPirateBot: browse (Home/Search/Explore) -> Details -> Player.
 // Each page renders its own Topnav (see components/partials/Topnav.jsx) —
@@ -17,6 +19,7 @@ import Anime from "./pages/Anime.jsx";
 // and hides itself on /watch/*, since the player is a true fullscreen
 // surface with zero chrome; the Live TV theater follows the same rule.
 export default function App() {
+  useAccountSync();
   const location = useLocation();
   const isPlayerRoute = location.pathname.startsWith("/watch/") || location.pathname.startsWith("/live-tv/watch/");
 
@@ -26,6 +29,7 @@ export default function App() {
         <Route path="/" element={<Home />} />
         <Route path="/search" element={<Search />} />
         <Route path="/anime" element={<Anime />} />
+        <Route path="/account" element={<Account />} />
         <Route path="/live-tv" element={<LiveTv />} />
         <Route path="/live-tv/watch/:id" element={<LiveTvWatch />} />
         <Route path="/explore" element={<Explore />} />

@@ -6,10 +6,9 @@ import TitleHint from "./TitleHint";
 
 // ─── HorizontalCards ────────────────────────────────────────────────────────
 // Ported from Iris's src/components/partials/HorizontalCards.jsx, trimmed:
-// no Continue Watching / My List (no accounts in this build, see README), no
-// "remove" button, no Top 10 / AniList rail (the anime lane isn't ported —
-// see src/providers/sources.js). What's left is the two card shapes every
-// plain movie/TV row actually uses: a poster rail and a widescreen rail.
+// no "remove" button, no Top 10 / AniList rail (the anime lane isn't ported —
+// see src/providers/sources.js). The same two card shapes are also used by the
+// local-first Continue Watching and My List rails.
 
 const STAGGER_CSS = `
   @keyframes slideUpFade {
@@ -96,6 +95,9 @@ const HorizontalCards = ({
 const metaLine = (item, mediaType) => {
   const year = (item.release_date || item.first_air_date || "").split("-")[0];
   const rating = item.vote_average ? item.vote_average.toFixed(1) : null;
+  const episode = item.lastUpdated && mediaType === "tv" && item.season && item.episode
+    ? `S${item.season}:E${item.episode}`
+    : null;
   return (
     <div className="flex items-center gap-1.5 mt-1 text-[10px] sm:text-xs text-zinc-500 font-bold tracking-wide">
       {rating && (
@@ -104,11 +106,17 @@ const metaLine = (item, mediaType) => {
         </span>
       )}
       <span>·</span>
-      <span>{year || "N/A"}</span>
+      <span>{episode || year || "N/A"}</span>
       <span>·</span>
       <span className="capitalize">{mediaType === "tv" ? "Series" : "Movie"}</span>
     </div>
   );
+};
+
+const cardPath = (item, mediaType) => {
+  if (!item.lastUpdated) return `/${mediaType}/details/${item.id}`;
+  const query = mediaType === "tv" ? `?season=${Number(item.season) || 1}&episode=${Number(item.episode) || 1}` : "";
+  return `/watch/${mediaType}/${item.id}${query}`;
 };
 
 /* Landscape 16:9 card — Trending/featured rows. */
@@ -122,7 +130,7 @@ const WidescreenCard = ({ item, fluid = false }) => {
 
   return (
     <Link
-      to={`/${mediaType}/details/${item.id}`}
+      to={cardPath(item, mediaType)}
       className={`group block ${fluid ? "w-full" : "w-[170px] sm:w-[210px] md:w-[240px] lg:w-[270px] xl:w-[290px]"}`}
     >
       <div className="gtv-media-art relative aspect-video overflow-hidden rounded-2xl bg-[var(--gtv-surface)] border border-white/5 shadow-lg transition-all duration-300 group-hover:scale-[1.04] group-hover:shadow-[0_12px_30px_rgba(0,0,0,0.65)] group-hover:border-white/20">
@@ -161,7 +169,7 @@ const PosterCard = ({ item, fluid = false }) => {
 
   return (
     <Link
-      to={`/${mediaType}/details/${item.id}`}
+      to={cardPath(item, mediaType)}
       className={`group block ${fluid ? "w-full" : "w-[130px] sm:w-[150px] md:w-[170px] lg:w-[190px] xl:w-[210px]"}`}
     >
       <div className="gtv-media-art relative aspect-[2/3] overflow-hidden rounded-2xl bg-[var(--gtv-surface)] border border-white/5 shadow-lg transition-all duration-300 group-hover:scale-[1.04] group-hover:shadow-[0_12px_30px_rgba(0,0,0,0.65)] group-hover:border-white/20">

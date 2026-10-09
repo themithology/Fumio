@@ -2,11 +2,12 @@ import React from "react";
 import { Link } from "react-router-dom";
 
 // Ported from Iris's components/Footer.jsx, trimmed to routes this build
-// actually has — no Anime/Live TV/My List hubs, no About/FAQ/Legal pages.
+// actually has — no About/FAQ/Legal pages; My List is a Home rail/account feature.
 const browseLinks = [
   ["Explore all", "/explore"],
   ["Movies", "/explore?type=movie"],
   ["TV shows", "/explore?type=tv"],
+  ["Account / sign in", "/account"],
 ];
 
 const Footer = () => (
