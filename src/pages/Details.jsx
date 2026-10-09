@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { useParams, useNavigate } from "react-router-dom";
+import { useNavigate, useParams } from "react-router-dom";
 import { tmdbGet, img } from "../lib/tmdb.js";
 import {
   fetchIrisEpisodes,
@@ -8,38 +8,56 @@ import {
 } from "../lib/irisEpisodes.js";
 import Loading from "../components/Loading.jsx";
 import FetchError from "../components/FetchError.jsx";
+import Footer from "../components/Footer.jsx";
 import Topnav from "../components/partials/Topnav.jsx";
+import SeasonEpisodeBrowser from "../components/partials/SeasonEpisodeBrowser.jsx";
+
+const firstTrailer = (videos) =>
+  (videos?.results || []).find(
+    (video) => video.site === "YouTube" && (video.type === "Trailer" || video.type === "Teaser"),
+  ) || (videos?.results || []).find((video) => video.site === "YouTube");
+
+const castImage = (path) => (path ? `https://image.tmdb.org/t/p/w185${path}` : null);
 
 export default function Details() {
   const { type, id } = useParams();
   const navigate = useNavigate();
   const [details, setDetails] = useState(null);
   const [err, setErr] = useState(null);
-  const [season, setSeason] = useState(1);
-  const [episode, setEpisode] = useState(1);
-  const [irisMeta, setIrisMeta] = useState(null);
-  const [irisEpisodes, setIrisEpisodes] = useState(null);
+  const [selectedSeason, setSelectedSeason] = useState(1);
+  const [selectedEpisode, setSelectedEpisode] = useState(null);
+  const [selectedPair, setSelectedPair] = useState(null);
+  const [episodes, setEpisodes] = useState([]);
+  const [episodesLoading, setEpisodesLoading] = useState(false);
   const [irisLoading, setIrisLoading] = useState(false);
+  const [irisMeta, setIrisMeta] = useState(null);
+  const [episodeSource, setEpisodeSource] = useState(null);
+  const [trailerOpen, setTrailerOpen] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
     setDetails(null);
     setErr(null);
     setIrisMeta(null);
-    setIrisEpisodes(null);
     setIrisLoading(false);
-    setSeason(1);
-    setEpisode(1);
+    setEpisodes([]);
+    setEpisodeSource(null);
+    setSelectedSeason(1);
+    setSelectedEpisode(null);
+    setSelectedPair(null);
+    setTrailerOpen(false);
 
-    tmdbGet(`${type}/${id}`)
+    tmdbGet(`${type}/${id}`, {
+      append_to_response: "videos,credits,images",
+    })
       .then((data) => {
         if (cancelled) return;
         setDetails(data);
-        const firstRealSeason = (data.seasons || []).find((s) => s.season_number > 0);
-        if (firstRealSeason) setSeason(firstRealSeason.season_number);
+        const firstSeason = (data.seasons || []).find((season) => season.season_number > 0);
+        if (firstSeason) setSelectedSeason(firstSeason.season_number);
       })
-      .catch((e) => {
-        if (!cancelled) setErr(e.message);
+      .catch((error) => {
+        if (!cancelled) setErr(error.message);
       });
 
     return () => {
@@ -47,15 +65,26 @@ export default function Details() {
     };
   }, [type, id]);
 
-  // Iris owns the anime season/episode catalog. It returns null for ordinary
-  // television, so the TheOGPirateBot/TMDB season list remains a safe fallback rather
-  // than blocking every TV details page on a second provider.
+  const tmdbSeasons = useMemo(
+    () =>
+      (details?.seasons || [])
+        .filter((season) => season.season_number > 0)
+        .map((season) => ({
+          ...season,
+          poster_path: img(season.poster_path, "w300"),
+        })),
+    [details],
+  );
+
+  // Iris is the source for the selector whenever the title has an Iris/AniList
+  // season chain. Ordinary TV falls back cleanly to TMDB's own season list.
   useEffect(() => {
     if (!details || type !== "tv") return undefined;
     let cancelled = false;
-    const tmdbEpisodes = (details.seasons || [])
-      .filter((item) => item.season_number > 0 && item.episode_count > 0)
-      .reduce((total, item) => total + item.episode_count, 0);
+    const tmdbEpisodes = tmdbSeasons.reduce(
+      (total, season) => total + (Number(season.episode_count) || 0),
+      0,
+    );
     const year = Number((details.first_air_date || "").slice(0, 4)) || null;
 
     setIrisLoading(true);
@@ -68,8 +97,8 @@ export default function Details() {
         if (cancelled) return;
         setIrisMeta(metadata);
         if (metadata?.seasons?.length) {
-          setSeason((current) =>
-            metadata.seasons.some((item) => item.season_number === current)
+          setSelectedSeason((current) =>
+            metadata.seasons.some((season) => season.season_number === current)
               ? current
               : metadata.seasons[0].season_number,
           );
@@ -85,155 +114,308 @@ export default function Details() {
     return () => {
       cancelled = true;
     };
-  }, [details, type]);
+  }, [details, type, tmdbSeasons]);
 
-  const tmdbSeasons = useMemo(
-    () => (details?.seasons || []).filter((item) => item.season_number > 0),
-    [details],
-  );
   const seasons = irisMeta?.seasons?.length ? irisMeta.seasons : tmdbSeasons;
-  const activeSeason = seasons.find((item) => item.season_number === season) || seasons[0] || null;
-  const episodeItems = irisEpisodes?.episodes || [];
-  const episodeCount =
-    episodeItems.length || irisEpisodes?.count || activeSeason?.episode_count || 1;
+  const activeSeason = seasons.find((season) => season.season_number === selectedSeason) || seasons[0] || null;
 
-  // Load the selected Iris season's real episode titles and thumbnails. The
-  // selector still paints immediately from the season count, then upgrades to
-  // Iris's numbered list when the response arrives.
   useEffect(() => {
-    setIrisEpisodes(null);
-    const anilistId = activeSeason?.anilist_id;
-    if (!irisMeta || !anilistId) return undefined;
+    if (!details || type !== "tv" || !activeSeason) {
+      setEpisodes([]);
+      setEpisodeSource(null);
+      return undefined;
+    }
+
     let cancelled = false;
-    fetchIrisEpisodes(anilistId).then((episodes) => {
-      if (!cancelled) setIrisEpisodes(episodes);
-    });
+    setEpisodesLoading(true);
+    setSelectedEpisode(null);
+    setSelectedPair(null);
+
+    const setFirstEpisode = (items, source) => {
+      if (cancelled) return;
+      setEpisodes(items);
+      setEpisodeSource(source);
+      if (items.length > 0) {
+        setSelectedEpisode(items[0].episode_number);
+        setSelectedPair({
+          season: items[0].playerSeason,
+          episode: items[0].playerEpisode,
+        });
+      }
+    };
+
+    const loadEpisodes = async () => {
+      // Iris-native season: real episode names, thumbnails and counts.
+      if (irisMeta && activeSeason.anilist_id) {
+        const irisData = await fetchIrisEpisodes(activeSeason.anilist_id);
+        if (irisData?.episodes?.length) {
+          const items = irisData.episodes.map((episode) => {
+            const thumbnail = episode.thumbnail;
+            const stillPath =
+              typeof thumbnail === "string"
+                ? thumbnail
+                : thumbnail?.large || thumbnail?.medium || null;
+            const pair = mapIrisEpisodeToTmdb(
+              selectedSeason,
+              episode.number,
+              irisMeta.seasonsMap,
+              tmdbSeasons,
+            );
+            return {
+              id: `iris-${activeSeason.anilist_id}-${episode.number}`,
+              episode_number: episode.number,
+              name: episode.title || `Episode ${episode.number}`,
+              overview: "",
+              still_path: stillPath,
+              air_date: episode.airingAt
+                ? new Date(episode.airingAt * 1000).toISOString().slice(0, 10)
+                : "",
+              playerSeason: pair.season,
+              playerEpisode: pair.episode,
+            };
+          });
+          setFirstEpisode(items, "iris");
+          return;
+        }
+      }
+
+      // Safe fallback for normal TV or an unavailable Iris episode collection.
+      const tmdbPair = irisMeta
+        ? mapIrisEpisodeToTmdb(selectedSeason, 1, irisMeta.seasonsMap, tmdbSeasons)
+        : { season: selectedSeason, episode: 1 };
+      const seasonData = await tmdbGet(`tv/${id}/season/${tmdbPair.season}`).catch(() => null);
+      const items = (seasonData?.episodes || []).map((episode) => ({
+        ...episode,
+        id: `tmdb-${tmdbPair.season}-${episode.episode_number}`,
+        playerSeason: tmdbPair.season,
+        playerEpisode: episode.episode_number,
+      }));
+      setFirstEpisode(items, "tmdb");
+    };
+
+    loadEpisodes()
+      .catch(() => {
+        if (!cancelled) {
+          setEpisodes([]);
+          setEpisodeSource(null);
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setEpisodesLoading(false);
+      });
+
     return () => {
       cancelled = true;
     };
-  }, [activeSeason?.anilist_id, irisMeta]);
-
-  useEffect(() => {
-    setEpisode((current) => Math.min(Math.max(current, 1), episodeCount));
-  }, [episodeCount]);
+  }, [activeSeason, details, id, irisMeta, selectedSeason, tmdbSeasons, type]);
 
   useEffect(() => {
     const title = details?.title || details?.name;
     document.title = title ? `${title} | TheOGPirateBot` : "TheOGPirateBot — Movies & TV";
   }, [details]);
 
-  if (err)
+  if (err) {
     return (
       <div className="min-h-screen bg-[var(--gtv-bg)]">
         <Topnav />
         <FetchError onRetry={() => navigate(0)} message={`Couldn't load this title: ${err}`} />
       </div>
     );
+  }
   if (!details) return <Loading />;
 
-  const title = details.title || details.name;
+  const title = details.title || details.name || "Untitled";
   const year = (details.release_date || details.first_air_date || "").slice(0, 4);
+  const trailer = firstTrailer(details.videos);
+  const backdrop = img(details.backdrop_path || details.poster_path, "w1280");
+  const logoPath = details.images?.logos?.find((logo) => logo.iso_639_1 === "en")?.file_path || details.images?.logos?.[0]?.file_path;
+  const logoSrc = img(logoPath, "w500");
+  const runtime = details.runtime || details.episode_run_time?.[0];
+  const mediaLabel = type === "tv" ? "Series" : "Movie";
+  const selectedEpisodeItem = episodes.find((episode) => episode.episode_number === selectedEpisode);
 
-  // Fullscreen requires a real user gesture — this click handler IS one, so
-  // the request fires here, synchronously, before navigating. Doing it on
-  // the Player page's own mount (after an async route transition) is too
-  // late and most browsers silently refuse it.
-  const play = () => {
+  const play = (episodeItem = selectedEpisodeItem) => {
     document.documentElement.requestFullscreen?.().catch(() => {});
-    const pair =
-      type === "tv" && irisMeta
-        ? mapIrisEpisodeToTmdb(season, episode, irisMeta.seasonsMap, tmdbSeasons)
-        : { season, episode };
-    const qs = type === "tv" ? `?season=${pair.season}&episode=${pair.episode}` : "";
-    navigate(`/watch/${type}/${id}${qs}`);
+    if (type === "movie") {
+      navigate(`/watch/movie/${id}`);
+      return;
+    }
+    const pair = episodeItem
+      ? { season: episodeItem.playerSeason, episode: episodeItem.playerEpisode }
+      : selectedPair ||
+        (irisMeta
+          ? mapIrisEpisodeToTmdb(selectedSeason, selectedEpisode || 1, irisMeta.seasonsMap, tmdbSeasons)
+          : { season: selectedSeason, episode: selectedEpisode || 1 });
+    navigate(`/watch/tv/${id}?season=${pair.season}&episode=${pair.episode}`);
   };
 
-  const episodeOptions = episodeItems.length
-    ? episodeItems
-    : Array.from({ length: episodeCount }, (_, index) => ({ number: index + 1, title: "" }));
+  const handleEpisodeClick = (episode) => {
+    setSelectedEpisode(episode.episode_number);
+    setSelectedPair({ season: episode.playerSeason, episode: episode.playerEpisode });
+    play(episode);
+  };
 
   return (
-    <div className="relative min-h-screen bg-[var(--gtv-bg)] pb-24">
+    <div className="min-h-screen w-full bg-[var(--gtv-bg)] text-white">
       <Topnav />
-      {details.backdrop_path && (
-        <div className="absolute inset-x-0 top-0 h-[50vh] overflow-hidden">
-          <img src={img(details.backdrop_path, "w1280")} alt="" className="h-full w-full object-cover opacity-30" />
-          <div className="absolute inset-0 bg-gradient-to-t from-[var(--gtv-bg)] via-[var(--gtv-bg)]/70 to-transparent" />
-        </div>
-      )}
-      <div className="relative mx-auto flex max-w-5xl flex-col gap-6 px-4 pt-6 pb-10 sm:flex-row sm:px-8">
-        <div className="w-40 shrink-0 overflow-hidden rounded-xl ring-1 ring-white/10 shadow-2xl sm:w-56">
-          {details.poster_path ? (
-            <img src={img(details.poster_path, "w500")} alt={title} className="h-full w-full object-cover" />
-          ) : (
-            <div className="aspect-[2/3] bg-zinc-900" />
-          )}
-        </div>
-        <div className="flex flex-1 flex-col gap-3">
-          <h1 className="font-editorial text-2xl font-bold text-white sm:text-4xl">
-            {title} {year && <span className="font-normal text-zinc-500">({year})</span>}
-          </h1>
-          {details.genres?.length > 0 && (
-            <p className="text-xs font-semibold uppercase tracking-wide text-[var(--gtv-accent)]">
-              {details.genres.map((genre) => genre.name).join(" • ")}
-            </p>
-          )}
-          <p className="max-w-2xl text-sm leading-relaxed text-zinc-300">{details.overview}</p>
 
-          {type === "tv" && seasons.length > 0 && (
-            <div className="mt-2 flex flex-wrap items-center gap-3 text-sm">
-              <label className="flex items-center gap-2">
-                <span className="text-xs font-semibold uppercase text-zinc-500">Season</span>
-                <select
-                  value={activeSeason?.season_number || season}
-                  onChange={(event) => {
-                    setSeason(Number(event.target.value));
-                    setEpisode(1);
-                  }}
-                  className="max-w-[15rem] rounded-lg border border-white/10 bg-[var(--gtv-surface-2)] px-3 py-1.5 text-white outline-none focus:border-[var(--gtv-accent)]"
-                >
-                  {seasons.map((item) => (
-                    <option key={item.season_number} value={item.season_number}>
-                      {item.name || `Season ${item.season_number}`} · {item.episode_count || "?"} eps
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label className="flex items-center gap-2">
-                <span className="text-xs font-semibold uppercase text-zinc-500">Episode</span>
-                <select
-                  value={Math.min(episode, episodeCount)}
-                  onChange={(event) => setEpisode(Number(event.target.value))}
-                  className="max-w-[18rem] rounded-lg border border-white/10 bg-[var(--gtv-surface-2)] px-3 py-1.5 text-white outline-none focus:border-[var(--gtv-accent)]"
-                >
-                  {episodeOptions.map((item) => (
-                    <option key={item.number} value={item.number}>
-                      Episode {item.number}{item.title ? ` — ${item.title}` : ""}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              {irisLoading && (
-                <span className="inline-flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wider text-zinc-500">
-                  <i className="ri-loader-4-line animate-spin" aria-hidden="true" /> Syncing Iris data
+      <section className="relative min-h-[min(78svh,840px)] overflow-hidden bg-black">
+        {trailerOpen && trailer?.key ? (
+          <iframe
+            title={`${title} trailer`}
+            src={`https://www.youtube-nocookie.com/embed/${trailer.key}?autoplay=1&mute=1&rel=0&modestbranding=1&playsinline=1`}
+            className="absolute inset-0 h-full w-full scale-[1.02] border-0"
+            allow="autoplay; encrypted-media; picture-in-picture"
+            allowFullScreen
+          />
+        ) : (
+          backdrop && (
+            <img
+              src={backdrop}
+              alt=""
+              fetchPriority="high"
+              className="absolute inset-0 h-full w-full object-cover object-center"
+            />
+          )
+        )}
+        <div className="absolute inset-0 bg-gradient-to-t from-black via-black/50 to-black/20" />
+        <div className="absolute inset-0 bg-gradient-to-r from-black/90 via-black/35 to-transparent" />
+
+        <button
+          type="button"
+          onClick={() => navigate(-1)}
+          aria-label="Go back"
+          className="absolute left-4 top-5 z-20 flex h-10 w-10 items-center justify-center rounded-full border border-white/20 bg-black/50 text-lg backdrop-blur transition hover:bg-white hover:text-black sm:left-8"
+        >
+          <i className="ri-arrow-left-line" />
+        </button>
+
+        {trailer?.key && (
+          <button
+            type="button"
+            onClick={() => setTrailerOpen((open) => !open)}
+            className="absolute right-4 top-5 z-20 inline-flex h-10 items-center gap-2 rounded-full border border-white/20 bg-black/55 px-4 text-xs font-bold uppercase tracking-wider backdrop-blur transition hover:bg-white hover:text-black sm:right-8"
+          >
+            <i className={trailerOpen ? "ri-pause-line" : "ri-film-line"} />
+            {trailerOpen ? "Stop trailer" : "Trailer"}
+          </button>
+        )}
+
+        <div className="relative z-10 flex min-h-[min(78svh,840px)] items-end px-4 pb-10 pt-28 sm:px-8 md:px-12 lg:px-16 xl:px-20">
+          <div className="max-w-3xl animate-slide-up-fade">
+            <p className="mb-3 text-[10px] font-black uppercase tracking-[0.25em] text-zinc-400">
+              {mediaLabel}{year ? ` · ${year}` : ""}
+            </p>
+            {logoSrc ? (
+              <img src={logoSrc} alt={title} className="max-h-24 w-auto max-w-[min(82vw,30rem)] object-contain object-left sm:max-h-32" />
+            ) : (
+              <h1 className="font-editorial text-4xl font-black leading-[0.98] tracking-tight text-white sm:text-6xl lg:text-7xl">
+                {title}
+              </h1>
+            )}
+
+            <div className="mt-4 flex flex-wrap items-center gap-x-3 gap-y-2 text-xs font-bold text-zinc-300">
+              {details.vote_average > 0 && (
+                <span className="inline-flex items-center gap-1 text-white">
+                  <i className="ri-star-fill" /> {details.vote_average.toFixed(1)}
                 </span>
               )}
-              {irisMeta && !irisLoading && (
-                <span className="inline-flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wider text-zinc-500">
-                  <i className="ri-check-line text-zinc-300" aria-hidden="true" /> Iris episodes
+              {year && <span>{year}</span>}
+              {runtime > 0 && <span>{runtime} min</span>}
+              {type === "tv" && seasons.length > 0 && <span>{seasons.length} seasons</span>}
+              {details.genres?.slice(0, 3).map((genre) => (
+                <span key={genre.id} className="rounded-full border border-white/15 px-2.5 py-1 text-zinc-400">
+                  {genre.name}
                 </span>
+              ))}
+            </div>
+
+            <p className="mt-5 max-w-2xl text-sm leading-relaxed text-zinc-300 sm:text-base">
+              {details.overview || "No overview is available for this title yet."}
+            </p>
+
+            <div className="mt-6 flex flex-wrap items-center gap-3">
+              <button
+                type="button"
+                onClick={() => play()}
+                className="inline-flex min-h-11 items-center gap-2 rounded-full bg-white px-6 text-sm font-black text-black transition hover:bg-zinc-200 active:scale-95"
+              >
+                <i className="ri-play-fill text-lg" />
+                {type === "tv" && selectedEpisode ? `Play S${selectedSeason}:E${selectedEpisode}` : "Play"}
+              </button>
+              {trailer?.key && (
+                <button
+                  type="button"
+                  onClick={() => setTrailerOpen((open) => !open)}
+                  className="inline-flex min-h-11 items-center gap-2 rounded-full border border-white/20 bg-white/10 px-5 text-sm font-bold text-white backdrop-blur transition hover:bg-white/20"
+                >
+                  <i className="ri-film-line" /> Trailer
+                </button>
               )}
             </div>
-          )}
 
-          <button
-            onClick={play}
-            className="mt-2 inline-flex w-fit items-center gap-2 rounded-full bg-white px-6 py-2.5 text-sm font-bold text-black transition hover:bg-zinc-200 active:scale-95"
-          >
-            <i className="ri-play-fill text-lg" /> Play
-          </button>
+            {details.credits?.cast?.length > 0 && (
+              <div className="mt-7">
+                <p className="mb-2 text-[10px] font-black uppercase tracking-[0.2em] text-zinc-500">Cast</p>
+                <div className="flex -space-x-2">
+                  {details.credits.cast.slice(0, 8).map((person) => (
+                    <div key={person.id} className="h-10 w-10 overflow-hidden rounded-full border-2 border-black bg-zinc-800" title={person.name}>
+                      {person.profile_path ? (
+                        <img src={castImage(person.profile_path)} alt={person.name} className="h-full w-full object-cover" />
+                      ) : (
+                        <span className="flex h-full w-full items-center justify-center text-[9px] font-black text-zinc-400">
+                          {(person.name || "?").slice(0, 1)}
+                        </span>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
         </div>
-      </div>
+      </section>
+
+      {type === "tv" && seasons.length > 0 && (
+        <section>
+          <div className="flex flex-wrap items-center justify-between gap-3 border-b border-white/5 px-4 py-5 sm:px-8 md:px-12 lg:px-16 xl:px-20">
+            <div>
+              <p className="section-rule font-display text-lg font-bold text-white">Choose your episode</p>
+              <p className="mt-2 text-xs text-zinc-500">
+                {irisLoading
+                  ? "Syncing Iris season data…"
+                  : episodeSource === "iris"
+                    ? "Season and episode data from Iris"
+                    : "Using the TMDB episode fallback"}
+              </p>
+            </div>
+            {episodes.length > 0 && (
+              <span className="text-xs font-semibold text-zinc-500">
+                {episodes.length} episodes · Season {selectedSeason}
+              </span>
+            )}
+          </div>
+          <SeasonEpisodeBrowser
+            seasons={seasons}
+            selectedSeason={activeSeason?.season_number || selectedSeason}
+            onSeasonSelect={(seasonNumber) => {
+              setSelectedSeason(seasonNumber);
+              setSelectedEpisode(null);
+              setSelectedPair(null);
+            }}
+            posterFallback={img(details.poster_path, "w300")}
+            episodes={episodes}
+            episodesLoading={episodesLoading}
+            selectedEpisode={selectedEpisode}
+            startsPlayback
+            onEpisodeClick={handleEpisodeClick}
+            stillFallback={img(details.backdrop_path || details.poster_path, "w500")}
+            searchResetKey={selectedSeason}
+          />
+        </section>
+      )}
+
+      <Footer />
     </div>
   );
 }

@@ -10,10 +10,10 @@ copied straight from Iris's `public/` assets.
 - **Home** (`/`) — trending/popular/top-rated rows pulled from TMDB.
 - **Search** (`/search?q=...`) — TMDB multi-search (movies + TV), reachable
   from the search box in the header.
-- **Details** (`/details/:type/:id`) — poster, title, overview,
-  season/episode pickers for TV, a Play button. Anime season and episode
-  labels/counts are loaded from Iris, with TMDB as the fallback for ordinary
-  TV or when Iris is unavailable.
+- **Details** (`/details/:type/:id`) — Iris-style cinematic poster/backdrop
+  details, API-backed title logo, cast and trailer, plus the Iris season/episode
+  browser for TV. Anime season and episode labels/counts are loaded from Iris,
+  with TMDB as the fallback for ordinary TV or when Iris is unavailable.
 - **Player** (`/watch/:type/:id?season=&episode=`) — opens **directly in
   fullscreen** (the Fullscreen API is requested on the Details page's Play
   button click, since that's the only point in the flow with a real user
@@ -40,7 +40,7 @@ src/
   pages/
     Home.jsx             # trending/popular/top-rated rows (TMDB)
     Search.jsx           # TMDB multi-search
-    Details.jsx          # TheOGPirateBot details UI + Iris season/episode data
+    Details.jsx          # Iris-style details UI + API-backed Iris season/episode browser
     Player.jsx            # fullscreen shell: PlayerStage + close/back handling
     NotFound.jsx
   components/
