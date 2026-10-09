@@ -3,10 +3,18 @@ package com.fumio.app;
 import android.app.Dialog;
 import android.content.Intent;
 import android.net.Uri;
+import android.os.Build;
 import android.os.Bundle;
 import android.os.Message;
+import android.view.View;
 import android.view.ViewGroup;
+import android.webkit.ConsoleMessage;
 import android.webkit.CookieManager;
+import android.webkit.GeolocationPermissions;
+import android.webkit.JsPromptResult;
+import android.webkit.JsResult;
+import android.webkit.PermissionRequest;
+import android.webkit.ValueCallback;
 import android.webkit.WebChromeClient;
 import android.webkit.WebResourceRequest;
 import android.webkit.WebSettings;
@@ -15,19 +23,19 @@ import android.webkit.WebViewClient;
 import android.widget.FrameLayout;
 import com.getcapacitor.Bridge;
 import com.getcapacitor.BridgeActivity;
-import com.getcapacitor.BridgeWebChromeClient;
 import com.getcapacitor.BridgeWebViewClient;
 import java.util.Locale;
 
 /**
- * TheOGPirateBot plays titles through third-party video embeds. Those iframes
- * are known to fire popup/popunder ads, so this activity still drops unknown
- * window.open() calls and unknown top-level hijacks.
+ * Keep Capacitor's own Chrome client (file pickers, fullscreen video, JS
+ * dialogs). Only layer two behaviors on top:
  *
- * Trusted destinations are allowed:
- *  - Discord invite links open in the system browser / Discord app.
- *  - Google / Firebase Auth may use a user-gesture popup WebView so
- *    signInWithPopup can complete inside the app.
+ *  1. Discord links leave the app via the system browser / Discord app.
+ *  2. A user-gesture window.open() from Google/Firebase Auth gets a real
+ *     popup WebView. Unknown embed popups are still dropped.
+ *
+ * Do not construct a second BridgeWebChromeClient — that registers activity
+ * result launchers and crashes if it happens after onStart.
  */
 public class MainActivity extends BridgeActivity {
 
@@ -37,99 +45,173 @@ public class MainActivity extends BridgeActivity {
     @Override
     public void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-
-        Bridge bridge = getBridge();
-        if (bridge == null) return;
-
-        WebView webView = bridge.getWebView();
-        if (webView == null) return;
-
-        applyTrustedNavigation(webView);
-        webView.post(() -> applyTrustedNavigation(webView));
+        try {
+            Bridge bridge = getBridge();
+            if (bridge == null) return;
+            WebView webView = bridge.getWebView();
+            if (webView == null) return;
+            installClients(webView, bridge);
+        } catch (Exception ignored) {
+            // Prefer a running Capacitor shell over a crash loop.
+        }
     }
 
-    private void applyTrustedNavigation(WebView webView) {
-        Bridge bridge = getBridge();
-        if (bridge == null) return;
+    private void installClients(WebView webView, Bridge bridge) {
+        CookieManager.getInstance().setAcceptCookie(true);
+        CookieManager.getInstance().setAcceptThirdPartyCookies(webView, true);
+
+        webView.setWebViewClient(new TrustedWebViewClient(bridge));
+
+        WebChromeClient existing = readChromeClient(webView);
+        if (!(existing instanceof PopupChromeClient)) {
+            webView.setWebChromeClient(new PopupChromeClient(existing));
+        }
 
         WebSettings settings = webView.getSettings();
         settings.setSupportMultipleWindows(true);
         settings.setJavaScriptCanOpenWindowsAutomatically(true);
         settings.setJavaScriptEnabled(true);
         settings.setDomStorageEnabled(true);
-        CookieManager.getInstance().setAcceptCookie(true);
-        CookieManager.getInstance().setAcceptThirdPartyCookies(webView, true);
+    }
 
-        webView.setWebChromeClient(
-            new BridgeWebChromeClient(bridge) {
-                @Override
-                public boolean onCreateWindow(WebView view, boolean isDialog, boolean isUserGesture, Message resultMsg) {
-                    if (!isUserGesture || resultMsg == null || !(resultMsg.obj instanceof WebView.WebViewTransport)) {
-                        return false;
-                    }
-
-                    Uri hitUrl = hitTestUri(view);
-                    if (isDiscord(hitUrl)) {
-                        openExternal(hitUrl);
-                        return false;
-                    }
-
-                    WebView popup = createPopupWebView();
-                    WebView.WebViewTransport transport = (WebView.WebViewTransport) resultMsg.obj;
-                    transport.setWebView(popup);
-                    resultMsg.sendToTarget();
-                    showPopup(popup);
-                    return true;
-                }
-
-                @Override
-                public void onCloseWindow(WebView window) {
-                    dismissPopup();
-                    super.onCloseWindow(window);
-                }
+    private WebChromeClient readChromeClient(WebView webView) {
+        if (Build.VERSION.SDK_INT >= 26) {
+            try {
+                return webView.getWebChromeClient();
+            } catch (Exception ignored) {
+                return null;
             }
-        );
+        }
+        return null;
+    }
 
-        webView.setWebViewClient(
-            new BridgeWebViewClient(bridge) {
-                @Override
-                public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
-                    Uri url = request.getUrl();
-                    Boolean handled = handleExternalUrl(url, request.isForMainFrame());
-                    if (handled != null) return handled;
-                    return super.shouldOverrideUrlLoading(view, request);
-                }
+    private class TrustedWebViewClient extends BridgeWebViewClient {
+        TrustedWebViewClient(Bridge bridge) {
+            super(bridge);
+        }
 
-                @Override
-                @SuppressWarnings("deprecation")
-                public boolean shouldOverrideUrlLoading(WebView view, String url) {
-                    Boolean handled = handleExternalUrl(Uri.parse(url), true);
-                    if (handled != null) return handled;
-                    return super.shouldOverrideUrlLoading(view, url);
-                }
+        @Override
+        public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
+            Boolean handled = handleExternalUrl(request.getUrl(), request.isForMainFrame());
+            if (handled != null) return handled;
+            return super.shouldOverrideUrlLoading(view, request);
+        }
 
-                /**
-                 * @return {@code null} when Capacitor should handle the URL,
-                 *         otherwise whether the WebView should override loading.
-                 */
-                private Boolean handleExternalUrl(Uri url, boolean mainFrame) {
-                    if (url == null) return true;
-                    if (isOwnOrigin(url)) return null;
-                    if (!mainFrame) return false;
-                    if (isDiscord(url)) {
-                        openExternal(url);
-                        return true;
-                    }
-                    if (isAuthProvider(url)) {
-                        // Keep Google/Firebase inside the WebView so the auth
-                        // handler can return a session to this app origin.
-                        return false;
-                    }
-                    // Unknown top-level hijack from an embed: drop it.
-                    return true;
-                }
+        @Override
+        @SuppressWarnings("deprecation")
+        public boolean shouldOverrideUrlLoading(WebView view, String url) {
+            Boolean handled = handleExternalUrl(Uri.parse(url), true);
+            if (handled != null) return handled;
+            return super.shouldOverrideUrlLoading(view, url);
+        }
+
+        private Boolean handleExternalUrl(Uri url, boolean mainFrame) {
+            if (url == null) return true;
+            if (isOwnOrigin(url)) return null;
+            if (!mainFrame) return false;
+            if (isDiscord(url)) {
+                openExternal(url);
+                return true;
             }
-        );
+            if (isAuthProvider(url)) return false;
+            return true;
+        }
+    }
+
+    private class PopupChromeClient extends WebChromeClient {
+        private final WebChromeClient delegate;
+
+        PopupChromeClient(WebChromeClient delegate) {
+            this.delegate = delegate;
+        }
+
+        @Override
+        public boolean onCreateWindow(WebView view, boolean isDialog, boolean isUserGesture, Message resultMsg) {
+            if (!isUserGesture || resultMsg == null || !(resultMsg.obj instanceof WebView.WebViewTransport)) {
+                return false;
+            }
+            try {
+                Uri hitUrl = hitTestUri(view);
+                if (isDiscord(hitUrl)) {
+                    openExternal(hitUrl);
+                    return false;
+                }
+                WebView popup = createPopupWebView();
+                ((WebView.WebViewTransport) resultMsg.obj).setWebView(popup);
+                resultMsg.sendToTarget();
+                showPopup(popup);
+                return true;
+            } catch (Exception ignored) {
+                return false;
+            }
+        }
+
+        @Override
+        public void onCloseWindow(WebView window) {
+            dismissPopup();
+            if (delegate != null) delegate.onCloseWindow(window);
+            else super.onCloseWindow(window);
+        }
+
+        @Override
+        public void onShowCustomView(View view, CustomViewCallback callback) {
+            if (delegate != null) delegate.onShowCustomView(view, callback);
+            else super.onShowCustomView(view, callback);
+        }
+
+        @Override
+        public void onHideCustomView() {
+            if (delegate != null) delegate.onHideCustomView();
+            else super.onHideCustomView();
+        }
+
+        @Override
+        public boolean onConsoleMessage(ConsoleMessage consoleMessage) {
+            if (delegate != null) return delegate.onConsoleMessage(consoleMessage);
+            return super.onConsoleMessage(consoleMessage);
+        }
+
+        @Override
+        public boolean onJsAlert(WebView view, String url, String message, JsResult result) {
+            if (delegate != null) return delegate.onJsAlert(view, url, message, result);
+            return super.onJsAlert(view, url, message, result);
+        }
+
+        @Override
+        public boolean onJsConfirm(WebView view, String url, String message, JsResult result) {
+            if (delegate != null) return delegate.onJsConfirm(view, url, message, result);
+            return super.onJsConfirm(view, url, message, result);
+        }
+
+        @Override
+        public boolean onJsPrompt(WebView view, String url, String message, String defaultValue, JsPromptResult result) {
+            if (delegate != null) return delegate.onJsPrompt(view, url, message, defaultValue, result);
+            return super.onJsPrompt(view, url, message, defaultValue, result);
+        }
+
+        @Override
+        public void onPermissionRequest(PermissionRequest request) {
+            if (delegate != null) delegate.onPermissionRequest(request);
+            else super.onPermissionRequest(request);
+        }
+
+        @Override
+        public void onGeolocationPermissionsShowPrompt(String origin, GeolocationPermissions.Callback callback) {
+            if (delegate != null) delegate.onGeolocationPermissionsShowPrompt(origin, callback);
+            else super.onGeolocationPermissionsShowPrompt(origin, callback);
+        }
+
+        @Override
+        public boolean onShowFileChooser(WebView webView, ValueCallback<Uri[]> filePathCallback, FileChooserParams fileChooserParams) {
+            if (delegate != null) return delegate.onShowFileChooser(webView, filePathCallback, fileChooserParams);
+            return super.onShowFileChooser(webView, filePathCallback, fileChooserParams);
+        }
+
+        @Override
+        public void onProgressChanged(WebView view, int newProgress) {
+            if (delegate != null) delegate.onProgressChanged(view, newProgress);
+            else super.onProgressChanged(view, newProgress);
+        }
     }
 
     private WebView createPopupWebView() {
@@ -179,31 +261,48 @@ public class MainActivity extends BridgeActivity {
     }
 
     private void showPopup(WebView popup) {
+        if (isFinishing()) {
+            popup.destroy();
+            return;
+        }
         dismissPopup();
         popupView = popup;
         popupDialog = new Dialog(this, android.R.style.Theme_Black_NoTitleBar_Fullscreen);
         popupDialog.setContentView(popup);
-        popupDialog.setOnDismissListener((dialog) -> destroyPopupView());
+        popupDialog.setOnDismissListener((dialog) -> {
+            popupDialog = null;
+            destroyPopupView();
+        });
         popupDialog.show();
     }
 
     private void dismissPopup() {
-        if (popupDialog != null) {
-            Dialog dialog = popupDialog;
-            popupDialog = null;
-            if (dialog.isShowing()) dialog.dismiss();
-            else destroyPopupView();
+        Dialog dialog = popupDialog;
+        popupDialog = null;
+        if (dialog != null) {
+            try {
+                if (dialog.isShowing()) dialog.dismiss();
+                else destroyPopupView();
+            } catch (Exception ignored) {
+                destroyPopupView();
+            }
         } else {
             destroyPopupView();
         }
     }
 
     private void destroyPopupView() {
-        if (popupView != null) {
-            popupView.destroy();
-            popupView = null;
+        WebView view = popupView;
+        popupView = null;
+        if (view == null) return;
+        try {
+            if (view.getParent() instanceof ViewGroup) {
+                ((ViewGroup) view.getParent()).removeView(view);
+            }
+            view.destroy();
+        } catch (Exception ignored) {
+            // Already torn down with the activity.
         }
-        popupDialog = null;
     }
 
     private void openExternal(Uri url) {
@@ -213,7 +312,7 @@ public class MainActivity extends BridgeActivity {
             intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
             startActivity(intent);
         } catch (Exception ignored) {
-            // No browser available — fail closed rather than loading an ad.
+            // No handler — fail closed.
         }
     }
 
@@ -236,7 +335,9 @@ public class MainActivity extends BridgeActivity {
     private boolean isOwnOrigin(Uri url) {
         Bridge bridge = getBridge();
         if (bridge == null || url == null) return false;
-        Uri appUri = Uri.parse(bridge.getAppUrl());
+        String appUrl = bridge.getAppUrl();
+        if (appUrl == null || appUrl.isEmpty()) return false;
+        Uri appUri = Uri.parse(appUrl);
         String appHost = appUri.getHost();
         String appScheme = appUri.getScheme();
         return appHost != null &&
@@ -291,7 +392,11 @@ public class MainActivity extends BridgeActivity {
 
     @Override
     public void onDestroy() {
-        dismissPopup();
+        try {
+            dismissPopup();
+        } catch (Exception ignored) {
+            // Activity is already going away.
+        }
         super.onDestroy();
     }
 }
