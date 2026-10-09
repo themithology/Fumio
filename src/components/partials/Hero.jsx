@@ -2,13 +2,13 @@ import React, { useState, useEffect, useMemo } from "react";
 import { Link } from "react-router-dom";
 import axios from "../../lib/irisAxios.js";
 import HeroLogo from "./HeroLogo";
+import { useHeroWatchlist } from "./useHeroWatchlist.js";
 
 // ─── Hero — Home's rotating backdrop carousel ──────────────────────────────
-// Ported from Iris's partials/Header.jsx (renamed to avoid clashing with
-// TheOGPirateBot's own nav), trimmed: no Hero-level My List button/useHeroWatchlist
-// (the library action lives on Details and the Home rails). Everything else — logo preload, textless
-// backdrop preload, touch/drag swipe, the no-flash title states — is kept,
-// because that polish is exactly what "copy the Iris UI" asked for.
+// Ported from Iris's current Header.jsx (renamed to avoid clashing with
+// TheOGPirateBot's own nav). The hero keeps Iris's logo/backdrop preloading,
+// touch/drag swipe, no-flash title states, and the device-local My List action
+// used to personalize the spotlight without sending a recommendation profile.
 
 const heroImageUrl = (path) =>
   path ? `https://image.tmdb.org/t/p/${window.innerWidth >= 1024 ? "w1280" : "w780"}${path}` : "";
@@ -33,6 +33,7 @@ const Hero = ({ data }) => {
   const [customBackdrops, setCustomBackdrops] = useState({});
   const [logoFailed, setLogoFailed] = useState({});
   const [logoFallback, setLogoFallback] = useState({});
+  const [inMyList, toggleSaved] = useHeroWatchlist(items, currentIndex);
 
   useEffect(() => {
     setCurrentIndex(0);
@@ -232,6 +233,15 @@ const Hero = ({ data }) => {
                   >
                     <i className="ri-play-fill text-lg" aria-hidden="true" /> Watch Now
                   </Link>
+                  <button
+                    type="button"
+                    aria-pressed={inMyList}
+                    onClick={toggleSaved}
+                    className="inline-flex min-h-11 items-center gap-2 rounded-full bg-white/10 px-5 py-2.5 text-sm font-semibold text-white backdrop-blur-sm transition-colors hover:bg-white/20"
+                  >
+                    <i className={inMyList ? "ri-bookmark-fill text-lg" : "ri-add-line text-lg"} aria-hidden="true" />
+                    {inMyList ? "In My List" : "My List"}
+                  </button>
                 </div>
               </div>
             )}

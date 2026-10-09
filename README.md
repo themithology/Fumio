@@ -28,14 +28,20 @@ copied straight from Iris's `public/` assets.
   with runtime API enrichment/cache, channel logos, search, favorites, recents,
   retry states, channel zapping/picker and iframe playback. Channels with
   configured feeds also use direct HLS playback through hls.js.
-- **Player** (`/watch/:type/:id?season=&episode=`) — opens **directly in
-  fullscreen** (the Fullscreen API is requested on the Details page's Play
-  button click). TG Vid is the only primary attempt. If it fails, playback
-  hands off to Fumio's existing player as a separate fallback lane. Fumio's
-  VidStuck, VidFast, Bingr, Roxy and NXSHA sources are exposed by a clear
-  top-left manual server picker and never advance automatically. Exiting
-  fullscreen or tapping the floating ✕ returns to Details. Opening a title
-  records local Continue Watching progress context.
+- **Player** (`/watch/:type/:id?season=&episode=&server=`) — opens **directly
+  in fullscreen** (the Fullscreen API is requested on the Details page's Play
+  button click). A compact server selector is visible as soon as the player
+  opens. TG Vid is the preferred attempt; selecting another entry hands off to
+  Fumio's existing fallback lane without mixing the two playback contracts.
+  Fumio's VidStuck, VidFast, Bingr, Roxy and NXSHA sources remain available,
+  and Japanese anime titles resolve real AniList/MAL Sub/Dub lanes for
+  MegaPlay, ZokoAnime and 4animo (Sub, Dub, Sub 2, Dub 2, Sub 3, Dub 3).
+  Anime season/episode coordinates are carried separately from TMDB player
+  coordinates, including split-cour segments and the Demon Slayer MAL
+  carve-out. Stable server keys work in deep links and are saved globally and
+  per title; sources never advance automatically after a viewer choice.
+  Exiting fullscreen or tapping the floating ✕ returns to Details. Opening a
+  title records local Continue Watching progress context.
 - **Account** (`/account`) — optional Firebase email/password or Google sign-in.
   Signed-out browsing, My List and playback remain local. A signed-in session
   merges local My List and Continue Watching with `/api/db/user/:uid`, then
@@ -70,6 +76,7 @@ src/
     Loading.jsx
   providers/
     sources.js             # TG Vid primary plus Fumio's original source list
+    animeEmbeds.js         # AniList/MAL Anime Sub/Dub URL + episode resolver
   data/liveTvSnapshot.js   # curated Live TV guide and stream definitions
   utils/liveTv.js          # Live TV API/cache/favorites/recents
   utils/myList.js          # local-first My List storage/events
@@ -137,15 +144,21 @@ npm run dev            # Vite proxies /tmdb and /api to it
 
 `src/providers/sources.js` keeps the two player lanes separate:
 
-1. `TG_VID_SOURCE` is attempted first.
+1. `TG_VID_SOURCE` is attempted first and has the compact always-available
+   server selector.
 2. If its probe, iframe, or loading timeout fails, `PlayerStage.jsx` mounts
    `FumioPlayerStage.jsx`.
-3. `FumioPlayerStage.jsx` retains Fumio's original source list. The active
-   source is checked and timed out independently, but a failure only shows an
-   error state; the viewer must choose another source in the top-left picker.
+3. `FumioPlayerStage.jsx` retains Fumio's original source list and appends
+   resolved Anime Sub/Dub slots only for titles whose Iris metadata produced a
+   valid AniList/MAL reference. The active source is checked and timed out
+   independently, but a failure only shows an error state; the viewer must
+   choose another source in the picker.
+4. Stable keys (`tgvid`, `vidstuck`, `sub`, `dub`, `sub2`, `dub2`, `sub3`,
+   `dub3`, etc.) are honored by `?server=` and persisted per title/global.
 
-TG Vid is never duplicated inside the Fumio list, so the fallback is exactly
-the existing Fumio player rather than a new mixed server order.
+TG Vid is never duplicated inside the Fumio list, so the fallback remains the
+existing Fumio player while the newer Iris Anime lanes are available when they
+can actually resolve.
 
 ## Running it
 

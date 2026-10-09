@@ -2,27 +2,48 @@ import { useEffect, useRef, useState } from "react";
 import { FUMIO_SOURCES, buildStreamUrl, defaultAudio } from "../providers/sources.js";
 import { checkStreamAlive } from "../lib/streamCheck.js";
 
-// Fumio's original source lane, with one important user-facing change:
-// sources never switch themselves. The viewer owns the choice from the
-// top-left server picker. TG Vid is still handled by PlayerStage as the one
-// preferred attempt before this fallback lane is mounted.
+// Fumio's original fallback lane. Sources never switch themselves: the
+// viewer owns the choice from the compact top-left picker. TG Vid is handled
+// by PlayerStage as the preferred attempt before this lane is mounted; valid
+// Anime Sub/Dub lanes can be appended without changing the original sources.
 const LOAD_TIMEOUT_MS = 12000;
 
-export default function FumioPlayerStage({ tmdbId, mediaType, season, episode }) {
-  const [candidateIndex, setCandidateIndex] = useState(0);
+const rememberServer = (serverKey, titleId) => {
+  try {
+    localStorage.setItem("preferredServerKey", serverKey);
+    if (titleId) localStorage.setItem(`preferredServerKey:${titleId}`, serverKey);
+  } catch {
+    // Storage is optional; playback must continue in private mode.
+  }
+};
+
+export default function FumioPlayerStage({
+  tmdbId,
+  mediaType,
+  season,
+  episode,
+  sources = FUMIO_SOURCES,
+  initialSourceId = null,
+}) {
+  const availableSources = sources?.length ? sources : FUMIO_SOURCES;
+  const initialIndex = Math.max(
+    0,
+    availableSources.findIndex((candidate) => candidate.id === initialSourceId),
+  );
+  const [candidateIndex, setCandidateIndex] = useState(initialIndex);
   const [phase, setPhase] = useState("checking"); // checking | playing | error | exhausted
   const [retryNonce, setRetryNonce] = useState(0);
   const [pickerOpen, setPickerOpen] = useState(false);
   const timeoutRef = useRef(null);
 
   useEffect(() => {
-    setCandidateIndex(0);
+    setCandidateIndex(initialIndex);
     setPhase("checking");
     setRetryNonce(0);
     setPickerOpen(false);
-  }, [tmdbId, mediaType, season, episode]);
+  }, [tmdbId, mediaType, season, episode, initialIndex]);
 
-  const source = FUMIO_SOURCES[candidateIndex] || null;
+  const source = availableSources[candidateIndex] || null;
   const src = source
     ? buildStreamUrl(source, tmdbId, mediaType, season, episode, defaultAudio(source))
     : null;
@@ -53,6 +74,7 @@ export default function FumioPlayerStage({ tmdbId, mediaType, season, episode })
 
   const selectSource = (index) => {
     clearTimeout(timeoutRef.current);
+    if (availableSources[index]?.id) rememberServer(availableSources[index].id, tmdbId);
     setCandidateIndex(index);
     setPhase("checking");
     setPickerOpen(false);
@@ -100,7 +122,8 @@ export default function FumioPlayerStage({ tmdbId, mediaType, season, episode })
             <p className="px-3 pb-1.5 pt-2 text-[10px] font-black uppercase tracking-[0.18em] text-zinc-500">
               Choose server
             </p>
-            {FUMIO_SOURCES.map((candidate, index) => {
+            <div className="max-h-[min(68vh,360px)] overflow-y-auto">
+            {availableSources.map((candidate, index) => {
               const active = index === candidateIndex;
               return (
                 <button
@@ -122,6 +145,7 @@ export default function FumioPlayerStage({ tmdbId, mediaType, season, episode })
                 </button>
               );
             })}
+            </div>
           </div>
         )}
       </div>

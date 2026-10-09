@@ -92,8 +92,17 @@ const metaLine = (item, mediaType) => {
 
 const cardPath = (item, mediaType) => {
   if (!item.lastUpdated) return `/${mediaType}/details/${item.id}`;
-  const query = mediaType === "tv" ? `?season=${Number(item.season) || 1}&episode=${Number(item.episode) || 1}` : "";
-  return `/watch/${mediaType}/${item.id}${query}`;
+  if (mediaType !== "tv") return `/watch/${mediaType}/${item.id}`;
+  const query = new URLSearchParams({
+    season: String(Number(item.season) || 1),
+    episode: String(Number(item.episode) || 1),
+  });
+  if (item.uiSeason) query.set("uiSeason", String(Number(item.uiSeason) || 1));
+  if (item.uiEpisode) query.set("uiEpisode", String(Number(item.uiEpisode) || 1));
+  if (item.server !== undefined && item.server !== null && item.server !== "") {
+    query.set("server", String(item.server));
+  }
+  return `/watch/${mediaType}/${item.id}?${query.toString()}`;
 };
 
 const RemoveButton = ({ item, title, onRemove }) => {

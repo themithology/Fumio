@@ -357,7 +357,15 @@ export default function Details() {
         (irisMeta
           ? mapIrisEpisodeToTmdb(selectedSeason, selectedEpisode || 1, irisMeta.seasonsMap, tmdbSeasons)
           : { season: selectedSeason, episode: selectedEpisode || 1 });
-    navigate(`/watch/tv/${id}?season=${pair.season}&episode=${pair.episode}`);
+    const watchParams = new URLSearchParams({
+      season: String(pair.season),
+      episode: String(pair.episode),
+    });
+    if (animeDetails) {
+      watchParams.set("uiSeason", String(selectedSeason));
+      watchParams.set("uiEpisode", String(episodeItem?.episode_number || selectedEpisode || 1));
+    }
+    navigate(`/watch/tv/${id}?${watchParams.toString()}`);
   };
 
   const handleLibraryToggle = () => {

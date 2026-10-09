@@ -110,7 +110,10 @@ const normalizeMetadata = (rawBody, transport) => {
       anilist_id: Number(body.anilist_ids?.[key]) || null,
     }));
 
-  if (seasons.length === 0) return null;
+  // AniList movies intentionally have no season map. Preserve their root
+  // entry id so the player can still build the episode-1 Sub/Dub lanes.
+  // TV/OVA responses without either seasons or a root id remain unresolved.
+  if (seasons.length === 0 && !Number(body.anilist_id)) return null;
   return {
     source: "iris",
     transport,

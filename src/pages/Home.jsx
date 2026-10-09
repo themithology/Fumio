@@ -206,15 +206,28 @@ const QUICK_DISCOVERY_LINKS = [
   { label: "Indian Cinema", path: "/explore?lang=hi" },
 ];
 
+// Keep the full Iris platform rail. Provider links remain filters only; the
+// app never claims to host any provider's catalog itself.
 const OTT_PLATFORMS = [
   [8, "Netflix", "/pbpMk2JmcoNnQwx5JGpXngfoWtp.jpg", "US"],
   [9, "Prime Video", "/pvske1MyAoymrs5bguRfVqYiM9a.jpg", "US"],
   [337, "Disney+", "/97yvRBw1GzX7fXprcF80er19ot.jpg", "US"],
   [2336, "Hotstar", "/kVqjgpcwvDJOhCupjcLzwwtOp52.jpg", "IN"],
   [283, "Crunchyroll", "/fzN5Jok5Ig1eJ7gyNGoMhnLSCfh.jpg", "US"],
+  [1899, "Max", "/jbe4gVSfRlbPTdESXhEKpornsfu.jpg", "US"],
   [350, "Apple TV", "/mcbz1LgtErU9p4UdbZ0rG6RTWHX.jpg", "US"],
+  [15, "Hulu", "/bxBlRPEPpMVDc4jMhSrTf2339DW.jpg", "US"],
+  [2303, "Paramount+", "/fts6X10Jn4QT0X6ac3udKEn2tJA.jpg", "US"],
+  [386, "Peacock", "/2aGrp1xw3qhwCYvNGAJZPdjfeeX.jpg", "US"],
+  [73, "Tubi TV", "/zLYr7OPvpskMA4S79E3vlCi71iC.jpg", "US"],
+  [43, "Starz", "/yIKwylTLP1u8gl84Is7FItpYLGL.jpg", "US"],
+  [520, "Discovery+", "/eMTnWwNVtThkjvQA6zwxaoJG9NE.jpg", "US"],
+  [300, "Pluto TV", "/dB8G41Q6tSL5NBisrIeqByfepBc.jpg", "US"],
+  [257, "FuboTV", "/9BgaNQRMDvVlji1JBZi6tcfxpKx.jpg", "US"],
   [232, "Zee5", "/gP67NRy1ShUJilrzMsbOmEmdmcv.jpg", "IN"],
   [237, "SonyLIV", "/3973zlBbBXdXxaWqRWzGG2GYxbT.jpg", "IN"],
+  [11, "MUBI", "/x570VpH2C9EKDf1riP83rYc5dnL.jpg", "US"],
+  [188, "YouTube Premium", "/rMb93u1tBeErSYLv79zSTR07UdO.jpg", "US"],
   [344, "Viki", "/73uV3YooOA8gD9YQTXFj2XakZWA.jpg", "US"],
 ];
 
