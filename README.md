@@ -1,8 +1,8 @@
-# Fumio
+# TheOGPirateBot
 
 Movies, series and anime in one fast, clean Android app.
 
-> Fumio is in **alpha**. Expect bugs, and please report anything you find.
+> TheOGPirateBot is in **alpha**. Expect bugs, and please report anything you find.
 
 ## Features
 
@@ -20,7 +20,7 @@ Movies, series and anime in one fast, clean Android app.
 1. Open the [latest release](https://github.com/Fumio-one/Fumio/releases/latest) on your Android device.
 2. Download the `.apk` file (use the `universal` build if you're unsure).
 3. Open it. If asked, allow **Install unknown apps** for your browser or file manager.
-4. Tap **Install**, then open Fumio.
+4. Tap **Install**, then open TheOGPirateBot.
 
 Requires **Android 7.0 or newer**.
 
@@ -31,10 +31,10 @@ The app checks the latest release for updates: open the **Account** tab and tap 
 Want a source that isn't included?
 
 1. Open the **Extensions** screen.
-2. Add a Fumio provider repo as `owner/repo` or a GitHub URL.
+2. Add a TheOGPirateBot provider repo as `owner/repo` or a GitHub URL.
 
-Fumio providers run in a sandbox and only supply streams.
+TheOGPirateBot providers run in a sandbox and only supply streams.
 
 ## Disclaimer
 
-Fumio is a media browser and player. It does not host, upload or store any files, and it is not affiliated with any content provider. You are responsible for the sources you use.
+TheOGPirateBot is a media browser and player. It does not host, upload or store any files, and it is not affiliated with any content provider. You are responsible for the sources you use.
