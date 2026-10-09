@@ -15,6 +15,7 @@ import Topnav from "../components/partials/Topnav.jsx";
 import SeasonEpisodeBrowser from "../components/partials/SeasonEpisodeBrowser.jsx";
 import { isInMyList, toggleMyList } from "../utils/myList.js";
 import { lockPlayerLandscape } from "../utils/playerOrientation.js";
+import { isTmdbEpisodeDisplay, isTmdbSeasonDisplay } from "../utils/animeMapping.js";
 
 const firstTrailer = (videos) =>
   (videos?.results || []).find(
@@ -140,7 +141,7 @@ export default function Details() {
         if (cancelled) return;
         setIrisMeta(metadata);
         setNextAiring(metadata?.nextAiring || null);
-        if (metadata?.seasons?.length) {
+        if (metadata?.seasons?.length && !isTmdbSeasonDisplay(Number(id))) {
           setSelectedSeason((current) =>
             metadata.seasons.some((season) => season.season_number === current)
               ? current
@@ -158,7 +159,7 @@ export default function Details() {
     return () => {
       cancelled = true;
     };
-  }, [details, type, tmdbSeasons]);
+  }, [details, id, type, tmdbSeasons]);
 
   // AniList's nextAiringEpisode is a Unix timestamp. Tick every second while
   // the title is airing so the hero never displays a stale countdown.
@@ -169,12 +170,16 @@ export default function Details() {
     return () => clearInterval(timer);
   }, [nextAiring]);
 
-  const waitingForIris = type === "tv" && isAnimeTitle(details) && irisLoading && !irisMeta;
-  const seasons = irisMeta?.seasons?.length
-    ? irisMeta.seasons
-    : waitingForIris
-      ? []
-      : tmdbSeasons;
+  const tmdbDisplay = type === "tv" && isTmdbSeasonDisplay(id);
+  const tmdbEpisodeDisplay = type === "tv" && isTmdbEpisodeDisplay(id);
+  const waitingForIris = type === "tv" && isAnimeTitle(details) && irisLoading && !irisMeta && !tmdbDisplay;
+  const seasons = tmdbDisplay
+    ? tmdbSeasons
+    : irisMeta?.seasons?.length
+      ? irisMeta.seasons
+      : waitingForIris
+        ? []
+        : tmdbSeasons;
   const activeSeason = seasons.find((season) => season.season_number === selectedSeason) || seasons[0] || null;
 
   useEffect(() => {
@@ -235,8 +240,17 @@ export default function Details() {
       });
 
     const loadEpisodes = async () => {
-      // Same ladder as Iris TvDetails: AniList collection first, then a mapped
-      // TMDB grid, then a full TMDB season list. Never leave the page empty.
+      // Iris TvDetails: Demon Slayer / Naruto show TMDB's own seasons and
+      // episode lists (AniList chain skips Mugen Train). Mushoku keeps AniList
+      // seasons but TMDB's broadcast episode count.
+      if (tmdbDisplay || tmdbEpisodeDisplay) {
+        const tmdbEpisodes = await tmdbSeasonEpisodes(id, selectedSeason);
+        setFirstEpisode(toPlayerItems(tmdbEpisodes, "tmdb"), "tmdb");
+        return;
+      }
+
+      // Same ladder as Iris TvDetails: site/AniList collection first, then a
+      // mapped TMDB grid, then a full TMDB season list. Never leave the page empty.
       if (irisMeta && activeSeason.anilist_id) {
         const irisData = await fetchIrisEpisodes(activeSeason.anilist_id);
         if (irisData?.episodes?.length) {
@@ -300,7 +314,7 @@ export default function Details() {
     return () => {
       cancelled = true;
     };
-  }, [activeSeason, details, episodeRetry, id, irisMeta, selectedSeason, tmdbSeasons, type, waitingForIris]);
+  }, [activeSeason, details, episodeRetry, id, irisMeta, selectedSeason, tmdbDisplay, tmdbEpisodeDisplay, tmdbSeasons, type, waitingForIris]);
 
   useEffect(() => {
     const refreshListState = () => setInMyList(isInMyList({ id: Number(id), type }));
@@ -564,9 +578,9 @@ export default function Details() {
             <div>
               <p className="section-rule font-display text-lg font-bold text-white">Choose your episode</p>
               <p className="mt-2 text-xs text-zinc-500">
-                {irisLoading
+                {irisLoading && !tmdbDisplay
                   ? "Loading seasons from the anime service…"
-                  : episodeSource === "iris"
+                  : tmdbDisplay || episodeSource === "iris"
                     ? "Season and episode data from the anime service"
                     : "Using the TMDB fallback for a title without anime metadata"}
               </p>

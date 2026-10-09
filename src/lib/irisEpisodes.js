@@ -132,10 +132,9 @@ const normalizeMetadata = (rawBody, transport) => {
 /**
  * Fetch Iris's AniList season bridge for a title.
  *
- * The order deliberately matches Iris:
- *   1. browser-direct AniList GraphQL using Iris's shared implementation;
- *   2. Iris's `/api/anime-metadata` edge ladder;
- *   3. null, allowing the caller to handle a genuinely non-Iris title.
+ * The live site API is first: it carries title-specific exceptions
+ * (Demon Slayer, Naruto, Mushoku). Browser-direct AniList is the fallback
+ * when theogpiratebot.online / edge workers are down.
  */
 export async function fetchIrisSeasonData({ title, tmdbEpisodes = null, year = null } = {}) {
   const cleanTitle = String(title || "").trim();
@@ -153,9 +152,13 @@ export async function fetchIrisSeasonData({ title, tmdbEpisodes = null, year = n
   const cached = readCache(cacheKey);
   if (cached) return cached;
 
-  // Primary: exactly Iris's browser-direct API implementation. This avoids
-  // the WAF failures that made the old edge-only adapter silently fall back to
-  // TMDB for anime titles.
+  const edgeBody = await getIrisJson(`/api/anime-metadata?${params.toString()}`);
+  const edgeParsed = normalizeMetadata(edgeBody, "iris-edge");
+  if (edgeParsed) {
+    writeCache(cacheKey, edgeParsed);
+    return edgeParsed;
+  }
+
   try {
     const direct = await anilistMetadataJson(cleanTitle, tmdbEpisodes, year);
     const parsed = normalizeMetadata(direct?.body, "browser-direct");
@@ -164,14 +167,10 @@ export async function fetchIrisSeasonData({ title, tmdbEpisodes = null, year = n
       return parsed;
     }
   } catch {
-    // The Iris edge ladder below is the documented fallback.
+    // No metadata from either the site API or AniList.
   }
 
-  const edgeBody = await getIrisJson(`/api/anime-metadata?${params.toString()}`);
-  const parsed = normalizeMetadata(edgeBody, "iris-edge");
-  if (!parsed) return null;
-  writeCache(cacheKey, parsed);
-  return parsed;
+  return null;
 }
 
 const normalizeEpisodes = (rawBody) => {
@@ -206,7 +205,13 @@ export function fetchIrisEpisodes(anilistId) {
   if (cached) return Promise.resolve(cached);
 
   const request = (async () => {
-    // Primary: Iris's browser-direct AniList episode collection.
+    const body = await getIrisJson(`/api/anime-episodes?anilist_id=${id}`);
+    const edgeParsed = normalizeEpisodes(body);
+    if (edgeParsed) {
+      writeCache(key, edgeParsed);
+      return edgeParsed;
+    }
+
     try {
       const direct = await anilistEpisodeCollection(id);
       const parsed = normalizeEpisodes(direct?.body);
@@ -215,13 +220,10 @@ export function fetchIrisEpisodes(anilistId) {
         return parsed;
       }
     } catch {
-      // Continue to the Iris edge API.
+      // Both the site API and browser-direct AniList failed.
     }
 
-    const body = await getIrisJson(`/api/anime-episodes?anilist_id=${id}`);
-    const parsed = normalizeEpisodes(body);
-    if (parsed) writeCache(key, parsed);
-    return parsed;
+    return null;
   })().finally(() => {
     inflightEpisodes.delete(id);
   });
