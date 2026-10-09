@@ -536,10 +536,10 @@ export default function Details() {
               <p className="section-rule font-display text-lg font-bold text-white">Choose your episode</p>
               <p className="mt-2 text-xs text-zinc-500">
                 {irisLoading
-                  ? "Loading seasons directly from the Iris API…"
+                  ? "Loading seasons from the anime service…"
                   : episodeSource === "iris"
-                    ? "Season and episode data from the Iris API"
-                    : "Using the TMDB fallback for a title that has no Iris record"}
+                    ? "Season and episode data from the anime service"
+                    : "Using the TMDB fallback for a title without anime metadata"}
               </p>
             </div>
             {episodes.length > 0 && (
@@ -551,7 +551,7 @@ export default function Details() {
           {waitingForIris ? (
             <div className="flex flex-col items-center justify-center gap-3 border-b border-white/5 py-20 text-zinc-500">
               <div className="h-10 w-10 animate-spin rounded-full border-4 border-t-[var(--gtv-accent)] border-zinc-800" />
-              <span className="text-xs font-bold uppercase tracking-widest">Fetching Iris seasons…</span>
+              <span className="text-xs font-bold uppercase tracking-widest">Fetching seasons…</span>
             </div>
           ) : (
             <SeasonEpisodeBrowser
@@ -569,14 +569,14 @@ export default function Details() {
               startsPlayback
               onEpisodeClick={handleEpisodeClick}
               stillFallback={img(details.backdrop_path || details.poster_path, "w500")}
-              emptyMessage={episodeSource === "iris" ? "The Iris API resolved this season, but did not return any episode records. Try again later instead of showing unrelated TMDB data." : "No episodes are available for this season yet."}
+              emptyMessage={episodeSource === "iris" ? "The anime service resolved this season, but did not return any episode records. Try again later instead of showing unrelated TMDB data." : "No episodes are available for this season yet."}
               emptyAction={episodeSource === "iris" ? (
                 <button
                   type="button"
                   onClick={() => setEpisodeRetry((attempt) => attempt + 1)}
                   className="mt-2 inline-flex min-h-10 items-center gap-2 rounded-full border border-white/15 bg-white/5 px-4 text-xs font-bold text-zinc-200 transition hover:border-white/30 hover:bg-white hover:text-black"
                 >
-                  <i className="ri-refresh-line" /> Retry Iris episodes
+                  <i className="ri-refresh-line" /> Retry episodes
                 </button>
               ) : null}
               searchResetKey={selectedSeason}

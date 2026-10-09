@@ -26,6 +26,16 @@ const Topnav = () => {
             <i className="ri-equalizer-line text-sm" aria-hidden="true" />
             <span className="hidden sm:inline">Explore</span>
           </Link>
+          <a
+            href="https://discord.gg/t6tjszp5eb"
+            target="_blank"
+            rel="noopener noreferrer"
+            aria-label="Join our Discord community"
+            className="inline-flex h-9 shrink-0 items-center gap-1.5 rounded-full border border-indigo-300/20 bg-indigo-400/10 px-3 text-xs font-bold text-indigo-100 transition hover:border-indigo-200/40 hover:bg-indigo-300/20 hover:text-white"
+          >
+            <i className="ri-discord-fill" aria-hidden="true" />
+            <span className="hidden sm:inline">Join Discord</span>
+          </a>
           <Link
             to="/account"
             aria-label={signedIn ? "Open account" : "Sign in"}

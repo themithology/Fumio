@@ -1,31 +1,19 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
-  FUMIO_SOURCES,
   TG_VID_SOURCE,
   buildStreamUrl,
   defaultAudio,
 } from "../providers/sources.js";
+import { buildPlayerServerSlots } from "../providers/serverSlots.js";
 import { checkStreamAlive } from "../lib/streamCheck.js";
+import ServerPickerBar from "./ServerPickerBar.jsx";
 import FumioPlayerStage from "./FumioPlayerStage.jsx";
 
-// Two playback lanes stay separate:
-//
-// 1. TG Vid is attempted once as Fumio's preferred source.
-// 2. The original Fumio lane owns all manually-selected fallbacks.
-//
-// The small selector below the TG Vid label is deliberately compact. Choosing
-// a fallback mounts the same Fumio player used when TG Vid fails, so Anime
-// Sub/Dub sources are real playable lanes rather than decorative buttons.
+// TG Vid remains the preferred attempt, but a probe/iframe hiccup never
+// silently replaces it with another host. The viewer chooses a fallback from
+// the server bar below the video. This prevents a stream that briefly renders
+// and then disappears from unexpectedly jumping to VidStuck.
 const TG_LOAD_TIMEOUT_MS = 12000;
-
-const uniqueSources = (sources) => {
-  const seen = new Set();
-  return (sources || []).filter((source) => {
-    if (!source?.id || seen.has(source.id)) return false;
-    seen.add(source.id);
-    return true;
-  });
-};
 
 const rememberServer = (serverKey, titleId) => {
   try {
@@ -45,29 +33,27 @@ export default function PlayerStage({
   preferredServerKey = null,
 }) {
   const [useFumioPlayer, setUseFumioPlayer] = useState(false);
-  const [phase, setPhase] = useState("checking"); // checking | playing
-  const [pickerOpen, setPickerOpen] = useState(false);
+  const [phase, setPhase] = useState("checking"); // checking | playing | error
   const [fallbackSourceId, setFallbackSourceId] = useState(null);
   const timeoutRef = useRef(null);
+  const tgLoadedRef = useRef(false);
 
-  const fallbackSources = useMemo(
-    () => uniqueSources([...FUMIO_SOURCES, ...(animeSources || [])]),
+  const slots = useMemo(
+    () => buildPlayerServerSlots({ animeSources }),
     [animeSources],
   );
-  const serverOptions = useMemo(
-    () => [TG_VID_SOURCE, ...fallbackSources],
-    [fallbackSources],
-  );
+  const { fallbackSources, pickerSources } = slots;
 
   useEffect(() => {
     setUseFumioPlayer(false);
     setPhase("checking");
-    setPickerOpen(false);
     setFallbackSourceId(null);
+    tgLoadedRef.current = false;
   }, [tmdbId, mediaType, season, episode]);
 
+  // A deliberately chosen/persisted stable key is still honored, but only a
+  // viewer choice can move to a fallback after this player has opened.
   const preferredFallback = fallbackSources.find((source) => source.id === preferredServerKey);
-
   useEffect(() => {
     if (!preferredServerKey || preferredServerKey === TG_VID_SOURCE.id || !preferredFallback) return;
     setFallbackSourceId(preferredFallback.id);
@@ -87,26 +73,30 @@ export default function PlayerStage({
     let cancelled = false;
     setPhase("checking");
     checkStreamAlive(src).then((alive) => {
-      if (cancelled) return;
-      if (alive) setPhase("playing");
-      else setUseFumioPlayer(true);
+      if (cancelled || tgLoadedRef.current) return;
+      if (!alive) setPhase("error");
     });
     return () => {
       cancelled = true;
     };
   }, [src]);
 
+  // A stuck TG Vid frame should show an error state and leave the choice to
+  // the viewer. It must never mount VidStuck automatically.
   useEffect(() => {
-    if (useFumioPlayer || phase !== "playing") return undefined;
-    timeoutRef.current = setTimeout(() => setUseFumioPlayer(true), TG_LOAD_TIMEOUT_MS);
+    if (useFumioPlayer || phase === "playing" || phase === "error") return undefined;
+    timeoutRef.current = setTimeout(() => {
+      if (!tgLoadedRef.current) setPhase("error");
+    }, TG_LOAD_TIMEOUT_MS);
     return () => clearTimeout(timeoutRef.current);
-  }, [phase, useFumioPlayer, src]);
+  }, [phase, src, useFumioPlayer]);
 
   const chooseServer = (server) => {
     clearTimeout(timeoutRef.current);
-    setPickerOpen(false);
     if (server.id === TG_VID_SOURCE.id) {
       rememberServer(server.id, tmdbId);
+      tgLoadedRef.current = false;
+      setFallbackSourceId(null);
       setUseFumioPlayer(false);
       setPhase("checking");
       return;
@@ -116,10 +106,7 @@ export default function PlayerStage({
     setUseFumioPlayer(true);
   };
 
-  const fallback = () => {
-    clearTimeout(timeoutRef.current);
-    setUseFumioPlayer(true);
-  };
+  const returnToPrimary = () => chooseServer(TG_VID_SOURCE);
 
   if (useFumioPlayer) {
     return (
@@ -130,81 +117,49 @@ export default function PlayerStage({
         episode={episode}
         sources={fallbackSources}
         initialSourceId={fallbackSourceId}
+        primarySource={pickerSources[0]}
+        onSelectPrimary={returnToPrimary}
       />
     );
   }
 
   return (
-    <div className="relative h-full w-full bg-black" data-player="tgvid-primary">
-      <div className="absolute left-3 top-3 z-30 sm:left-4 sm:top-4">
-        <button
-          type="button"
-          onClick={() => setPickerOpen((open) => !open)}
-          aria-expanded={pickerOpen}
-          aria-label="Change streaming server"
-          className="flex min-h-9 items-center gap-1.5 rounded-full border border-white/15 bg-black/70 px-3 text-[11px] font-black text-white shadow-lg backdrop-blur-md transition hover:bg-white hover:text-black active:scale-95"
-        >
-          <i className="ri-server-line text-sm" />
-          <span>TG Vid</span>
-          <i className={pickerOpen ? "ri-arrow-up-s-line" : "ri-arrow-down-s-line"} />
-        </button>
-
-        {pickerOpen && (
-          <div className="mt-2 w-56 overflow-hidden rounded-2xl border border-white/15 bg-black/95 p-1.5 shadow-2xl backdrop-blur-xl">
-            <p className="px-2.5 pb-1.5 pt-1.5 text-[9px] font-black uppercase tracking-[0.18em] text-zinc-500">
-              Servers
-            </p>
-            <div className="max-h-[min(68vh,360px)] overflow-y-auto">
-              {serverOptions.map((server) => {
-                const active = server.id === TG_VID_SOURCE.id;
-                return (
-                  <button
-                    key={server.id}
-                    type="button"
-                    onClick={() => chooseServer(server)}
-                    className={`flex w-full items-center gap-2 rounded-xl px-2.5 py-2 text-left transition ${
-                      active
-                        ? "bg-white text-black"
-                        : "text-zinc-300 hover:bg-white/10 hover:text-white"
-                    }`}
-                  >
-                    <span
-                      className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-lg ${
-                        active ? "bg-black text-white" : "bg-white/10 text-zinc-400"
-                      }`}
-                    >
-                      <i className="ri-play-circle-line text-sm" />
-                    </span>
-                    <span className="min-w-0 flex-1">
-                      <span className="block truncate text-[11px] font-black">{server.name}</span>
-                      <span className={`block truncate text-[9px] ${active ? "text-zinc-600" : "text-zinc-500"}`}>
-                        {server.quality}
-                      </span>
-                    </span>
-                    {active && <i className="ri-check-line text-sm" />}
-                  </button>
-                );
-              })}
-            </div>
+    <div className="flex h-full w-full flex-col bg-black">
+      <div className="relative min-h-0 flex-1 bg-black" data-player="tgvid-primary">
+        {phase === "checking" && (
+          <div className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-3 bg-black">
+            <div className="h-8 w-8 animate-spin rounded-full border-4 border-zinc-800 border-t-white" />
           </div>
         )}
+        {phase === "error" && (
+          <div className="absolute inset-0 z-20 flex flex-col items-center justify-center gap-2 bg-black/85 px-6 text-center backdrop-blur-sm">
+            <i className="ri-wifi-off-line text-3xl text-zinc-500" aria-hidden="true" />
+            <p className="text-sm font-black text-white">TG Vid did not stay connected</p>
+            <p className="max-w-sm text-xs leading-relaxed text-zinc-500">
+              TG Vid was left selected. Choose another server below if you want to continue; Fumio will not switch servers by itself.
+            </p>
+          </div>
+        )}
+        <iframe
+          key={src}
+          src={src}
+          onLoad={() => {
+            tgLoadedRef.current = true;
+            clearTimeout(timeoutRef.current);
+            setPhase("playing");
+          }}
+          onError={() => setPhase("error")}
+          className="absolute inset-0 h-full w-full"
+          allow="autoplay; encrypted-media; fullscreen"
+          allowFullScreen
+          frameBorder="0"
+          title="TG Vid player"
+        />
       </div>
-
-      {phase === "checking" && (
-        <div className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-3 bg-black">
-          <div className="h-8 w-8 animate-spin rounded-full border-4 border-zinc-800 border-t-white" />
-        </div>
-      )}
-      <iframe
-        key={src}
-        src={src}
-        onLoad={() => clearTimeout(timeoutRef.current)}
-        onError={fallback}
-        className="absolute inset-0 h-full w-full"
-        allow="autoplay; encrypted-media; fullscreen"
-        allowFullScreen
-        frameBorder="0"
-        title="TG Vid player"
+      <ServerPickerBar
+        sources={pickerSources}
+        activeId={TG_VID_SOURCE.id}
+        onSelect={chooseServer}
       />
     </div>
   );

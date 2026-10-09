@@ -95,7 +95,7 @@ export default function Account() {
                 <div>
                   <h2 className="text-lg font-bold text-white">Cloud library sync</h2>
                   <p className="mt-2 max-w-xl text-sm leading-6 text-zinc-400">
-                    My List and Continue Watching stay local-first, then sync to Iris’s own SQLite database. Existing local and cloud titles are merged; neither side silently replaces the other.
+                    My List and Continue Watching stay local-first, then sync to the account database. Existing local and cloud titles are merged; neither side silently replaces the other.
                   </p>
                 </div>
                 <span className={`inline-flex w-fit items-center gap-2 rounded-full border px-3 py-1.5 text-xs font-bold ${sync.state === "error" ? "border-amber-300/30 bg-amber-300/10 text-amber-100" : sync.state === "synced" ? "border-emerald-300/30 bg-emerald-300/10 text-emerald-100" : "border-white/10 bg-black/20 text-zinc-300"}`}>

@@ -77,9 +77,9 @@ const Anime = () => {
       <Topnav />
       <header className="relative overflow-hidden px-4 pb-2 pt-8 sm:px-8 md:px-12 lg:px-16 xl:px-20">
         <div className="pointer-events-none absolute -left-20 -top-24 h-72 w-72 rounded-full bg-fuchsia-500/10 blur-3xl" />
-        <p className="relative text-[10px] font-black uppercase tracking-[0.28em] text-fuchsia-300/80">Iris anime hub</p>
+        <p className="relative text-[10px] font-black uppercase tracking-[0.28em] text-fuchsia-300/80">Anime hub</p>
         <h1 className="relative mt-2 max-w-2xl font-editorial text-4xl font-black tracking-tight text-white sm:text-6xl">Anime, ready when you are.</h1>
-        <p className="relative mt-3 max-w-xl text-sm leading-relaxed text-zinc-400 sm:text-base">Discover Japanese series and films from the live catalogue, then jump into the same Iris season and episode browser on every title.</p>
+        <p className="relative mt-3 max-w-xl text-sm leading-relaxed text-zinc-400 sm:text-base">Discover Japanese series and films from the live catalogue, then jump into the same season and episode browser on every title.</p>
       </header>
       {rows.map((row) => row.items.length > 0 && <Section key={row.title} {...row} />)}
       <Footer />
