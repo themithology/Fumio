@@ -1,22 +1,27 @@
 # TheOGPirateBot (Fumio)
 
-A skeleton of **two screens only**: a **Details page** and a **Player**.
+A small streaming app: **Home → Search → Details → Player**.
 Live TV and Login already exist elsewhere — this app doesn't touch them.
 
 No ads, no party mode, no Discord bot, no admin panel, no Node backend.
 Branding (logo, name, colors, icons) is the real TheOGPirateBot identity,
 copied straight from Iris's `public/` assets.
 
-- **Details page** (`/details/:type/:id`) — poster, title, overview,
-  season/episode pickers for TV, a Play button. Data comes from TMDB,
-  fetched through a Cloudflare Worker proxy (so no API key ever ships to the
-  browser).
-- **Player** (`/watch/:type/:id?season=&episode=`) — a real player, using
-  TheOGPirateBot's **actual working embed hosts** (ported from Iris's
-  `src/utils/players.js`: tgvid, vidstuck, vidfast, bingr, roxy, nxsha), with
-  exactly two controls: **Quality** (which host/tier — e.g. VidFast's 4K vs
-  the others' HD) and **Audio** (the language track, on hosts that document
-  one — tgvid and vidstuck both take a language query param).
+- **Home** (`/`) — trending/popular/top-rated rows pulled from TMDB.
+- **Search** (`/search?q=...`) — TMDB multi-search (movies + TV), reachable
+  from the search box in the header.
+- **Details** (`/details/:type/:id`) — poster, title, overview,
+  season/episode pickers for TV, a Play button.
+- **Player** (`/watch/:type/:id?season=&episode=`) — opens **directly in
+  fullscreen** (the Fullscreen API is requested on the Details page's Play
+  button click, since that's the only point in the flow with a real user
+  gesture — by the time the Player route mounts it's too late to ask).
+  There is **no Quality or Audio picker**. It tries TheOGPirateBot's real
+  embed hosts (ported from Iris's `src/utils/players.js`: tgvid, vidstuck,
+  vidfast, bingr, roxy, nxsha) **in order, automatically** — tgvid first,
+  falling back silently to the next host if a source is down or fails to
+  load. Exiting fullscreen (Esc / back gesture) or tapping the floating ✕
+  returns to the Details page.
 
 This plays **real content today** — it is not a demo/placeholder stream.
 The one lane intentionally left out is Iris's anime-only Sub/Dub/ToonStream
@@ -32,22 +37,27 @@ public/                 # Real TheOGPirateBot branding: logo.svg, favicons,
                           icons, manifest — copied from Iris's public/.
 src/
   pages/
+    Home.jsx             # trending/popular/top-rated rows (TMDB)
+    Search.jsx           # TMDB multi-search
     Details.jsx          # fetch TMDB details, season/episode pick, Play
-    Player.jsx            # renders StreamFrame for the picked title/episode
+    Player.jsx            # fullscreen shell: PlayerStage + close/back handling
     NotFound.jsx
   components/
-    Header.jsx
-    StreamFrame.jsx        # the real player: iframe + Quality/Audio controls
+    Header.jsx            # logo + search box (hidden on /watch/*)
+    MediaCard.jsx          # poster card used by Home + Search
+    PlayerStage.jsx        # the real player: auto-failover iframe, no UI chrome
     Loading.jsx
   providers/
     sources.js             # the real embed hosts, ported from Iris's
-                             # src/utils/players.js (getPlayerUrls)
+                             # src/utils/players.js (getPlayerUrls) — array
+                             # order IS the failover order (tgvid first)
   lib/
     tmdb.js                 # fetch wrapper w/ failover + caching
     proxyTiers.js            # list of proxy bases to try, in order
+    streamCheck.js            # asks the worker if a candidate source is alive
 
-worker/                   # Cloudflare Worker — TMDB proxy only (vendored,
-  src/index.js             # trimmed from Iris's edge/cloudflare-worker)
+worker/                   # Cloudflare Worker — TMDB proxy + stream-check
+  src/index.js             # probe (vendored/trimmed from Iris's edge worker)
   wrangler.toml
 
 android/                  # Capacitor Android project (committed — the
@@ -77,13 +87,31 @@ npm run worker:dev     # http://127.0.0.1:8787, via workerd
 npm run dev            # Vite proxies /tmdb and /api to it
 ```
 
-### Stream sources
+### Stream sources + automatic failover
 
 `src/providers/sources.js` is the real, currently-working list of embed
 hosts (not an abstraction over a hypothetical "raw" provider — these are
-the actual hosts TheOGPirateBot streams from in production). Add/remove a
-host by editing that file; `StreamFrame.jsx` needs no changes since it just
-renders whatever `SOURCES` contains.
+the actual hosts TheOGPirateBot streams from in production), in priority
+order (tgvid first).
+
+There is no user-facing server picker. `PlayerStage.jsx` walks `SOURCES`
+top to bottom:
+
+1. Before mounting a candidate's iframe, it calls `checkStreamAlive()`
+   (`src/lib/streamCheck.js`), which asks the worker's `GET
+   /api/stream-check?url=` to probe the host **server-side** — the browser
+   can't read a cross-origin response's HTTP status itself (CORS hides it),
+   so this has to happen off the client.
+2. The probe fails **open**: network hiccups, timeouts, or an
+   unrecognized/disallowed host all come back as "unknown", and unknown is
+   treated as alive — a flaky probe must never block real playback.
+   Only a definitive non-2xx status from the real host counts as dead.
+3. If the iframe never actually finishes loading within ~12s (host hangs
+   rather than erroring outright), that's a second signal to advance.
+4. If every source is exhausted, the Player shows "No server currently has
+   this title" instead of a broken iframe.
+
+Add/remove a host by editing `sources.js`; nothing else needs to change.
 
 ## Running it
 
@@ -93,8 +121,7 @@ npm run worker:dev   # terminal 1 — local data proxy (optional, has fallback)
 npm run dev           # terminal 2 — the app
 ```
 
-Open `/details/movie/550` (the default redirect from `/`) or any
-`/details/{movie|tv}/{tmdbId}`.
+Open `/` for Home, or jump straight to any `/details/{movie|tv}/{tmdbId}`.
 
 ## The Android APK
 

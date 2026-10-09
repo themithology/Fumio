@@ -1,12 +1,12 @@
-import { useEffect, useState } from "react";
-import { useParams, useSearchParams, Link } from "react-router-dom";
+import { useEffect, useState, useCallback } from "react";
+import { useParams, useSearchParams, useNavigate } from "react-router-dom";
 import { tmdbGet } from "../lib/tmdb.js";
-import StreamFrame from "../components/StreamFrame.jsx";
-import Loading from "../components/Loading.jsx";
+import PlayerStage from "../components/PlayerStage.jsx";
 
 export default function Player() {
   const { type, id } = useParams();
   const [params] = useSearchParams();
+  const navigate = useNavigate();
   const season = Number(params.get("season") || 1);
   const episode = Number(params.get("episode") || 1);
 
@@ -18,36 +18,37 @@ export default function Player() {
       .catch(() => setDetails(null));
   }, [type, id]);
 
-  const title = details?.title || details?.name || "Loading…";
-
   useEffect(() => {
-    const year = (details?.release_date || details?.first_air_date || "").slice(0, 4);
-    document.title = details
-      ? `Playing ${title}${year ? ` (${year})` : ""} | TheOGPirateBot`
-      : "TheOGPirateBot — Movies & TV";
-  }, [details, title]);
+    const t = details?.title || details?.name;
+    document.title = t ? `Playing ${t} | TheOGPirateBot` : "TheOGPirateBot — Movies & TV";
+  }, [details]);
+
+  const close = useCallback(() => {
+    if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
+    navigate(`/details/${type}/${id}`, { replace: true });
+  }, [navigate, type, id]);
+
+  // If the user backs out of fullscreen with Esc/the browser's own chrome,
+  // treat it the same as pressing Close — this page has no purpose outside
+  // fullscreen.
+  useEffect(() => {
+    const onChange = () => {
+      if (!document.fullscreenElement) navigate(`/details/${type}/${id}`, { replace: true });
+    };
+    document.addEventListener("fullscreenchange", onChange);
+    return () => document.removeEventListener("fullscreenchange", onChange);
+  }, [navigate, type, id]);
 
   return (
-    <div className="mx-auto flex max-w-5xl flex-col gap-4 px-4 py-6 sm:px-8">
-      <div className="flex items-center justify-between gap-3">
-        <div>
-          <h1 className="text-lg font-bold line-clamp-1">{title}</h1>
-          {type === "tv" && (
-            <p className="text-xs text-zinc-500">
-              Season {season} · Episode {episode}
-            </p>
-          )}
-        </div>
-        <Link
-          to={`/details/${type}/${id}`}
-          className="rounded-full border border-white/15 bg-white/5 px-4 py-2 text-xs font-semibold hover:bg-white/10"
-        >
-          Close
-        </Link>
-      </div>
-
-      {!details && <Loading label="Loading…" />}
-      {details && <StreamFrame tmdbId={id} mediaType={type} season={season} episode={episode} />}
+    <div className="fixed inset-0 z-50 h-screen w-screen bg-black">
+      <PlayerStage tmdbId={id} mediaType={type} season={season} episode={episode} />
+      <button
+        onClick={close}
+        aria-label="Close player"
+        className="absolute right-3 top-3 z-20 flex h-10 w-10 items-center justify-center rounded-full bg-black/60 text-white backdrop-blur hover:bg-black/80"
+      >
+        ✕
+      </button>
     </div>
   );
 }

@@ -106,6 +106,48 @@ async function proxyTmdb(path, url, env) {
   }
 }
 
+// ─── Stream availability probe ──────────────────────────────────────────────
+// The browser can't read the HTTP status of a cross-origin fetch (CORS hides
+// it), which is exactly what's needed to tell "tgvid has this title" from
+// "tgvid is down/404s it" before committing to an iframe. The Worker has no
+// such restriction, so it does the HEAD/GET check server-side. Only the real
+// embed hosts in src/providers/sources.js are allowed — this is NOT an open
+// proxy.
+const STREAM_CHECK_HOSTS = new Set([
+  "tgvid.lovable.app",
+  "vidstuck.xyz",
+  "bingr.one",
+  "vidfast.vc",
+  "zxcstream.xyz",
+  "nxsha.space",
+]);
+
+async function streamCheck(rawUrl) {
+  let target;
+  try {
+    target = new URL(rawUrl);
+  } catch {
+    return json({ ok: false, error: "invalid url" }, 400);
+  }
+  if (!STREAM_CHECK_HOSTS.has(target.hostname)) {
+    return json({ ok: false, error: "host not allowed" }, 403);
+  }
+  try {
+    const res = await fetch(target.toString(), {
+      method: "GET",
+      redirect: "follow",
+      headers: { "User-Agent": "Mozilla/5.0 (compatible; FumioStreamCheck/1.0)" },
+      signal: AbortSignal.timeout(7000),
+    });
+    return json({ ok: res.ok, status: res.status }, 200, { "Cache-Control": "public, max-age=120" });
+  } catch (e) {
+    // Network failure / timeout — report as "unknown", not "dead". The
+    // client fails OPEN on unknown (never blocks playback on a probe
+    // hiccup), exactly like Iris's stream-check behaviour.
+    return json({ ok: null, error: String(e) }, 200);
+  }
+}
+
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
@@ -117,6 +159,10 @@ export default {
 
     if (path === "/api/health" || path === "/api/version") {
       return json({ ok: true, service: "fumio-data-proxy", features: { edge: true } });
+    }
+
+    if (path === "/api/stream-check") {
+      return streamCheck(url.searchParams.get("url") || "");
     }
 
     if (path.startsWith("/tmdb/")) {

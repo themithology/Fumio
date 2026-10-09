@@ -36,7 +36,12 @@ export default function Details() {
   const seasons = (details.seasons || []).filter((s) => s.season_number > 0);
   const episodeCount = seasons.find((s) => s.season_number === season)?.episode_count || 1;
 
+  // Fullscreen requires a real user gesture — this click handler IS one, so
+  // the request fires here, synchronously, before navigating. Doing it on
+  // the Player page's own mount (after an async route transition) is too
+  // late and most browsers silently refuse it.
   const play = () => {
+    document.documentElement.requestFullscreen?.().catch(() => {});
     const qs = type === "tv" ? `?season=${season}&episode=${episode}` : "";
     navigate(`/watch/${type}/${id}${qs}`);
   };
