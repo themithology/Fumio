@@ -754,13 +754,137 @@ export async function anilistEpisodePageCollection(
   }
 }
 
+const AIRING_PER_PAGE = 50;
+const AIRING_PAGE_BATCH = 8;
+
+function streamingTitleNumber(title: string, index: number): number {
+  const match = String(title || "").match(/\b(?:episode|ep\.?|e)\s*(\d+)\b/i);
+  if (match) return Number(match[1]);
+  return index + 1;
+}
+
+function buildEpisodeList(
+  airing: Array<{ episode?: number; airingAt?: number }>,
+  streaming: Array<{ title?: string; thumbnail?: string }>,
+  declaredCount: number | null,
+): Array<{ number: number; title: string; thumbnail: string | null; airingAt: number | null }> {
+  const byNumber = new Map<number, { number: number; title: string; thumbnail: string | null; airingAt: number | null }>();
+
+  for (const node of airing) {
+    const number = Number(node?.episode);
+    if (!Number.isFinite(number) || number < 1) continue;
+    byNumber.set(number, {
+      number,
+      title: `Episode ${number}`,
+      thumbnail: null,
+      airingAt: Number(node.airingAt) || null,
+    });
+  }
+
+  streaming.forEach((entry, index) => {
+    const number = streamingTitleNumber(entry?.title || "", index);
+    if (!Number.isFinite(number) || number < 1) return;
+    const current = byNumber.get(number) || {
+      number,
+      title: `Episode ${number}`,
+      thumbnail: null,
+      airingAt: null,
+    };
+    const label = String(entry?.title || "").replace(/^\s*(?:episode|ep\.?|e)\s*\d+\s*[-:–—]?\s*/i, "").trim();
+    if (label) current.title = label;
+    if (entry?.thumbnail) current.thumbnail = entry.thumbnail;
+    byNumber.set(number, current);
+  });
+
+  const maxKnown = Math.max(0, ...byNumber.keys());
+  const count = Math.max(declaredCount || 0, maxKnown);
+  for (let number = 1; number <= count; number += 1) {
+    if (!byNumber.has(number)) {
+      byNumber.set(number, {
+        number,
+        title: `Episode ${number}`,
+        thumbnail: null,
+        airingAt: null,
+      });
+    }
+  }
+
+  return [...byNumber.values()].sort((a, b) => a.number - b.number);
+}
+
+async function anilistPublicEpisodeCollection(
+  anilistId: number,
+): Promise<{ status: number; body: any }> {
+  // Public AniList GraphQL has no Media.episodes(page) connection. The real
+  // fields are `episodes` (count), `streamingEpisodes`, and `airingSchedule`.
+  const firstQuery = `{
+    Media(id: ${anilistId}, type: ANIME) {
+      episodes
+      streamingEpisodes { title thumbnail }
+      airingSchedule(page: 1, perPage: ${AIRING_PER_PAGE}) {
+        pageInfo { hasNextPage lastPage }
+        nodes { episode airingAt }
+      }
+    }
+  }`;
+  const first = await fetch("https://graphql.anilist.co", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Accept: "application/json" },
+    body: JSON.stringify({ query: firstQuery }),
+    signal: AbortSignal.timeout(12000),
+  });
+  if (first.status !== 200) {
+    return {
+      status: 502,
+      body: { success: false, error: `AniList episodes failed: ${first.status}`, upstream_status: first.status },
+    };
+  }
+  const firstPayload = await first.json();
+  if (Array.isArray(firstPayload?.errors) && firstPayload.errors.length > 0) {
+    return { status: 502, body: { success: false, error: firstPayload.errors[0]?.message || "AniList GraphQL error" } };
+  }
+  const media = firstPayload?.data?.Media || {};
+  const streaming = Array.isArray(media.streamingEpisodes) ? media.streamingEpisodes : [];
+  const schedule = media.airingSchedule || {};
+  let airing = Array.isArray(schedule.nodes) ? [...schedule.nodes] : [];
+  const lastPage = Math.max(1, Number(schedule.pageInfo?.lastPage) || 1);
+
+  for (let page = 2; page <= lastPage && page <= EPISODE_PAGE_LIMIT; ) {
+    const batchEnd = Math.min(page + AIRING_PAGE_BATCH - 1, lastPage, EPISODE_PAGE_LIMIT);
+    const fields = Array.from({ length: batchEnd - page + 1 }, (_, i) => {
+      const p = page + i;
+      return `p${p}: Page(page: ${p}, perPage: ${AIRING_PER_PAGE}) { airingSchedules(mediaId: ${anilistId}) { episode airingAt } }`;
+    }).join("\n");
+    const batch = await fetch("https://graphql.anilist.co", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      body: JSON.stringify({ query: `{ ${fields} }` }),
+      signal: AbortSignal.timeout(15000),
+    });
+    if (batch.status !== 200) break;
+    const payload = await batch.json();
+    const data = payload?.data || {};
+    for (let p = page; p <= batchEnd; p += 1) {
+      const nodes = data[`p${p}`]?.airingSchedules;
+      if (Array.isArray(nodes)) airing = airing.concat(nodes);
+    }
+    page = batchEnd + 1;
+  }
+
+  const list = buildEpisodeList(airing, streaming, Number(media.episodes) || null);
+  if (!list.length) {
+    return { status: 200, body: { success: false, error: "No episode records on AniList for this entry" } };
+  }
+  return { status: 200, body: { success: true, count: list.length, episodes: list } };
+}
+
 /**
  * Full episode list of one AniList entry: { success, count, episodes:
  * [{ number, title, thumbnail, airingAt }] } sorted by number.
  * 502 = upstream/transport failure (the ladder fails over); 200
  * {success:false} = definitive (entry has no episode records).
  */
-export async function anilistEpisodeCollection(
+async function anilistLegacyEpisodeCollection(
   anilistId: number,
 ): Promise<{ status: number; body: any }> {
   try {
@@ -822,6 +946,21 @@ export async function anilistEpisodeCollection(
     };
   } catch (e) {
     // Network/timeout on the way to AniList — transport-level, retry elsewhere.
+    return { status: 502, body: { success: false, error: `AniList episodes failed: ${String(e)}` } };
+  }
+}
+
+export async function anilistEpisodeCollection(
+  anilistId: number,
+): Promise<{ status: number; body: any }> {
+  try {
+    const publicResult = await anilistPublicEpisodeCollection(anilistId);
+    if (publicResult.body?.success && publicResult.body.episodes?.length) return publicResult;
+    const legacy = await anilistLegacyEpisodeCollection(anilistId);
+    if (legacy.body?.success && legacy.body.episodes?.length) return legacy;
+    if (publicResult.status === 200) return publicResult;
+    return legacy;
+  } catch (e) {
     return { status: 502, body: { success: false, error: `AniList episodes failed: ${String(e)}` } };
   }
 }

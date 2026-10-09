@@ -186,14 +186,35 @@ export const resetPassword = async (email) => {
 const popupBlocked = (error) =>
   error?.code === "auth/popup-blocked" || error?.code === "auth/operation-not-supported-in-this-environment";
 
+let lastGoogleIdToken = "";
+
 const startGooglePopup = (auth, mod) => {
   const provider = new mod.GoogleAuthProvider();
   provider.setCustomParameters({ prompt: "select_account" });
   // Must run in the same user-gesture turn as the click. Do not await before this.
   return mod.signInWithPopup(auth, provider).then((result) => {
+    const credential = mod.GoogleAuthProvider.credentialFromResult(result);
+    lastGoogleIdToken = credential?.idToken || "";
     settle(result.user);
     return result.user;
   });
+};
+
+export const consumeGoogleIdToken = () => {
+  const token = lastGoogleIdToken;
+  lastGoogleIdToken = "";
+  return token;
+};
+
+export const signInWithGoogleIdToken = async (idToken) => {
+  const token = String(idToken || "").trim();
+  if (!token) throw new Error("Missing Google sign-in token.");
+  const auth = await ensureAuthInit();
+  if (!auth) throw new Error("Firebase Auth is unavailable.");
+  const mod = await getFirebaseAuthModule();
+  const result = await mod.signInWithCredential(auth, mod.GoogleAuthProvider.credential(token));
+  settle(result.user);
+  return result.user;
 };
 
 const fallbackGoogleSignIn = async (auth, mod, error) => {
@@ -262,3 +283,13 @@ export const disposeAuth = () => {
 };
 
 scheduleAuthInit();
+
+if (typeof window !== "undefined") {
+  window.addEventListener("fumio-native-auth", (event) => {
+    const token = event?.detail?.idToken;
+    if (!token) return;
+    signInWithGoogleIdToken(token).catch((error) => {
+      console.warn("Native Google sign-in failed:", error?.code || error?.message);
+    });
+  });
+}

@@ -2,12 +2,14 @@ import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import {
   authErrorMessage,
+  consumeGoogleIdToken,
   ensureAuthInit,
   resetPassword,
   signInWithEmail,
   signInWithGoogle,
   signUpWithEmail,
 } from "../../utils/auth.js";
+import { isNativeApp, nativeGoogleAuthUrl, openSystemBrowser } from "../../utils/externalLinks.js";
 
 const inEmbeddedFrame = () => {
   try {
@@ -26,6 +28,8 @@ export default function AuthForm({ initialMode = "signin" }) {
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
   const [embedded, setEmbedded] = useState(false);
+
+  const nativeHandoff = typeof window !== "undefined" && new URLSearchParams(window.location.search).get("fumioNative") === "1";
 
   useEffect(() => {
     setEmbedded(inEmbeddedFrame());
@@ -55,15 +59,32 @@ export default function AuthForm({ initialMode = "signin" }) {
     }
   };
 
+  const finishGoogle = (user) => {
+    if (!user) return;
+    if (nativeHandoff) {
+      const params = new URLSearchParams(window.location.search);
+      const redirect = params.get("redirect") || "com.fumio.app://auth";
+      const googleToken = consumeGoogleIdToken();
+      if (googleToken) {
+        window.location.assign(`${redirect}?idToken=${encodeURIComponent(googleToken)}`);
+        return;
+      }
+    }
+    navigate("/account", { replace: true });
+  };
+
   const google = () => {
     setError("");
     setMessage("");
+    if (isNativeApp() && !nativeHandoff) {
+      openSystemBrowser(nativeGoogleAuthUrl());
+      setMessage("Google sign-in opened in your browser. Finish it there to return to the app.");
+      return;
+    }
     const pending = signInWithGoogle();
     setBusy(true);
     pending
-      .then((user) => {
-        if (user) navigate("/account", { replace: true });
-      })
+      .then(finishGoogle)
       .catch((authError) => {
         setError(authErrorMessage(authError));
       })
@@ -111,6 +132,11 @@ export default function AuthForm({ initialMode = "signin" }) {
         <span className="grid h-5 w-5 place-items-center rounded-full bg-white text-sm font-black" aria-hidden="true">G</span>
         Continue with Google
       </button>
+      {nativeHandoff && (
+        <p className="mt-3 text-center text-xs leading-5 text-zinc-400">
+          Sign in with Google here, then we send you back to the app.
+        </p>
+      )}
       {embedded && (
         <p className="mt-3 text-center text-xs leading-5 text-zinc-500">
           Google needs a real browser window.{" "}

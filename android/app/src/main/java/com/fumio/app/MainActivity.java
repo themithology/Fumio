@@ -9,6 +9,7 @@ import android.os.Message;
 import android.view.View;
 import android.view.ViewGroup;
 import android.webkit.ConsoleMessage;
+import android.webkit.JavascriptInterface;
 import android.webkit.CookieManager;
 import android.webkit.GeolocationPermissions;
 import android.webkit.JsPromptResult;
@@ -25,6 +26,7 @@ import com.getcapacitor.Bridge;
 import com.getcapacitor.BridgeActivity;
 import com.getcapacitor.BridgeWebViewClient;
 import java.util.Locale;
+import org.json.JSONObject;
 
 /**
  * Keep Capacitor's own Chrome client (file pickers, fullscreen video, JS
@@ -41,6 +43,7 @@ public class MainActivity extends BridgeActivity {
 
     private Dialog popupDialog;
     private WebView popupView;
+    private String pendingAuthToken;
 
     @Override
     public void onCreate(Bundle savedInstanceState) {
@@ -51,15 +54,24 @@ public class MainActivity extends BridgeActivity {
             WebView webView = bridge.getWebView();
             if (webView == null) return;
             installClients(webView, bridge);
+            handleAuthIntent(getIntent());
         } catch (Exception ignored) {
             // Prefer a running Capacitor shell over a crash loop.
         }
+    }
+
+    @Override
+    protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        setIntent(intent);
+        handleAuthIntent(intent);
     }
 
     private void installClients(WebView webView, Bridge bridge) {
         CookieManager.getInstance().setAcceptCookie(true);
         CookieManager.getInstance().setAcceptThirdPartyCookies(webView, true);
 
+        webView.addJavascriptInterface(new NativeBridge(), "FumioNative");
         webView.setWebViewClient(new TrustedWebViewClient(bridge));
 
         WebChromeClient existing = readChromeClient(webView);
@@ -72,6 +84,45 @@ public class MainActivity extends BridgeActivity {
         settings.setJavaScriptCanOpenWindowsAutomatically(true);
         settings.setJavaScriptEnabled(true);
         settings.setDomStorageEnabled(true);
+    }
+
+    public class NativeBridge {
+        @JavascriptInterface
+        public void openBrowser(String url) {
+            if (url == null) return;
+            final Uri uri = Uri.parse(url);
+            String scheme = uri.getScheme();
+            if (scheme == null) return;
+            scheme = scheme.toLowerCase(Locale.US);
+            if (!scheme.equals("https") && !scheme.equals("http")) return;
+            runOnUiThread(() -> openExternal(uri));
+        }
+    }
+
+    private void handleAuthIntent(Intent intent) {
+        if (intent == null || intent.getData() == null) return;
+        Uri data = intent.getData();
+        if (data.getScheme() == null || !data.getScheme().equalsIgnoreCase("com.fumio.app")) return;
+        String token = data.getQueryParameter("idToken");
+        if (token == null || token.isEmpty()) return;
+        pendingAuthToken = token;
+        deliverPendingAuthToken();
+    }
+
+    private void deliverPendingAuthToken() {
+        if (pendingAuthToken == null) return;
+        Bridge bridge = getBridge();
+        if (bridge == null || bridge.getWebView() == null) return;
+        final String token = pendingAuthToken;
+        try {
+            String quoted = JSONObject.quote(token);
+            bridge.getWebView().evaluateJavascript(
+                "(function(t){try{window.dispatchEvent(new CustomEvent('fumio-native-auth',{detail:{idToken:t}}));}catch(e){}})(" + quoted + ")",
+                (value) -> pendingAuthToken = null
+            );
+        } catch (Exception ignored) {
+            // WebView may not be ready yet; onPageFinished retries.
+        }
     }
 
     private WebChromeClient readChromeClient(WebView webView) {
@@ -115,6 +166,12 @@ public class MainActivity extends BridgeActivity {
             }
             if (isAuthProvider(url)) return false;
             return true;
+        }
+
+        @Override
+        public void onPageFinished(WebView view, String url) {
+            super.onPageFinished(view, url);
+            deliverPendingAuthToken();
         }
     }
 

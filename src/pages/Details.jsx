@@ -241,6 +241,31 @@ export default function Details() {
           setFirstEpisode(items, "iris");
           return;
         }
+
+        const count = Number(activeSeason.episode_count) || Number(irisMeta.seasonsMap?.[selectedSeason]) || 0;
+        if (count > 0) {
+          const items = Array.from({ length: count }, (_, index) => {
+            const number = index + 1;
+            const pair = mapIrisEpisodeToTmdb(
+              selectedSeason,
+              number,
+              irisMeta.seasonsMap,
+              tmdbSeasons,
+            );
+            return {
+              id: `iris-${activeSeason.anilist_id}-${number}`,
+              episode_number: number,
+              name: `Episode ${number}`,
+              overview: "",
+              still_path: null,
+              air_date: "",
+              playerSeason: pair.season,
+              playerEpisode: pair.episode,
+            };
+          });
+          setFirstEpisode(items, "iris");
+          return;
+        }
       }
 
       // An Iris-resolved title is authoritative: an empty/error episode
@@ -575,7 +600,7 @@ export default function Details() {
               startsPlayback
               onEpisodeClick={handleEpisodeClick}
               stillFallback={img(details.backdrop_path || details.poster_path, "w500")}
-              emptyMessage={episodeSource === "iris" ? "The anime service resolved this season, but did not return any episode records. Try again later instead of showing unrelated TMDB data." : "No episodes are available for this season yet."}
+              emptyMessage={episodeSource === "iris" ? "Episode titles are still loading from AniList. Retry, or pick a season with a listed episode count." : "No episodes are available for this season yet."}
               emptyAction={episodeSource === "iris" ? (
                 <button
                   type="button"

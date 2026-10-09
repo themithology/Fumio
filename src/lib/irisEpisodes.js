@@ -18,6 +18,7 @@ const REQUEST_TIMEOUT_MS = 20000;
 // only the four TMDB tiers previously used by Fumio; anime-metadata and
 // anime-episodes are Iris API routes on all of these workers.
 const IRIS_EDGE_BASES = [
+  "https://theogpiratebot.online",
   "https://sexy.dryfruits.workers.dev",
   "https://theogpiratebot-tmdb-proxy.gleamcasteheavan.workers.dev",
   "https://damp-bird-e8d5.moviehub4u1209.workers.dev",
