@@ -2,6 +2,7 @@ import React from "react";
 import { Link } from "react-router-dom";
 import { useAuth } from "../auth/useAccount.js";
 import { displayInitial, isRealUser } from "../../utils/auth.js";
+import { DISCORD_INVITE_URL } from "../../utils/externalLinks.js";
 
 // A slim, shared top bar — ported from Iris's Topnav.jsx, trimmed down to
 // just the brand mark and the optional Account entry: Search lives in the
@@ -35,9 +36,11 @@ const Topnav = () => {
             <span className="hidden sm:inline">Schedule</span>
           </Link>
           <a
-            href="https://discord.gg/t6tjszp5eb"
+            href={DISCORD_INVITE_URL}
+            target="_blank"
+            rel="noopener noreferrer"
             aria-label="Join our Discord community"
-            className="inline-flex h-9 shrink-0 items-center gap-1.5 rounded-full border border-indigo-300/20 bg-indigo-400/10 px-3 text-xs font-bold text-indigo-100 transition hover:border-indigo-200/40 hover:bg-indigo-300/20 hover:text-white"
+            className="relative z-10 pointer-events-auto inline-flex h-9 shrink-0 items-center gap-1.5 rounded-full border border-indigo-300/20 bg-indigo-400/10 px-3 text-xs font-bold text-indigo-100 transition hover:border-indigo-200/40 hover:bg-indigo-300/20 hover:text-white"
           >
             <i className="ri-discord-fill" aria-hidden="true" />
             <span>Join Discord</span>

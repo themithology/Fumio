@@ -1,4 +1,11 @@
-import { getFirebaseAuth, getFirebaseAuthModule, getIdToken as readFirebaseIdToken, isConfigured } from "../firebase.js";
+import {
+  getFirebaseAuth,
+  getFirebaseAuthModule,
+  getFirebaseAuthModuleSync,
+  getFirebaseAuthSync,
+  getIdToken as readFirebaseIdToken,
+  isConfigured,
+} from "../firebase.js";
 
 // Optional account session. A visitor who does not sign in keeps using the app
 // exactly as before; this store only exposes the current Firebase Auth state.
@@ -35,6 +42,16 @@ export const subscribeAuth = (listener) => {
 
 export const getAuthSnapshot = () => state;
 export const isRealUser = (user) => Boolean(user && !user.isAnonymous);
+
+const isNativeApp = () => typeof window !== "undefined" && Boolean(window.Capacitor?.isNativePlatform?.());
+const isEmbeddedFrame = () => {
+  if (typeof window === "undefined") return false;
+  try {
+    return window.self !== window.top;
+  } catch {
+    return true;
+  }
+};
 
 /** Start Firebase's persisted-session listener once. */
 export const ensureAuthInit = () => {
@@ -107,7 +124,7 @@ const friendlyMessages = {
   "auth/wrong-password": "The email or password is not correct.",
   "auth/user-not-found": "The email or password is not correct.",
   "auth/popup-closed-by-user": "The Google sign-in window was closed.",
-  "auth/popup-blocked": "Your browser blocked the Google sign-in window. Try again or allow popups.",
+  "auth/popup-blocked": "Your browser blocked the Google sign-in window. Allow popups, or open Sign in in a new tab.",
   "auth/unauthorized-domain": "This site is not enabled for Firebase sign-in yet.",
   "auth/network-request-failed": "The sign-in service could not be reached. Try again.",
   "auth/too-many-requests": "Too many attempts. Wait a moment and try again.",
@@ -115,6 +132,7 @@ const friendlyMessages = {
   "auth/configuration-not-found": "Firebase Auth is not configured for this app yet.",
   "auth/api-key-not-valid": "The Firebase web configuration is not valid for this app.",
   "auth/timeout": "Firebase Auth did not respond. Check the connection, authorized domain, and enabled sign-in provider.",
+  "auth/operation-not-supported-in-this-environment": "Google sign-in is not available in this window. Open Sign in in a new tab.",
 };
 
 export const authErrorMessage = (error) => {
@@ -165,26 +183,55 @@ export const resetPassword = async (email) => {
   );
 };
 
-export const signInWithGoogle = async () => {
-  const auth = await withAuthTimeout(ensureAuthInit(), "Account setup");
-  if (!auth) throw new Error("Firebase Auth is unavailable.");
-  const mod = await withAuthTimeout(getFirebaseAuthModule(), "Firebase Auth loading");
+const popupBlocked = (error) =>
+  error?.code === "auth/popup-blocked" || error?.code === "auth/operation-not-supported-in-this-environment";
+
+const startGooglePopup = (auth, mod) => {
   const provider = new mod.GoogleAuthProvider();
   provider.setCustomParameters({ prompt: "select_account" });
-  try {
-    const result = await withAuthTimeout(
-      mod.signInWithPopup(auth, provider),
-      "Google sign-in",
-    );
+  // Must run in the same user-gesture turn as the click. Do not await before this.
+  return mod.signInWithPopup(auth, provider).then((result) => {
     settle(result.user);
     return result.user;
-  } catch (error) {
-    if (error?.code === "auth/popup-blocked" || error?.code === "auth/operation-not-supported-in-this-environment") {
-      await withAuthTimeout(mod.signInWithRedirect(auth, provider), "Google sign-in redirect");
-      return null;
-    }
-    throw error;
+  });
+};
+
+const fallbackGoogleSignIn = async (auth, mod, error) => {
+  if (!popupBlocked(error)) throw error;
+  // Redirect inside an iframe or Capacitor WebView is swallowed (X-Frame-Options
+  // or the app's own external-navigation guard). Surface a real error instead.
+  if (isEmbeddedFrame() || isNativeApp()) {
+    const blocked = new Error(friendlyMessages["auth/popup-blocked"]);
+    blocked.code = "auth/popup-blocked";
+    throw blocked;
   }
+  await mod.signInWithRedirect(auth, providerFrom(mod));
+  return null;
+};
+
+const providerFrom = (mod) => {
+  const provider = new mod.GoogleAuthProvider();
+  provider.setCustomParameters({ prompt: "select_account" });
+  return provider;
+};
+
+export const signInWithGoogle = () => {
+  const auth = getFirebaseAuthSync();
+  const mod = getFirebaseAuthModuleSync();
+  if (auth && mod) {
+    return startGooglePopup(auth, mod).catch((error) => fallbackGoogleSignIn(auth, mod, error));
+  }
+
+  return (async () => {
+    const loadedAuth = await ensureAuthInit();
+    if (!loadedAuth) throw new Error("Firebase Auth is unavailable.");
+    const loadedMod = await getFirebaseAuthModule();
+    try {
+      return await startGooglePopup(loadedAuth, loadedMod);
+    } catch (error) {
+      return fallbackGoogleSignIn(loadedAuth, loadedMod, error);
+    }
+  })();
 };
 
 export const signOutUser = async () => {

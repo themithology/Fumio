@@ -26,23 +26,42 @@ if (isConfigured) {
 export { app };
 
 let authPromise = null;
+let authInstance = null;
+let authModule = null;
+
+const cacheAuth = async () => {
+  const mod = await import("firebase/auth");
+  authModule = mod;
+  authInstance = mod.getAuth(app);
+  return authInstance;
+};
 
 /** Load Auth only when the account surface or sync layer needs it. */
 export const getFirebaseAuth = async () => {
   if (!app) return null;
+  if (authInstance) return authInstance;
   if (!authPromise) {
-    authPromise = import("firebase/auth")
-      .then(({ getAuth }) => getAuth(app))
-      .catch((error) => {
-        console.error("Firebase Auth load failed:", error);
-        authPromise = null;
-        return null;
-      });
+    authPromise = cacheAuth().catch((error) => {
+      console.error("Firebase Auth load failed:", error);
+      authPromise = null;
+      authInstance = null;
+      authModule = null;
+      return null;
+    });
   }
   return authPromise;
 };
 
-export const getFirebaseAuthModule = () => import("firebase/auth");
+export const getFirebaseAuthModule = async () => {
+  if (authModule) return authModule;
+  await getFirebaseAuth();
+  if (authModule) return authModule;
+  return import("firebase/auth");
+};
+
+/** Synchronous handles so Google sign-in can call window.open in the same click. */
+export const getFirebaseAuthSync = () => authInstance;
+export const getFirebaseAuthModuleSync = () => authModule;
 
 export const getIdToken = async (forceRefresh = false) => {
   const auth = await getFirebaseAuth();
