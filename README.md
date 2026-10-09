@@ -12,8 +12,10 @@ copied straight from Iris's `public/` assets.
   from the search box in the header.
 - **Details** (`/details/:type/:id`) — Iris-style cinematic poster/backdrop
   details, API-backed title logo, cast and trailer, plus the Iris season/episode
-  browser for TV. Anime season and episode labels/counts are loaded from Iris,
-  with TMDB as the fallback for ordinary TV or when Iris is unavailable.
+  browser for TV. Anime season cards and episode cards come from Iris's
+  AniList-backed API (`/api/anime-metadata` and `/api/anime-episodes`, with
+  Iris's browser-direct GraphQL path), with TMDB only as the fallback for
+  ordinary TV or when Iris is unavailable.
 - **Player** (`/watch/:type/:id?season=&episode=`) — opens **directly in
   fullscreen** (the Fullscreen API is requested on the Details page's Play
   button click, since that's the only point in the flow with a real user

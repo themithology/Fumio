@@ -19,6 +19,29 @@ const firstTrailer = (videos) =>
 
 const castImage = (path) => (path ? `https://image.tmdb.org/t/p/w185${path}` : null);
 
+const ANIME_TITLE_HINTS = [
+  "shinchan",
+  "shin-chan",
+  "doraemon",
+  "anime",
+  "pokemon",
+  "naruto",
+  "dragon ball",
+  "one piece",
+  "mushoku",
+  "demon slayer",
+];
+
+const isAnimeTitle = (detail) => {
+  if (!detail) return false;
+  const title = (detail.name || detail.title || "").toLowerCase();
+  return Boolean(
+    detail.genres?.some((genre) => genre.id === 16) ||
+      detail.origin_country?.includes("JP") ||
+      ANIME_TITLE_HINTS.some((hint) => title.includes(hint)),
+  );
+};
+
 export default function Details() {
   const { type, id } = useParams();
   const navigate = useNavigate();
@@ -53,6 +76,9 @@ export default function Details() {
       .then((data) => {
         if (cancelled) return;
         setDetails(data);
+        // Match Iris's own anime gate: anime seasons/episodes wait for Iris;
+        // ordinary TV stays on the normal TMDB fallback immediately.
+        if (type === "tv" && isAnimeTitle(data)) setIrisLoading(true);
         const firstSeason = (data.seasons || []).find((season) => season.season_number > 0);
         if (firstSeason) setSelectedSeason(firstSeason.season_number);
       })
@@ -79,7 +105,10 @@ export default function Details() {
   // Iris is the source for the selector whenever the title has an Iris/AniList
   // season chain. Ordinary TV falls back cleanly to TMDB's own season list.
   useEffect(() => {
-    if (!details || type !== "tv") return undefined;
+    if (!details || type !== "tv" || !isAnimeTitle(details)) {
+      setIrisLoading(false);
+      return undefined;
+    }
     let cancelled = false;
     const tmdbEpisodes = tmdbSeasons.reduce(
       (total, season) => total + (Number(season.episode_count) || 0),
@@ -116,13 +145,26 @@ export default function Details() {
     };
   }, [details, type, tmdbSeasons]);
 
-  const seasons = irisMeta?.seasons?.length ? irisMeta.seasons : tmdbSeasons;
+  const waitingForIris = type === "tv" && isAnimeTitle(details) && irisLoading && !irisMeta;
+  const seasons = irisMeta?.seasons?.length
+    ? irisMeta.seasons
+    : waitingForIris
+      ? []
+      : tmdbSeasons;
   const activeSeason = seasons.find((season) => season.season_number === selectedSeason) || seasons[0] || null;
 
   useEffect(() => {
+    if (waitingForIris) {
+      setEpisodes([]);
+      setEpisodeSource(null);
+      setEpisodesLoading(true);
+      return undefined;
+    }
+
     if (!details || type !== "tv" || !activeSeason) {
       setEpisodes([]);
       setEpisodeSource(null);
+      setEpisodesLoading(false);
       return undefined;
     }
 
@@ -207,7 +249,7 @@ export default function Details() {
     return () => {
       cancelled = true;
     };
-  }, [activeSeason, details, id, irisMeta, selectedSeason, tmdbSeasons, type]);
+  }, [activeSeason, details, id, irisMeta, selectedSeason, tmdbSeasons, type, waitingForIris]);
 
   useEffect(() => {
     const title = details?.title || details?.name;
@@ -376,17 +418,17 @@ export default function Details() {
         </div>
       </section>
 
-      {type === "tv" && seasons.length > 0 && (
+      {type === "tv" && (seasons.length > 0 || waitingForIris) && (
         <section>
           <div className="flex flex-wrap items-center justify-between gap-3 border-b border-white/5 px-4 py-5 sm:px-8 md:px-12 lg:px-16 xl:px-20">
             <div>
               <p className="section-rule font-display text-lg font-bold text-white">Choose your episode</p>
               <p className="mt-2 text-xs text-zinc-500">
                 {irisLoading
-                  ? "Syncing Iris season data…"
+                  ? "Loading seasons directly from the Iris API…"
                   : episodeSource === "iris"
-                    ? "Season and episode data from Iris"
-                    : "Using the TMDB episode fallback"}
+                    ? "Season and episode data from the Iris API"
+                    : "Using the TMDB fallback for a title that has no Iris record"}
               </p>
             </div>
             {episodes.length > 0 && (
@@ -395,23 +437,30 @@ export default function Details() {
               </span>
             )}
           </div>
-          <SeasonEpisodeBrowser
-            seasons={seasons}
-            selectedSeason={activeSeason?.season_number || selectedSeason}
-            onSeasonSelect={(seasonNumber) => {
-              setSelectedSeason(seasonNumber);
-              setSelectedEpisode(null);
-              setSelectedPair(null);
-            }}
-            posterFallback={img(details.poster_path, "w300")}
-            episodes={episodes}
-            episodesLoading={episodesLoading}
-            selectedEpisode={selectedEpisode}
-            startsPlayback
-            onEpisodeClick={handleEpisodeClick}
-            stillFallback={img(details.backdrop_path || details.poster_path, "w500")}
-            searchResetKey={selectedSeason}
-          />
+          {waitingForIris ? (
+            <div className="flex flex-col items-center justify-center gap-3 border-b border-white/5 py-20 text-zinc-500">
+              <div className="h-10 w-10 animate-spin rounded-full border-4 border-t-[var(--gtv-accent)] border-zinc-800" />
+              <span className="text-xs font-bold uppercase tracking-widest">Fetching Iris seasons…</span>
+            </div>
+          ) : (
+            <SeasonEpisodeBrowser
+              seasons={seasons}
+              selectedSeason={activeSeason?.season_number || selectedSeason}
+              onSeasonSelect={(seasonNumber) => {
+                setSelectedSeason(seasonNumber);
+                setSelectedEpisode(null);
+                setSelectedPair(null);
+              }}
+              posterFallback={img(details.poster_path, "w300")}
+              episodes={episodes}
+              episodesLoading={episodesLoading}
+              selectedEpisode={selectedEpisode}
+              startsPlayback
+              onEpisodeClick={handleEpisodeClick}
+              stillFallback={img(details.backdrop_path || details.poster_path, "w500")}
+              searchResetKey={selectedSeason}
+            />
+          )}
         </section>
       )}
 

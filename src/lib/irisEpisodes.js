@@ -1,15 +1,31 @@
 // Iris season and episode data adapter.
 //
-// The details page stays Fumio's UI, but anime season segregation and episode
-// labels/counts come from the same Iris edge API used by TheOGPirateBot. The
-// TMDB proxy remains the metadata fallback for ordinary television and for a
-// title whose AniList record is unavailable.
+// This module uses the same AniList-backed API that powers Iris's own
+// TvDetails page. The visitor's browser calls Iris's shared GraphQL adapter
+// first (the `shared/anilist.ts` implementation), then walks Iris's Cloudflare
+// API ladder. TMDB is not used to build the Iris season or episode list; it is
+// only retained below for the player-number bridge and for non-anime fallback
+// titles when Iris has no record.
 
+import { anilistEpisodeCollection, anilistMetadataJson } from "./anilist.ts";
 import { PROXY_BASES } from "./proxyTiers.js";
 
 const CACHE_PREFIX = "theogpiratebot:iris:";
 const CACHE_TTL_MS = 6 * 60 * 60 * 1000;
-const REQUEST_TIMEOUT_MS = 9000;
+const REQUEST_TIMEOUT_MS = 20000;
+
+// These are Iris's actual edge API tiers. Keep the full ladder here instead of
+// only the four TMDB tiers previously used by Fumio; anime-metadata and
+// anime-episodes are Iris API routes on all of these workers.
+const IRIS_EDGE_BASES = [
+  "https://sexy.dryfruits.workers.dev",
+  "https://theogpiratebot-tmdb-proxy.gleamcasteheavan.workers.dev",
+  "https://damp-bird-e8d5.moviehub4u1209.workers.dev",
+  "https://soft.niggasoup45.workers.dev",
+  "https://juicypuhh.request-moviehub4u.workers.dev",
+  "https://loudwolf.contact-theogpiratebot.workers.dev",
+  "https://froxyproxy.gleamcasteheavan-960.workers.dev",
+];
 
 const readCache = (key) => {
   try {
@@ -37,18 +53,8 @@ const writeCache = (key, data) => {
   }
 };
 
-const irisBases = () => {
-  // The local TheOGPirateBot worker deliberately exposes TMDB and
-  // stream-check, not Iris's AniList routes. Skip the relative base here and
-  // walk Iris's existing edge workers directly.
-  const defaults = [
-    "https://theogpiratebot-tmdb-proxy.gleamcasteheavan.workers.dev",
-    "https://sexy.dryfruits.workers.dev",
-    "https://damp-bird-e8d5.moviehub4u1209.workers.dev",
-    "https://soft.niggasoup45.workers.dev",
-  ];
-  return [...new Set([...PROXY_BASES.filter(Boolean), ...defaults])];
-};
+const irisBases = () =>
+  [...new Set([...IRIS_EDGE_BASES, ...PROXY_BASES.filter(Boolean)])];
 
 const getIrisJson = async (path) => {
   for (const base of irisBases()) {
@@ -61,9 +67,9 @@ const getIrisJson = async (path) => {
       });
       if (!response.ok) continue;
       const body = await response.json();
-      if (body && body.success !== false) return body;
+      if (body?.success !== false) return body;
     } catch {
-      // Walk the next Iris edge tier.
+      // Walk Iris's next independent edge tier.
     } finally {
       clearTimeout(timer);
     }
@@ -80,10 +86,40 @@ const numericMap = (value) => {
   );
 };
 
+const normalizeMetadata = (body, transport) => {
+  if (!body?.success || !body.seasons || typeof body.seasons !== "object") return null;
+  const seasonsMap = numericMap(body.seasons);
+  const seasons = Object.keys(seasonsMap)
+    .sort((a, b) => Number(a) - Number(b))
+    .map((key) => ({
+      season_number: Number(key),
+      name: body.titles?.[key] || `Season ${key}`,
+      episode_count: seasonsMap[key],
+      poster_path: body.posters?.[key] || null,
+      anilist_id: Number(body.anilist_ids?.[key]) || null,
+    }));
+
+  if (seasons.length === 0) return null;
+  return {
+    source: "iris",
+    transport,
+    seasons,
+    seasonsMap,
+    seasonIds: body.anilist_ids || {},
+    segments: body.segments || {},
+    rawCounts: body.raw_counts || {},
+    anilistId: Number(body.anilist_id) || null,
+    nextAiring: body.next_airing || null,
+  };
+};
+
 /**
- * Fetch Iris's AniList season bridge for a title. Iris only returns a
- * successful result when the title resolves to an anime chain; callers should
- * use the TMDB seasons when this returns null.
+ * Fetch Iris's AniList season bridge for a title.
+ *
+ * The order deliberately matches Iris:
+ *   1. browser-direct AniList GraphQL using Iris's shared implementation;
+ *   2. Iris's `/api/anime-metadata` edge ladder;
+ *   3. null, allowing the caller to handle a genuinely non-Iris title.
  */
 export async function fetchIrisSeasonData({ title, tmdbEpisodes = null, year = null } = {}) {
   const cleanTitle = String(title || "").trim();
@@ -101,35 +137,44 @@ export async function fetchIrisSeasonData({ title, tmdbEpisodes = null, year = n
   const cached = readCache(cacheKey);
   if (cached) return cached;
 
-  const body = await getIrisJson(`/api/anime-metadata?${params.toString()}`);
-  if (!body?.seasons || typeof body.seasons !== "object") return null;
+  // Primary: exactly Iris's browser-direct API implementation. This avoids
+  // the WAF failures that made the old edge-only adapter silently fall back to
+  // TMDB for anime titles.
+  try {
+    const direct = await anilistMetadataJson(cleanTitle, tmdbEpisodes, year);
+    const parsed = normalizeMetadata(direct?.body, "browser-direct");
+    if (parsed) {
+      writeCache(cacheKey, parsed);
+      return parsed;
+    }
+  } catch {
+    // The Iris edge ladder below is the documented fallback.
+  }
 
-  const seasonsMap = numericMap(body.seasons);
-  const seasons = Object.keys(seasonsMap)
-    .sort((a, b) => Number(a) - Number(b))
-    .map((key) => ({
-      season_number: Number(key),
-      name: body.titles?.[key] || `Season ${key}`,
-      episode_count: seasonsMap[key],
-      poster_path: body.posters?.[key] || null,
-      anilist_id: Number(body.anilist_ids?.[key]) || null,
-    }));
-
-  if (seasons.length === 0) return null;
-
-  const result = {
-    source: "iris",
-    seasons,
-    seasonsMap,
-    seasonIds: body.anilist_ids || {},
-    segments: body.segments || {},
-    rawCounts: body.raw_counts || {},
-    anilistId: Number(body.anilist_id) || null,
-    nextAiring: body.next_airing || null,
-  };
-  writeCache(cacheKey, result);
-  return result;
+  const edgeBody = await getIrisJson(`/api/anime-metadata?${params.toString()}`);
+  const parsed = normalizeMetadata(edgeBody, "iris-edge");
+  if (!parsed) return null;
+  writeCache(cacheKey, parsed);
+  return parsed;
 }
+
+const normalizeEpisodes = (body) => {
+  if (!body?.success || !Array.isArray(body.episodes)) return null;
+  const episodes = body.episodes
+    .map((episode) => ({
+      number: Number(episode.number),
+      title: episode.title || "",
+      thumbnail: episode.thumbnail || null,
+      airingAt: Number(episode.airingAt) || null,
+    }))
+    .filter((episode) => Number.isFinite(episode.number) && episode.number > 0)
+    .sort((a, b) => a.number - b.number);
+  return {
+    source: "iris",
+    count: Number(body.count) || episodes.length,
+    episodes,
+  };
+};
 
 const inflightEpisodes = new Map();
 
@@ -143,28 +188,27 @@ export function fetchIrisEpisodes(anilistId) {
   const cached = readCache(key);
   if (cached) return Promise.resolve(cached);
 
-  const request = getIrisJson(`/api/anime-episodes?anilist_id=${id}`)
-    .then((body) => {
-      if (!body || !Array.isArray(body.episodes)) return null;
-      const result = {
-        source: "iris",
-        count: Number(body.count) || body.episodes.length,
-        episodes: body.episodes
-          .map((episode) => ({
-            number: Number(episode.number),
-            title: episode.title || "",
-            thumbnail: episode.thumbnail || null,
-            airingAt: Number(episode.airingAt) || null,
-          }))
-          .filter((episode) => Number.isFinite(episode.number) && episode.number > 0)
-          .sort((a, b) => a.number - b.number),
-      };
-      writeCache(key, result);
-      return result;
-    })
-    .finally(() => {
-      inflightEpisodes.delete(id);
-    });
+  const request = (async () => {
+    // Primary: Iris's browser-direct AniList episode collection.
+    try {
+      const direct = await anilistEpisodeCollection(id);
+      const parsed = normalizeEpisodes(direct?.body);
+      if (parsed) {
+        writeCache(key, parsed);
+        return parsed;
+      }
+    } catch {
+      // Continue to the Iris edge API.
+    }
+
+    const body = await getIrisJson(`/api/anime-episodes?anilist_id=${id}`);
+    const parsed = normalizeEpisodes(body);
+    if (parsed) writeCache(key, parsed);
+    return parsed;
+  })().finally(() => {
+    inflightEpisodes.delete(id);
+  });
+
   inflightEpisodes.set(id, request);
   return request;
 }
@@ -172,8 +216,8 @@ export function fetchIrisEpisodes(anilistId) {
 /**
  * Iris's UI can use AniList season numbering while embed hosts use TMDB's
  * season numbering. Convert the selected Iris pair before opening the player.
- * This mirrors Iris's absolute-episode bridge for the common multi-season and
- * single-entry long-running anime cases.
+ * This keeps Iris episode data on screen while preserving Fumio's existing
+ * player route contract.
  */
 export function mapIrisEpisodeToTmdb(season, episode, irisSeasonsMap, tmdbSeasons) {
   const uiSeason = Number(season) || 1;
@@ -189,7 +233,8 @@ export function mapIrisEpisodeToTmdb(season, episode, irisSeasonsMap, tmdbSeason
   }
 
   // One AniList entry can represent a long-running show whose TMDB seasons
-  // keep global episode numbers (One Piece/Naruto-style data).
+  // keep global episode numbers (One Piece/Naruto-style data). The visible
+  // episode number remains the Iris/AniList number.
   if (Object.keys(map).length === 1 && orderedTmdb.length > 1) {
     let remaining = uiEpisode;
     for (const tmdbSeason of orderedTmdb) {
