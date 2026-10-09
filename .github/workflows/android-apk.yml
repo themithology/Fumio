@@ -31,8 +31,9 @@ jobs:
           distribution: temurin
           java-version: "21"
 
-      - uses: android-actions/setup-android@v3
-
+      # GitHub's ubuntu-latest runners ship the Android SDK pre-installed
+      # (ANDROID_HOME, platforms, build-tools, licenses already accepted) —
+      # no separate setup-android action needed.
       - name: Sync web build into the Android project
         run: npx cap sync android
 
