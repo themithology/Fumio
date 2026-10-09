@@ -2,6 +2,7 @@
 // this module talks only to the site's own Node/SQLite HTTP API. There is no
 // Firestore list/history path here.
 
+import { Capacitor, CapacitorHttp } from "@capacitor/core";
 import { getIdToken } from "./auth.js";
 
 export const DB_API_TIMEOUT_MS = 15000;
@@ -71,22 +72,46 @@ export const dbFetch = async (
     headers.authorization = `Bearer ${token}`;
   }
 
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  const url = endpoint(path);
   let response;
   try {
-    response = await fetch(endpoint(path), {
-      method,
-      headers,
-      body: body === undefined ? undefined : JSON.stringify(body),
-      cache: "no-store",
-      credentials: "omit",
-      signal: controller.signal,
-    });
+    // Capacitor's WebView origin is https://localhost, so window.fetch to the
+    // site is cross-origin. Iris /api/db does not send CORS headers (the site
+    // itself is same-origin). Native HTTP skips that check and still talks to
+    // the same SQLite routes.
+    if (Capacitor.isNativePlatform()) {
+      const result = await CapacitorHttp.request({
+        url,
+        method,
+        headers,
+        ...(body !== undefined ? { data: body } : {}),
+        connectTimeout: timeoutMs,
+        readTimeout: timeoutMs,
+        responseType: "json",
+      });
+      response = {
+        ok: result.status >= 200 && result.status < 300,
+        status: result.status,
+        json: async () => result.data,
+      };
+    } else {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), timeoutMs);
+      try {
+        response = await fetch(url, {
+          method,
+          headers,
+          body: body === undefined ? undefined : JSON.stringify(body),
+          cache: "no-store",
+          credentials: "omit",
+          signal: controller.signal,
+        });
+      } finally {
+        clearTimeout(timer);
+      }
+    }
   } catch (error) {
     throw new DbApiError(error?.name === "AbortError" ? "timeout" : "unavailable", error?.message);
-  } finally {
-    clearTimeout(timer);
   }
 
   const data = await parseJson(response);
