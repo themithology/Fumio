@@ -136,7 +136,7 @@ export default function PlayerStage({
             <i className="ri-wifi-off-line text-3xl text-zinc-500" aria-hidden="true" />
             <p className="text-sm font-black text-white">TG Vid did not stay connected</p>
             <p className="max-w-sm text-xs leading-relaxed text-zinc-500">
-              TG Vid was left selected. Choose another server below if you want to continue; Fumio will not switch servers by itself.
+              TG Vid was left selected. Choose another server below if you want to continue; the app will not switch servers by itself.
             </p>
           </div>
         )}

@@ -3,7 +3,7 @@
   "private": true,
   "version": "0.1.0",
   "type": "module",
-  "description": "TheOGPirateBot — movies, series, anime and Live TV with Iris season data and TG Vid primary playback plus manual Fumio fallback sources.",
+  "description": "TheOGPirateBot — movies, series, anime and Live TV with Iris season data and TG Vid primary playback plus manual fallback sources.",
   "scripts": {
     "dev": "vite",
     "build": "vite build",

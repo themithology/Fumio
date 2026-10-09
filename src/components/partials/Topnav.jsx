@@ -26,6 +26,14 @@ const Topnav = () => {
             <i className="ri-equalizer-line text-sm" aria-hidden="true" />
             <span className="hidden sm:inline">Explore</span>
           </Link>
+          <Link
+            to="/schedule"
+            aria-label="Anime schedule"
+            className="inline-flex h-9 shrink-0 items-center gap-1.5 rounded-full border border-white/10 bg-white/5 px-3.5 text-xs font-semibold text-zinc-300 transition hover:bg-white/10 hover:text-white"
+          >
+            <i className="ri-calendar-event-line text-sm" aria-hidden="true" />
+            <span className="hidden sm:inline">Schedule</span>
+          </Link>
           <a
             href="https://discord.gg/t6tjszp5eb"
             target="_blank"

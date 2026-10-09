@@ -12,8 +12,8 @@ const FloatingNav = () => {
   const isHome = pathname === "/";
   const isAnime = pathname.startsWith("/anime");
   const isSearch = pathname.startsWith("/search");
-  const isMovie = pathname.startsWith("/explore") && browseType === "movie";
-  const isTv = pathname.startsWith("/explore") && browseType === "tv";
+  const isMovie = pathname === "/movie" || pathname === "/movies" || (pathname.startsWith("/explore") && browseType === "movie");
+  const isTv = pathname === "/tv" || pathname === "/series" || (pathname.startsWith("/explore") && browseType === "tv");
   const isLiveTv = pathname.startsWith("/live-tv");
 
   const itemClass = (active) =>
@@ -47,12 +47,12 @@ const FloatingNav = () => {
           <i className="ri-search-2-line text-lg sm:text-xl" aria-hidden="true" />
         </Link>
 
-        <Link to="/explore?type=movie" className={itemClass(isMovie)} aria-label="Movies">
+        <Link to="/movie" className={itemClass(isMovie)} aria-label="Movies">
           <span className="relative flex items-center justify-center"><i className={`${isMovie ? "ri-movie-2-fill" : "ri-movie-2-line"} text-lg sm:text-xl`} />{dot(isMovie)}</span>
           {label("Movies", isMovie)}
         </Link>
 
-        <Link to="/explore?type=tv" className={itemClass(isTv)} aria-label="Series">
+        <Link to="/tv" className={itemClass(isTv)} aria-label="Series">
           <span className="relative flex items-center justify-center"><i className={`${isTv ? "ri-tv-fill" : "ri-tv-line"} text-lg sm:text-xl`} />{dot(isTv)}</span>
           {label("Series", isTv)}
         </Link>

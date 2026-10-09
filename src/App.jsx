@@ -9,6 +9,8 @@ import NotFound from "./pages/NotFound.jsx";
 import LiveTv from "./pages/LiveTv.jsx";
 import LiveTvWatch from "./pages/LiveTvWatch.jsx";
 import Anime from "./pages/Anime.jsx";
+import MediaHub from "./pages/MediaHub.jsx";
+import Schedule from "./pages/Schedule.jsx";
 import Account from "./pages/Account.jsx";
 import MyList from "./pages/MyList.jsx";
 import { useAccountSync } from "./components/auth/useAccount.js";
@@ -30,6 +32,11 @@ export default function App() {
         <Route path="/" element={<Home />} />
         <Route path="/search" element={<Search />} />
         <Route path="/anime" element={<Anime />} />
+        <Route path="/movie" element={<MediaHub mediaType="movie" />} />
+        <Route path="/movies" element={<MediaHub mediaType="movie" />} />
+        <Route path="/tv" element={<MediaHub mediaType="tv" />} />
+        <Route path="/series" element={<MediaHub mediaType="tv" />} />
+        <Route path="/schedule" element={<Schedule />} />
         <Route path="/account" element={<Account />} />
         <Route path="/my-list" element={<MyList />} />
         <Route path="/live-tv" element={<LiveTv />} />

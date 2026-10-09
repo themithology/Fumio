@@ -152,7 +152,7 @@ export const pullCloudData = async (uid) => {
   } catch (error) {
     if (error?.code === "not-found") return { myList: [], continueWatching: [] };
     setStatus({ state: "error", message: explainFailure(error), at: Date.now() });
-    console.warn("Fumio cloud sync read failed:", error?.code || error?.message);
+    console.warn("Cloud sync read failed:", error?.code || error?.message);
     return null;
   }
 };
@@ -174,7 +174,7 @@ export const pushCloudData = async (uid) => {
     return true;
   } catch (error) {
     setStatus({ state: "error", message: explainFailure(error), at: Date.now() });
-    console.warn("Fumio cloud sync write failed:", error?.code || error?.message);
+    console.warn("Cloud sync write failed:", error?.code || error?.message);
     return false;
   }
 };

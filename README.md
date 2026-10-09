@@ -14,8 +14,14 @@ copied straight from Iris's `public/` assets.
 - **Home** (`/`) — Iris-style quality-first hero built from local history/My List plus TMDB top-rated fallback; Discord community recommendations (when Iris's `/api/recommendations/top` is available), local Continue Watching/My List, Top 10 Rated, Trending This Week, Picked For You, streaming-platform filters, Anime, Korean Dramas, Indian Cinema, Action & Crime, Sci-Fi & Horror, Comedy, and API-backed lazy rails.
 - **Search** (`/search?q=...`) — TMDB multi-search (movies + TV), reachable
   from the search box in the header.
-- **Anime** (`/anime`) — a real API-backed anime hub with trending, popular,
-  film and currently-airing rails.
+- **Anime** (`/anime`) — a reference-style anime hub with a rotating title-logo
+  hero, Top 10, local recommendations, anime films, genre rails and quality
+  filtering.
+- **Movies** (`/movie`, `/movies`) and **Series** (`/tv`, `/series`) — dedicated
+  cinematic hubs with hero spotlights, Top 10 rails, local recommendations,
+  genre rows and filtered Explore links.
+- **Schedule** (`/schedule`) — local-time weekly anime airing schedule with
+  recently aired cards, day tabs, timeline status and manual episode actions.
 - **Details** (`/details/:type/:id`) — Iris-style cinematic poster/backdrop
   details, API-backed title logo, cast and trailer, plus the Iris season/episode
   browser for TV. Anime season cards and episode cards come from the Iris
@@ -30,10 +36,10 @@ copied straight from Iris's `public/` assets.
   configured feeds also use direct HLS playback through hls.js.
 - **Player** (`/watch/:type/:id?season=&episode=&server=`) — opens **directly
   in fullscreen** (the Fullscreen API is requested on the Details page's Play
-  button click). A compact server selector is visible as soon as the player
-  opens. TG Vid is the preferred attempt; selecting another entry hands off to
-  Fumio's existing fallback lane without mixing the two playback contracts.
-  Fumio's VidStuck, VidFast, Bingr, Roxy and NXSHA sources remain available,
+  button click). The server selector stays in the bottom bar, including below the player when
+  the layout permits. TG Vid is the preferred attempt; selecting another entry hands off to
+  the existing fallback lane without mixing the two playback contracts.
+  VidStuck, VidFast, Bingr, Roxy and NXSHA sources remain available,
   and Japanese anime titles resolve real AniList/MAL Sub/Dub lanes for
   MegaPlay, ZokoAnime and 4animo (Sub, Dub, Sub 2, Dub 2, Sub 3, Dub 3).
   Anime season/episode coordinates are carried separately from TMDB player
@@ -49,7 +55,7 @@ copied straight from Iris's `public/` assets.
   errors show a local-safe status and never disable browsing.
 
 This plays **real content today** — it is not a demo/placeholder stream.
-The player keeps Fumio's existing TMDB-keyed sources and episode-number
+The player keeps its existing TMDB-keyed sources and episode-number
 contract, while Iris remains authoritative for anime season/episode display
 and mapping.
 
@@ -71,11 +77,11 @@ src/
     partials/Topnav.jsx    # branded top bar
     partials/FloatingNav.jsx # six-slot bottom dock
     partials/Cards.jsx     # poster cards used by browse/search
-    PlayerStage.jsx        # TG Vid gate, then handoff to FumioPlayerStage
-    FumioPlayerStage.jsx   # original sources + manual top-left server picker
+    PlayerStage.jsx        # TG Vid gate and explicit manual source choice
+    the fallback player component # original sources + bottom server picker
     Loading.jsx
   providers/
-    sources.js             # TG Vid primary plus Fumio's original source list
+    sources.js             # TG Vid primary plus the existing source list
     animeEmbeds.js         # AniList/MAL Anime Sub/Dub URL + episode resolver
   data/liveTvSnapshot.js   # curated Live TV guide and stream definitions
   utils/liveTv.js          # Live TV API/cache/favorites/recents
@@ -84,7 +90,9 @@ src/
   utils/accountSync.js     # merge/debounce/error-safe `/api/db` sync
   utils/dbApi.js           # authenticated Iris Node/SQLite API client
   utils/auth.js             # Firebase Auth session and sign-in helpers
-  pages/Anime.jsx          # API-backed Anime hub
+  pages/Anime.jsx          # title-logo Anime hub
+  pages/MediaHub.jsx       # Movies and Series hero hubs + filtered grids
+  pages/Schedule.jsx       # local-time weekly Anime schedule
   pages/LiveTv*.jsx        # Live TV guide and theater
   lib/
     tmdb.js                 # fetch wrapper w/ failover + caching
@@ -119,7 +127,7 @@ separated) in a `.env.local`.
 ### Optional accounts and the Iris data API
 
 The client defaults to same-origin `/api/db`, matching Iris's production Node
-server. If Fumio is hosted on a different origin from that server, set
+server. If the app is hosted on a different origin from that server, set
 `VITE_ACCOUNT_API_BASE` to the server origin before building (the server must
 allow the app origin for authenticated CORS requests). Firebase's public web
 configuration defaults to the existing Iris project and can be overridden with
@@ -127,7 +135,7 @@ configuration defaults to the existing Iris project and can be overridden with
 are public client settings; no SQLite credential is placed in the browser.
 
 ```bash
-# Only needed when Fumio and the Iris Node server are on different origins.
+# Only needed when the app and the Iris Node server are on different origins.
 VITE_ACCOUNT_API_BASE=https://your-iris-server.example
 
 # Or, for local Vite development with a Node server on port 3014:
@@ -146,9 +154,9 @@ npm run dev            # Vite proxies /tmdb and /api to it
 
 1. `TG_VID_SOURCE` is attempted first and has the compact always-available
    server selector.
-2. If its probe, iframe, or loading timeout fails, `PlayerStage.jsx` mounts
-   `FumioPlayerStage.jsx`.
-3. `FumioPlayerStage.jsx` retains Fumio's original source list and appends
+2. If TG Vid cannot stay connected, `PlayerStage.jsx` leaves a visible
+   failed/manual-choice state; it does not silently select another server.
+3. The fallback player retains the existing source list and appends
    resolved Anime Sub/Dub slots only for titles whose Iris metadata produced a
    valid AniList/MAL reference. The active source is checked and timed out
    independently, but a failure only shows an error state; the viewer must
@@ -156,9 +164,9 @@ npm run dev            # Vite proxies /tmdb and /api to it
 4. Stable keys (`tgvid`, `vidstuck`, `sub`, `dub`, `sub2`, `dub2`, `sub3`,
    `dub3`, etc.) are honored by `?server=` and persisted per title/global.
 
-TG Vid is never duplicated inside the Fumio list, so the fallback remains the
-existing Fumio player while the newer Iris Anime lanes are available when they
-can actually resolve.
+TG Vid is never duplicated inside the fallback list. The viewer remains in
+control of every server change, while the newer Anime lanes are available when
+they can actually resolve.
 
 ## Running it
 
@@ -168,8 +176,9 @@ npm run worker:dev   # terminal 1 — local data proxy (optional, has fallback)
 npm run dev           # terminal 2 — the app
 ```
 
-Open `/` for Home, `/anime` for Anime, or `/live-tv` for Live TV. You can
-also jump straight to any `/details/{movie|tv}/{tmdbId}`.
+Open `/` for Home, `/anime` for Anime, `/movie` for Movies, `/tv` for Series,
+`/schedule` for the weekly schedule, or `/live-tv` for Live TV. You can also
+jump straight to any `/details/{movie|tv}/{tmdbId}`.
 
 ## The Android APK
 
