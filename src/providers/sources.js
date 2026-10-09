@@ -1,8 +1,8 @@
 // Stream sources used by TheOGPirateBot's fullscreen player.
 //
-// TG Vid is the preferred source. The existing TheOGPirateBot provider list
-// is deliberately kept intact behind it, so a failed TG Vid probe, iframe
-// error, or loading timeout silently advances to the next source.
+// TG Vid is a separate preferred attempt. If it fails, PlayerStage hands
+// control to FumioPlayerStage, which keeps the original Fumio source list and
+// its existing automatic failover behavior intact.
 
 function buildSource({ id, name, quality, audioOptions, movieUrl, tvUrl, primary = false }) {
   return {
@@ -17,7 +17,7 @@ function buildSource({ id, name, quality, audioOptions, movieUrl, tvUrl, primary
 }
 
 // The new first attempt. These options match TG Vid's documented language
-// values; the current UI uses Hindi by default and still keeps the host's own
+// values; the current UI uses Hindi by default and keeps the host's own
 // language fallback when a title has no Hindi track.
 export const TG_VID_SOURCE = buildSource({
   id: "tgvid",
@@ -37,10 +37,10 @@ export const TG_VID_SOURCE = buildSource({
     `https://tgvid.lovable.app/embed/tv/${id}/${season}/${episode}?color=ffffff&back=true&lang=${audio}&episodeSelector=false&autoplayNextEp=false`,
 });
 
-// The previous/current TheOGPirateBot player sources. Their order is the
-// fallback order and should not be changed casually: each source is a
-// different host with a different catalog and audio coverage.
-export const THE_OG_PLAYER_SOURCES = [
+// Fumio's original player sources. Keep this list exactly as the fallback
+// lane: when TG Vid fails, FumioPlayerStage starts here and walks every source
+// using its existing probe/error/timeout failover.
+export const FUMIO_SOURCES = [
   buildSource({
     id: "vidstuck",
     name: "VidStuck",
@@ -86,10 +86,9 @@ export const THE_OG_PLAYER_SOURCES = [
   }),
 ];
 
-// Public list consumed by PlayerStage. Keeping this as a derived array makes
-// the primary/fallback contract obvious and prevents TG Vid from being
-// accidentally duplicated in the fallback list.
-export const SOURCES = [TG_VID_SOURCE, ...THE_OG_PLAYER_SOURCES];
+// Kept as a compatibility export for code that consumes Fumio's original
+// player list directly. TG Vid intentionally is not in this array.
+export const SOURCES = FUMIO_SOURCES;
 
 export function defaultAudio(source) {
   return source.audioOptions ? source.audioOptions[0].value : null;

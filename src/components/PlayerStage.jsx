@@ -1,94 +1,91 @@
 import { useEffect, useRef, useState } from "react";
-import { SOURCES, buildStreamUrl, defaultAudio } from "../providers/sources.js";
+import { TG_VID_SOURCE, buildStreamUrl, defaultAudio } from "../providers/sources.js";
 import { checkStreamAlive } from "../lib/streamCheck.js";
+import FumioPlayerStage from "./FumioPlayerStage.jsx";
 
 // ─── PlayerStage ────────────────────────────────────────────────────────────
-// tgvid first, automatic failover through the rest of TheOGPirateBot's real
-// source list if it's down — no Quality/Audio pickers, no server-switcher UI.
-// Just: try the best source, silently fall back if it's dead, play it
-// edge-to-edge. One probe (worker-side, see /api/stream-check) decides "is
-// this host even up" before committing to an iframe; an iframe-level error
-// or stall still advances to the next candidate as a second safety net.
-
-const LOAD_TIMEOUT_MS = 12000;
+// Two lanes, intentionally kept separate:
+//
+//   1. TG Vid is attempted once as the preferred source.
+//   2. Any TG Vid failure hands off to FumioPlayerStage, which owns Fumio's
+//      original all-source player and its existing failover behavior.
+//
+// This means TG Vid is not mixed into or duplicated inside Fumio's source
+// picker/failover list.
+const TG_LOAD_TIMEOUT_MS = 12000;
 
 export default function PlayerStage({ tmdbId, mediaType, season, episode }) {
-  const [candidateIndex, setCandidateIndex] = useState(0);
-  const [phase, setPhase] = useState("checking"); // checking | playing | exhausted
+  const [useFumioPlayer, setUseFumioPlayer] = useState(false);
+  const [phase, setPhase] = useState("checking"); // checking | playing
   const timeoutRef = useRef(null);
 
-  // Reset to the top of the list whenever the title/episode changes.
   useEffect(() => {
-    setCandidateIndex(0);
+    setUseFumioPlayer(false);
     setPhase("checking");
   }, [tmdbId, mediaType, season, episode]);
 
-  const source = SOURCES[candidateIndex] || null;
-  const src = source ? buildStreamUrl(source, tmdbId, mediaType, season, episode, defaultAudio(source)) : null;
+  const src = buildStreamUrl(
+    TG_VID_SOURCE,
+    tmdbId,
+    mediaType,
+    season,
+    episode,
+    defaultAudio(TG_VID_SOURCE),
+  );
 
-  // Probe the current candidate before mounting its iframe.
   useEffect(() => {
-    if (!source) {
-      setPhase("exhausted");
-      return undefined;
-    }
     let cancelled = false;
     setPhase("checking");
     checkStreamAlive(src).then((alive) => {
-      if (cancelled) return; // a newer candidate superseded this probe
-      if (alive) {
-        setPhase("playing");
-      } else {
-        setCandidateIndex((i) => i + 1);
-      }
+      if (cancelled) return;
+      if (alive) setPhase("playing");
+      else setUseFumioPlayer(true);
     });
     return () => {
       cancelled = true;
     };
-  }, [source, src]);
+  }, [src]);
 
-  // Belt-and-suspenders: if the iframe never actually loads (host hangs),
-  // move on. Cleared on unmount/candidate change.
   useEffect(() => {
-    if (phase !== "playing") return undefined;
-    timeoutRef.current = setTimeout(() => {
-      setCandidateIndex((i) => i + 1);
-    }, LOAD_TIMEOUT_MS);
+    if (useFumioPlayer || phase !== "playing") return undefined;
+    timeoutRef.current = setTimeout(() => setUseFumioPlayer(true), TG_LOAD_TIMEOUT_MS);
     return () => clearTimeout(timeoutRef.current);
-  }, [phase, candidateIndex]);
+  }, [phase, useFumioPlayer, src]);
 
-  const handleLoad = () => clearTimeout(timeoutRef.current);
-  const handleError = () => setCandidateIndex((i) => i + 1);
+  const fallback = () => {
+    clearTimeout(timeoutRef.current);
+    setUseFumioPlayer(true);
+  };
 
-  if (phase === "exhausted") {
+  if (useFumioPlayer) {
     return (
-      <div className="flex h-full w-full flex-col items-center justify-center gap-2 bg-black text-center text-zinc-400">
-        <span className="text-sm font-bold uppercase tracking-widest">No server currently has this title</span>
-        <span className="text-xs text-zinc-600">Every source failed — try again later.</span>
-      </div>
+      <FumioPlayerStage
+        tmdbId={tmdbId}
+        mediaType={mediaType}
+        season={season}
+        episode={episode}
+      />
     );
   }
 
   return (
-    <div className="relative h-full w-full bg-black">
+    <div className="relative h-full w-full bg-black" data-player="tgvid-primary">
       {phase === "checking" && (
         <div className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-3 bg-black">
           <div className="h-8 w-8 animate-spin rounded-full border-4 border-zinc-800 border-t-white" />
         </div>
       )}
-      {source && (
-        <iframe
-          key={src}
-          src={src}
-          onLoad={handleLoad}
-          onError={handleError}
-          className="absolute inset-0 h-full w-full"
-          allow="autoplay; encrypted-media; fullscreen"
-          allowFullScreen
-          frameBorder="0"
-          title="Player"
-        />
-      )}
+      <iframe
+        key={src}
+        src={src}
+        onLoad={() => clearTimeout(timeoutRef.current)}
+        onError={fallback}
+        className="absolute inset-0 h-full w-full"
+        allow="autoplay; encrypted-media; fullscreen"
+        allowFullScreen
+        frameBorder="0"
+        title="TG Vid player"
+      />
     </div>
   );
 }

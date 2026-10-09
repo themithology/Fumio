@@ -18,12 +18,11 @@ copied straight from Iris's `public/` assets.
   fullscreen** (the Fullscreen API is requested on the Details page's Play
   button click, since that's the only point in the flow with a real user
   gesture — by the time the Player route mounts it's too late to ask).
-  There is **no Quality or Audio picker**. It tries TheOGPirateBot's real
-  embed hosts (ported from Iris's `src/utils/players.js`: tgvid, vidstuck,
-  vidfast, bingr, roxy, nxsha) **in order, automatically** — tgvid first,
-  falling back silently to the next host if a source is down or fails to
-  load. Exiting fullscreen (Esc / back gesture) or tapping the floating ✕
-  returns to the Details page.
+  There is **no Quality or Audio picker**. It tries TG Vid once as the
+  primary source. If TG Vid fails, playback hands off to Fumio's existing
+  player, which retains all of its original sources and automatic failover.
+  Exiting fullscreen (Esc / back gesture) or tapping the floating ✕ returns
+  to the Details page.
 
 This plays **real content today** — it is not a demo/placeholder stream.
 The one lane intentionally left out is Iris's anime-only Sub/Dub/ToonStream
@@ -47,12 +46,11 @@ src/
   components/
     Header.jsx            # logo + search box (hidden on /watch/*)
     MediaCard.jsx          # poster card used by Home + Search
-    PlayerStage.jsx        # the real player: auto-failover iframe, no UI chrome
+    PlayerStage.jsx        # TG Vid gate, then handoff to FumioPlayerStage
+    FumioPlayerStage.jsx   # original all-source player + automatic failover
     Loading.jsx
   providers/
-    sources.js             # the real embed hosts, ported from Iris's
-                             # src/utils/players.js (getPlayerUrls) — array
-                             # order IS the failover order (tgvid first)
+    sources.js             # TG Vid primary plus Fumio's original source list
   lib/
     tmdb.js                 # fetch wrapper w/ failover + caching
     proxyTiers.js            # list of proxy bases to try, in order
@@ -91,29 +89,17 @@ npm run dev            # Vite proxies /tmdb and /api to it
 
 ### Stream sources + automatic failover
 
-`src/providers/sources.js` is the real, currently-working list of embed
-hosts (not an abstraction over a hypothetical "raw" provider — these are
-the actual hosts TheOGPirateBot streams from in production), in priority
-order (tgvid first).
+`src/providers/sources.js` keeps the two player lanes separate:
 
-There is no user-facing server picker. `PlayerStage.jsx` walks `SOURCES`
-top to bottom:
+1. `TG_VID_SOURCE` is attempted first.
+2. If its probe, iframe, or loading timeout fails, `PlayerStage.jsx` mounts
+   `FumioPlayerStage.jsx`.
+3. `FumioPlayerStage.jsx` retains Fumio's original all-source list and walks
+   it using the existing probe/error/timeout failover.
 
-1. Before mounting a candidate's iframe, it calls `checkStreamAlive()`
-   (`src/lib/streamCheck.js`), which asks the worker's `GET
-   /api/stream-check?url=` to probe the host **server-side** — the browser
-   can't read a cross-origin response's HTTP status itself (CORS hides it),
-   so this has to happen off the client.
-2. The probe fails **open**: network hiccups, timeouts, or an
-   unrecognized/disallowed host all come back as "unknown", and unknown is
-   treated as alive — a flaky probe must never block real playback.
-   Only a definitive non-2xx status from the real host counts as dead.
-3. If the iframe never actually finishes loading within ~12s (host hangs
-   rather than erroring outright), that's a second signal to advance.
-4. If every source is exhausted, the Player shows "No server currently has
-   this title" instead of a broken iframe.
-
-Add/remove a host by editing `sources.js`; nothing else needs to change.
+There is no user-facing server picker. TG Vid is never duplicated inside the
+Fumio list, so the fallback is exactly the existing Fumio player rather than a
+new mixed server order.
 
 ## Running it
 
