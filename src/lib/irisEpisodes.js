@@ -9,6 +9,7 @@
 
 import { anilistEpisodeCollection, anilistMetadataJson } from "./anilist.ts";
 import { PROXY_BASES } from "./proxyTiers.js";
+import { tmdbGet } from "./tmdb.js";
 
 const CACHE_PREFIX = "theogpiratebot:iris:";
 const CACHE_TTL_MS = 6 * 60 * 60 * 1000;
@@ -278,4 +279,56 @@ export function mapIrisEpisodeToTmdb(season, episode, irisSeasonsMap, tmdbSeason
 
   const last = orderedTmdb[orderedTmdb.length - 1];
   return { season: last.season_number, episode: Math.max(remaining, 1) };
+}
+
+const stillOf = (episode) => {
+  const thumbnail = episode?.thumbnail;
+  if (typeof thumbnail === "string" && thumbnail) return thumbnail;
+  if (thumbnail?.large) return thumbnail.large;
+  if (thumbnail?.medium) return thumbnail.medium;
+  return episode?.still_path || null;
+};
+
+/** Borrow TMDB names/stills when AniList numbering is real but display data is thin. */
+export async function tmdbEnrichAnilistEpisodes({ id, season, episodes, irisSeasonsMap, tmdbSeasons }) {
+  if (!id || !Array.isArray(episodes) || !episodes.length) return episodes || [];
+  const thin = episodes.some((episode) => !episode.title || !stillOf(episode));
+  if (!thin || !irisSeasonsMap || !tmdbSeasons?.length) return episodes;
+
+  const needed = new Set();
+  const mapped = new Map();
+  for (const episode of episodes) {
+    const pair = mapIrisEpisodeToTmdb(season, episode.number, irisSeasonsMap, tmdbSeasons);
+    needed.add(pair.season);
+    mapped.set(episode.number, pair);
+  }
+
+  const bySeason = new Map();
+  await Promise.all(
+    [...needed].map(async (tmdbSeason) => {
+      const data = await tmdbGet(`tv/${id}/season/${tmdbSeason}`).catch(() => null);
+      bySeason.set(
+        tmdbSeason,
+        new Map((data?.episodes || []).map((item) => [item.episode_number, item])),
+      );
+    }),
+  );
+
+  return episodes.map((episode) => {
+    const pair = mapped.get(episode.number);
+    const tmdb = bySeason.get(pair.season)?.get(pair.episode);
+    return {
+      ...episode,
+      title: episode.title || tmdb?.name || "",
+      thumbnail: stillOf(episode) || tmdb?.still_path || null,
+      airingAt:
+        episode.airingAt ||
+        (tmdb?.air_date ? Math.floor(new Date(tmdb.air_date).getTime() / 1000) : null),
+    };
+  });
+}
+
+export async function tmdbSeasonEpisodes(id, season) {
+  const data = await tmdbGet(`tv/${id}/season/${season}`).catch(() => null);
+  return data?.episodes || [];
 }

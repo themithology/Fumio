@@ -1,4 +1,5 @@
 import {
+  ensureAuthDomainReady,
   getFirebaseAuth,
   getFirebaseAuthModule,
   getFirebaseAuthModuleSync,
@@ -190,8 +191,7 @@ let lastGoogleIdToken = "";
 
 const startGooglePopup = (auth, mod) => {
   const provider = new mod.GoogleAuthProvider();
-  provider.setCustomParameters({ prompt: "select_account" });
-  // Must run in the same user-gesture turn as the click. Do not await before this.
+  // Iris: no forced prompt so a returning Google account is one tap.
   return mod.signInWithPopup(auth, provider).then((result) => {
     const credential = mod.GoogleAuthProvider.credentialFromResult(result);
     lastGoogleIdToken = credential?.idToken || "";
@@ -237,16 +237,29 @@ const providerFrom = (mod) => {
 };
 
 export const signInWithGoogle = () => {
+  const applyDomain = async (auth) => {
+    try {
+      const domain = await ensureAuthDomainReady();
+      if (domain && auth?.config) auth.config.authDomain = domain;
+    } catch {
+      /* keep the SDK default */
+    }
+    return auth;
+  };
+
   const auth = getFirebaseAuthSync();
   const mod = getFirebaseAuthModuleSync();
   if (auth && mod) {
-    return startGooglePopup(auth, mod).catch((error) => fallbackGoogleSignIn(auth, mod, error));
+    return applyDomain(auth)
+      .then(() => startGooglePopup(auth, mod))
+      .catch((error) => fallbackGoogleSignIn(auth, mod, error));
   }
 
   return (async () => {
     const loadedAuth = await ensureAuthInit();
     if (!loadedAuth) throw new Error("Firebase Auth is unavailable.");
     const loadedMod = await getFirebaseAuthModule();
+    await applyDomain(loadedAuth);
     try {
       return await startGooglePopup(loadedAuth, loadedMod);
     } catch (error) {

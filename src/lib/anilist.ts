@@ -754,137 +754,13 @@ export async function anilistEpisodePageCollection(
   }
 }
 
-const AIRING_PER_PAGE = 50;
-const AIRING_PAGE_BATCH = 8;
-
-function streamingTitleNumber(title: string, index: number): number {
-  const match = String(title || "").match(/\b(?:episode|ep\.?|e)\s*(\d+)\b/i);
-  if (match) return Number(match[1]);
-  return index + 1;
-}
-
-function buildEpisodeList(
-  airing: Array<{ episode?: number; airingAt?: number }>,
-  streaming: Array<{ title?: string; thumbnail?: string }>,
-  declaredCount: number | null,
-): Array<{ number: number; title: string; thumbnail: string | null; airingAt: number | null }> {
-  const byNumber = new Map<number, { number: number; title: string; thumbnail: string | null; airingAt: number | null }>();
-
-  for (const node of airing) {
-    const number = Number(node?.episode);
-    if (!Number.isFinite(number) || number < 1) continue;
-    byNumber.set(number, {
-      number,
-      title: `Episode ${number}`,
-      thumbnail: null,
-      airingAt: Number(node.airingAt) || null,
-    });
-  }
-
-  streaming.forEach((entry, index) => {
-    const number = streamingTitleNumber(entry?.title || "", index);
-    if (!Number.isFinite(number) || number < 1) return;
-    const current = byNumber.get(number) || {
-      number,
-      title: `Episode ${number}`,
-      thumbnail: null,
-      airingAt: null,
-    };
-    const label = String(entry?.title || "").replace(/^\s*(?:episode|ep\.?|e)\s*\d+\s*[-:–—]?\s*/i, "").trim();
-    if (label) current.title = label;
-    if (entry?.thumbnail) current.thumbnail = entry.thumbnail;
-    byNumber.set(number, current);
-  });
-
-  const maxKnown = Math.max(0, ...byNumber.keys());
-  const count = Math.max(declaredCount || 0, maxKnown);
-  for (let number = 1; number <= count; number += 1) {
-    if (!byNumber.has(number)) {
-      byNumber.set(number, {
-        number,
-        title: `Episode ${number}`,
-        thumbnail: null,
-        airingAt: null,
-      });
-    }
-  }
-
-  return [...byNumber.values()].sort((a, b) => a.number - b.number);
-}
-
-async function anilistPublicEpisodeCollection(
-  anilistId: number,
-): Promise<{ status: number; body: any }> {
-  // Public AniList GraphQL has no Media.episodes(page) connection. The real
-  // fields are `episodes` (count), `streamingEpisodes`, and `airingSchedule`.
-  const firstQuery = `{
-    Media(id: ${anilistId}, type: ANIME) {
-      episodes
-      streamingEpisodes { title thumbnail }
-      airingSchedule(page: 1, perPage: ${AIRING_PER_PAGE}) {
-        pageInfo { hasNextPage lastPage }
-        nodes { episode airingAt }
-      }
-    }
-  }`;
-  const first = await fetch("https://graphql.anilist.co", {
-    method: "POST",
-    headers: { "Content-Type": "application/json", Accept: "application/json" },
-    body: JSON.stringify({ query: firstQuery }),
-    signal: AbortSignal.timeout(12000),
-  });
-  if (first.status !== 200) {
-    return {
-      status: 502,
-      body: { success: false, error: `AniList episodes failed: ${first.status}`, upstream_status: first.status },
-    };
-  }
-  const firstPayload = await first.json();
-  if (Array.isArray(firstPayload?.errors) && firstPayload.errors.length > 0) {
-    return { status: 502, body: { success: false, error: firstPayload.errors[0]?.message || "AniList GraphQL error" } };
-  }
-  const media = firstPayload?.data?.Media || {};
-  const streaming = Array.isArray(media.streamingEpisodes) ? media.streamingEpisodes : [];
-  const schedule = media.airingSchedule || {};
-  let airing = Array.isArray(schedule.nodes) ? [...schedule.nodes] : [];
-  const lastPage = Math.max(1, Number(schedule.pageInfo?.lastPage) || 1);
-
-  for (let page = 2; page <= lastPage && page <= EPISODE_PAGE_LIMIT; ) {
-    const batchEnd = Math.min(page + AIRING_PAGE_BATCH - 1, lastPage, EPISODE_PAGE_LIMIT);
-    const fields = Array.from({ length: batchEnd - page + 1 }, (_, i) => {
-      const p = page + i;
-      return `p${p}: Page(page: ${p}, perPage: ${AIRING_PER_PAGE}) { airingSchedules(mediaId: ${anilistId}) { episode airingAt } }`;
-    }).join("\n");
-    const batch = await fetch("https://graphql.anilist.co", {
-      method: "POST",
-      headers: { "Content-Type": "application/json", Accept: "application/json" },
-      body: JSON.stringify({ query: `{ ${fields} }` }),
-      signal: AbortSignal.timeout(15000),
-    });
-    if (batch.status !== 200) break;
-    const payload = await batch.json();
-    const data = payload?.data || {};
-    for (let p = page; p <= batchEnd; p += 1) {
-      const nodes = data[`p${p}`]?.airingSchedules;
-      if (Array.isArray(nodes)) airing = airing.concat(nodes);
-    }
-    page = batchEnd + 1;
-  }
-
-  const list = buildEpisodeList(airing, streaming, Number(media.episodes) || null);
-  if (!list.length) {
-    return { status: 200, body: { success: false, error: "No episode records on AniList for this entry" } };
-  }
-  return { status: 200, body: { success: true, count: list.length, episodes: list } };
-}
-
 /**
  * Full episode list of one AniList entry: { success, count, episodes:
  * [{ number, title, thumbnail, airingAt }] } sorted by number.
  * 502 = upstream/transport failure (the ladder fails over); 200
  * {success:false} = definitive (entry has no episode records).
  */
-async function anilistLegacyEpisodeCollection(
+export async function anilistEpisodeCollection(
   anilistId: number,
 ): Promise<{ status: number; body: any }> {
   try {
@@ -949,18 +825,229 @@ async function anilistLegacyEpisodeCollection(
     return { status: 502, body: { success: false, error: `AniList episodes failed: ${String(e)}` } };
   }
 }
+//
+// Powers the /schedule page. The browser NEVER talks to graphql.anilist.co
+// directly (Indian ISPs DNS-block upstreams — LESSONS-LEARNED #12); this route
+// fans the week out server-side and returns a trimmed, cacheable payload.
+// Zero TMDB quota is spent: cards render from AniList ids/covers only.
+//
+// Query: start=<unix seconds> end=<unix seconds> — the client passes the
+// visitor's LOCAL week (Mon 00:00 → next Mon 00:00). Defaults (current UTC
+// week) are computed only when a bound is missing/invalid. The window is
+// clamped to 14 days so a hostile query can't page through months.
+// Mirror of api/index.py `get_anime_schedule` — keep 1:1.
 
-export async function anilistEpisodeCollection(
-  anilistId: number,
-): Promise<{ status: number; body: any }> {
+const SCHEDULE_FORMATS = new Set(["TV", "TV_SHORT", "ONA", "MOVIE"]);
+const SCHEDULE_MAX_PAGES = 4;
+const SCHEDULE_PER_PAGE = 50;
+const SCHEDULE_MAX_WINDOW_S = 14 * 86400;
+const SCHEDULE_QUERY = `
+query ($page: Int, $perPage: Int, $start: Int, $end: Int) {
+  Page(page: $page, perPage: $perPage) {
+    pageInfo { hasNextPage }
+    airingSchedules(airingAt_greater: $start, airingAt_lesser: $end, sort: TIME) {
+      id
+      airingAt
+      episode
+      media {
+        id
+        title { english romaji }
+        coverImage { large }
+        bannerImage
+        format
+        isAdult
+        startDate { year }
+      }
+    }
+  }
+}
+`;
+
+/** Current UTC week: Monday 00:00 UTC → next Monday 00:00 UTC. */
+export function scheduleDefaultWindow(nowS: number): [number, number] {
+  const dayStart = nowS - (nowS % 86400);
+  // 1970-01-01 was a Thursday → weekday index with Monday = 0.
+  const weekday = (Math.floor(dayStart / 86400) + 3) % 7;
+  const start = dayStart - weekday * 86400;
+  return [start, start + 7 * 86400];
+}
+
+export function scheduleWindow(
+  startRaw: number | null,
+  endRaw: number | null,
+  nowS: number,
+): [number, number] {
+  const startOk = Number.isInteger(startRaw) && (startRaw as number) > 0;
+  const endOk = Number.isInteger(endRaw) && (endRaw as number) > 0;
+  let start: number;
+  let end: number;
+  if (startOk && endOk && (endRaw as number) > (startRaw as number)) {
+    start = startRaw as number;
+    end = endRaw as number;
+  } else {
+    const [dStart] = scheduleDefaultWindow(nowS);
+    start = startOk ? (startRaw as number) : dStart;
+    end = endOk && (endRaw as number) > start ? (endRaw as number) : start + 7 * 86400;
+  }
+  if (end - start > SCHEDULE_MAX_WINDOW_S) end = start + SCHEDULE_MAX_WINDOW_S;
+  return [start, end];
+}
+
+/** Trim one AniList airingSchedule node; null when it must be dropped. */
+export function scheduleTrim(entry: any): any | null {
+  const media = entry?.media ?? {};
+  if (media.isAdult) return null;
+  if (!SCHEDULE_FORMATS.has(media.format)) return null;
+  if (!media.id || !entry?.airingAt) return null;
+  const title = media.title ?? {};
+  // Trimmed deliberately — mirror of `_schedule_trim` in api/index.py: the
+  // client reads id, airingAt, episode and media{id, title, cover, banner,
+  // format, startDate} only. idMal + the AniList episode total are dead
+  // weight on up to 200 rows.
+  return {
+    id: entry.id ?? null,
+    airingAt: entry.airingAt,
+    episode: entry.episode ?? null,
+    media: {
+      id: media.id,
+      title: { english: title.english ?? null, romaji: title.romaji ?? null },
+      coverImage: { large: media.coverImage?.large ?? null },
+      bannerImage: media.bannerImage ?? null,
+      format: media.format ?? null,
+      startDate: { year: media.startDate?.year ?? null },
+    },
+  };
+}
+
+/** Flatten + trim + dedupe (by schedule id) + sort the paged responses. */
+export function scheduleCollect(pages: any[][]): any[] {
+  const seen = new Set<number>();
+  const items: any[] = [];
+  for (const page of pages) {
+    for (const entry of page ?? []) {
+      const trimmed = scheduleTrim(entry);
+      if (trimmed === null || seen.has(trimmed.id)) continue;
+      seen.add(trimmed.id);
+      items.push(trimmed);
+    }
+  }
+  items.sort((a, b) => a.airingAt - b.airingAt || (a.id ?? 0) - (b.id ?? 0));
+  return items;
+}
+/**
+ * Pages AniList (max SCHEDULE_MAX_PAGES) for the window. `fetchImpl` is
+ * injectable so the node-level harness can mock graphql.anilist.co.
+ */
+export async function fetchAnimeSchedule(
+  startS: number,
+  endS: number,
+  fetchImpl: typeof fetch = fetch,
+): Promise<{ success: true; start: number; end: number; items: any[] } | { success: false; error: string }> {
+  const headers = {
+    "Content-Type": "application/json",
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
+  };
+  const pages: any[][] = [];
   try {
-    const publicResult = await anilistPublicEpisodeCollection(anilistId);
-    if (publicResult.body?.success && publicResult.body.episodes?.length) return publicResult;
-    const legacy = await anilistLegacyEpisodeCollection(anilistId);
-    if (legacy.body?.success && legacy.body.episodes?.length) return legacy;
-    if (publicResult.status === 200) return publicResult;
-    return legacy;
+    for (let pageNo = 1; pageNo <= SCHEDULE_MAX_PAGES; pageNo++) {
+      const r = await fetchImpl("https://graphql.anilist.co", {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          query: SCHEDULE_QUERY,
+          variables: {
+            page: pageNo,
+            perPage: SCHEDULE_PER_PAGE,
+            // AniList's *_greater / *_lesser are strict; widen by 1s so an
+            // episode airing exactly at Mon 00:00 is kept.
+            start: startS - 1,
+            end: endS,
+          },
+        }),
+        signal: AbortSignal.timeout(12000),
+      });
+      if (r.status !== 200) {
+        if (pages.length) break; // keep what we have — partial week beats an error
+        return { success: false, error: `AniList schedule failed: ${r.status}` };
+      }
+      const page = (await r.json())?.data?.Page ?? {};
+      pages.push(page.airingSchedules ?? []);
+      if (!page.pageInfo?.hasNextPage) break;
+    }
   } catch (e) {
-    return { status: 502, body: { success: false, error: `AniList episodes failed: ${String(e)}` } };
+    if (!pages.length) return { success: false, error: String(e) };
+  }
+  return { success: true, start: startS, end: endS, items: scheduleCollect(pages) };
+}
+// ─────────────────────────────────────────────────────────────────────────────
+// /api/anime-trending — Top 10 Anime This Week (AniList trending)
+//
+// The Anime hub's "Top 10 Anime This Week" row is sourced from AniList's own
+// TRENDING_DESC ranking, NOT from TMDB popularity. Mirror of the FastAPI
+// route (api/index.py). Same rule as every AniList route: the browser never
+// touches graphql.anilist.co; non-200 / transport failure → 502 so the
+// frontend ladder fails over. Cards render from AniList covers; the TMDB id
+// is resolved client-side on click (al2tmdb memo — zero TMDB quota on render).
+// ─────────────────────────────────────────────────────────────────────────────
+const TRENDING_QUERY = `query ($page: Int, $perPage: Int) {
+  Page(page: $page, perPage: $perPage) {
+    media(type: ANIME, isAdult: false, sort: [TRENDING_DESC]) {
+      id
+      title { english romaji native }
+      coverImage { extraLarge large }
+      bannerImage
+      averageScore
+      popularity
+      format
+      episodes
+      startDate { year month day }
+      nextAiringEpisode { airingAt episode }
+    }
+  }
+}`;
+const TRENDING_PER_PAGE = 12;
+
+export function trendingTrim(media: any): Record<string, unknown> | null {
+  // Trim one AniList trending media node; null when it must be dropped.
+  if (!media || typeof media !== "object") return null;
+  if (media.isAdult) return null;
+  if (!media.id) return null;
+  const title = media.title ?? {};
+  const cover = media.coverImage ?? {};
+  const start = media.startDate ?? {};
+  const nga = media.nextAiringEpisode ?? {};
+  // Trimmed deliberately — mirror of `_trending_trim` in api/index.py:
+  // idMal / seasonYear / status / genres are never read by the anime hub.
+  return {
+    id: media.id,
+    title: { english: title.english ?? null, romaji: title.romaji ?? null, native: title.native ?? null },
+    coverImage: { extraLarge: cover.extraLarge ?? null, large: cover.large ?? null },
+    bannerImage: media.bannerImage ?? null,
+    averageScore: media.averageScore ?? null,
+    popularity: media.popularity ?? null,
+    format: media.format ?? null,
+    episodes: media.episodes ?? null,
+    startDate: { year: start.year ?? null, month: start.month ?? null, day: start.day ?? null },
+    nextAiringEpisode: { airingAt: nga.airingAt ?? null, episode: nga.episode ?? null },
+  };
+}
+
+/** Injectable so the node-level harness can mock graphql.anilist.co. */
+export async function fetchAnimeTrending(
+  fetchImpl: typeof fetch = fetch,
+): Promise<{ success: true; source: "anilist"; items: any[] } | { success: false; error: string }> {
+  try {
+    const r = await fetchImpl("https://graphql.anilist.co", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)" },
+      body: JSON.stringify({ query: TRENDING_QUERY, variables: { page: 1, perPage: TRENDING_PER_PAGE } }),
+      signal: AbortSignal.timeout(12000),
+    });
+    if (r.status !== 200) return { success: false, error: `AniList trending failed: ${r.status}` };
+    const page = (await r.json())?.data?.Page ?? {};
+    const items = (page.media ?? []).map(trendingTrim).filter(Boolean);
+    return { success: true, source: "anilist", items };
+  } catch (e) {
+    return { success: false, error: String(e) };
   }
 }

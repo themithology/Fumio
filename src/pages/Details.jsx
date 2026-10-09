@@ -5,6 +5,8 @@ import {
   fetchIrisEpisodes,
   fetchIrisSeasonData,
   mapIrisEpisodeToTmdb,
+  tmdbEnrichAnilistEpisodes,
+  tmdbSeasonEpisodes,
 } from "../lib/irisEpisodes.js";
 import Loading from "../components/Loading.jsx";
 import FetchError from "../components/FetchError.jsx";
@@ -208,84 +210,80 @@ export default function Details() {
       }
     };
 
+    const toPlayerItems = (list, source) =>
+      list.map((episode) => {
+        const number = episode.episode_number || episode.number;
+        const pair =
+          source === "iris"
+            ? mapIrisEpisodeToTmdb(selectedSeason, number, irisMeta?.seasonsMap, tmdbSeasons)
+            : { season: selectedSeason, episode: number };
+        const thumbnail = episode.thumbnail;
+        const stillPath =
+          episode.still_path ||
+          (typeof thumbnail === "string" ? thumbnail : thumbnail?.large || thumbnail?.medium || null);
+        return {
+          ...episode,
+          id: `${source}-${selectedSeason}-${number}`,
+          episode_number: number,
+          name: episode.name || episode.title || `Episode ${number}`,
+          overview: episode.overview || "",
+          still_path: stillPath,
+          air_date: episode.air_date || "",
+          playerSeason: pair.season,
+          playerEpisode: pair.episode,
+        };
+      });
+
     const loadEpisodes = async () => {
-      // Iris-native season: real episode names, thumbnails and counts.
+      // Same ladder as Iris TvDetails: AniList collection first, then a mapped
+      // TMDB grid, then a full TMDB season list. Never leave the page empty.
       if (irisMeta && activeSeason.anilist_id) {
         const irisData = await fetchIrisEpisodes(activeSeason.anilist_id);
         if (irisData?.episodes?.length) {
-          const items = irisData.episodes.map((episode) => {
-            const thumbnail = episode.thumbnail;
-            const stillPath =
-              typeof thumbnail === "string"
-                ? thumbnail
-                : thumbnail?.large || thumbnail?.medium || null;
-            const pair = mapIrisEpisodeToTmdb(
-              selectedSeason,
-              episode.number,
-              irisMeta.seasonsMap,
-              tmdbSeasons,
-            );
-            return {
-              id: `iris-${activeSeason.anilist_id}-${episode.number}`,
-              episode_number: episode.number,
-              name: episode.title || `Episode ${episode.number}`,
-              overview: "",
-              still_path: stillPath,
-              air_date: episode.airingAt
-                ? new Date(episode.airingAt * 1000).toISOString().slice(0, 10)
-                : "",
-              playerSeason: pair.season,
-              playerEpisode: pair.episode,
-            };
+          const enriched = await tmdbEnrichAnilistEpisodes({
+            id,
+            season: selectedSeason,
+            episodes: irisData.episodes,
+            irisSeasonsMap: irisMeta.seasonsMap,
+            tmdbSeasons,
           });
-          setFirstEpisode(items, "iris");
+          setFirstEpisode(toPlayerItems(enriched, "iris"), "iris");
           return;
         }
 
-        const count = Number(activeSeason.episode_count) || Number(irisMeta.seasonsMap?.[selectedSeason]) || 0;
-        if (count > 0) {
-          const items = Array.from({ length: count }, (_, index) => {
-            const number = index + 1;
-            const pair = mapIrisEpisodeToTmdb(
-              selectedSeason,
-              number,
-              irisMeta.seasonsMap,
-              tmdbSeasons,
-            );
-            return {
-              id: `iris-${activeSeason.anilist_id}-${number}`,
-              episode_number: number,
-              name: `Episode ${number}`,
-              overview: "",
-              still_path: null,
-              air_date: "",
-              playerSeason: pair.season,
-              playerEpisode: pair.episode,
-            };
+        const rawCount = irisMeta.rawCounts?.[selectedSeason] ?? irisMeta.rawCounts?.[String(selectedSeason)];
+        if (rawCount == null) {
+          // One Piece-style placeholder count: drop the 12-episode AniList
+          // shell and show TMDB's real seasons, exactly as Iris does.
+          setIrisMeta(null);
+          return;
+        }
+
+        const first = mapIrisEpisodeToTmdb(selectedSeason, 1, irisMeta.seasonsMap, tmdbSeasons);
+        const tmdbEpisodes = await tmdbSeasonEpisodes(id, first.season);
+        const count = Number(irisMeta.seasonsMap?.[selectedSeason]) || tmdbEpisodes.length || 0;
+        const mapped = [];
+        for (let number = 1; number <= count; number += 1) {
+          const pair = mapIrisEpisodeToTmdb(selectedSeason, number, irisMeta.seasonsMap, tmdbSeasons);
+          const tmdb = tmdbEpisodes.find((item) => item.episode_number === pair.episode);
+          mapped.push({
+            episode_number: number,
+            name: tmdb?.name || `Episode ${number}`,
+            overview: tmdb?.overview || "",
+            still_path: tmdb?.still_path || null,
+            air_date: tmdb?.air_date || "",
+            playerSeason: pair.season,
+            playerEpisode: pair.episode,
           });
-          setFirstEpisode(items, "iris");
+        }
+        if (mapped.length) {
+          setFirstEpisode(toPlayerItems(mapped, "iris"), "iris");
           return;
         }
       }
 
-      // An Iris-resolved title is authoritative: an empty/error episode
-      // collection must stay visible as an Iris empty state, never silently
-      // repaint with a different TMDB season list. TMDB is only used when
-      // Iris did not resolve metadata for this title at all.
-      if (irisMeta) {
-        setEpisodes([]);
-        setEpisodeSource("iris");
-        return;
-      }
-
-      const seasonData = await tmdbGet(`tv/${id}/season/${selectedSeason}`).catch(() => null);
-      const items = (seasonData?.episodes || []).map((episode) => ({
-        ...episode,
-        id: `tmdb-${selectedSeason}-${episode.episode_number}`,
-        playerSeason: selectedSeason,
-        playerEpisode: episode.episode_number,
-      }));
-      setFirstEpisode(items, "tmdb");
+      const tmdbEpisodes = await tmdbSeasonEpisodes(id, selectedSeason);
+      setFirstEpisode(toPlayerItems(tmdbEpisodes, "tmdb"), "tmdb");
     };
 
     loadEpisodes()
@@ -600,7 +598,7 @@ export default function Details() {
               startsPlayback
               onEpisodeClick={handleEpisodeClick}
               stillFallback={img(details.backdrop_path || details.poster_path, "w500")}
-              emptyMessage={episodeSource === "iris" ? "Episode titles are still loading from AniList. Retry, or pick a season with a listed episode count." : "No episodes are available for this season yet."}
+              emptyMessage="No episodes are available for this season yet."
               emptyAction={episodeSource === "iris" ? (
                 <button
                   type="button"
