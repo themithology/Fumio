@@ -81,6 +81,32 @@ export const saveContinueWatching = (item) => {
   return writeContinueWatching(next, { progress: true });
 };
 
+export const saveContinueWatchingProgress = (item, currentTime, duration) => {
+  if (!item?.id) return false;
+  const total = Number(duration);
+  const position = Number(currentTime);
+  if (!Number.isFinite(total) || total <= 0 || !Number.isFinite(position)) return false;
+  const key = keyOf(item);
+  const existing = readContinueWatching().find((entry) => keyOf(entry) === key);
+  const samePlayback = Boolean(
+    existing &&
+      ((item.type || item.media_type) !== "tv" ||
+        (existing.season === item.season && existing.episode === item.episode)),
+  );
+  if (!samePlayback) return false;
+  const safeDuration = Math.round(Math.min(total, 6 * 60 * 60));
+  const safePosition = Math.max(0, Math.min(Math.round(position), safeDuration));
+  const next = readContinueWatching().filter((entry) => keyOf(entry) !== key);
+  next.unshift({
+    ...existing,
+    progress: safePosition,
+    duration: safeDuration,
+    minutesLeft: Math.max(0, Math.ceil((safeDuration - safePosition) / 60)),
+    lastUpdated: Date.now(),
+  });
+  return writeContinueWatching(next, { progress: true });
+};
+
 export const removeContinueWatching = (itemOrId, mediaType = "movie") => {
   const key = typeof itemOrId === "object" ? keyOf(itemOrId) : `${mediaType}-${itemOrId}`;
   return writeContinueWatching(readContinueWatching().filter((item) => keyOf(item) !== key));

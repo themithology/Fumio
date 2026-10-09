@@ -2,7 +2,36 @@ import { useEffect, useState, useCallback } from "react";
 import { useParams, useSearchParams, useNavigate } from "react-router-dom";
 import { tmdbGet } from "../lib/tmdb.js";
 import PlayerStage from "../components/PlayerStage.jsx";
-import { saveContinueWatching } from "../utils/watchHistory.js";
+import { saveContinueWatching, saveContinueWatchingProgress } from "../utils/watchHistory.js";
+
+const PLAYER_ORIGINS = new Set([
+  "https://tgvid.lovable.app",
+  "https://vidstuck.xyz",
+  "https://vidfast.vc",
+  "https://bingr.one",
+  "https://zxcstream.xyz",
+  "https://nxsha.space",
+]);
+
+const readProgressMessage = (message) => {
+  let value = message;
+  if (typeof value === "string") {
+    try {
+      value = JSON.parse(value);
+    } catch {
+      return null;
+    }
+  }
+  if (value?.data && typeof value.data === "object") value = value.data;
+  if (value?.payload && typeof value.payload === "object") value = value.payload;
+  const duration = Number(value?.duration ?? value?.totalDuration ?? value?.length);
+  let current = Number(value?.currentTime ?? value?.position ?? value?.time);
+  if (!Number.isFinite(current) && Number.isFinite(Number(value?.progress))) {
+    const ratio = Number(value.progress);
+    current = ratio >= 0 && ratio <= 1 ? ratio * duration : ratio;
+  }
+  return Number.isFinite(current) && Number.isFinite(duration) && duration > 0 ? { current, duration } : null;
+};
 
 export default function Player() {
   const { type, id } = useParams();
@@ -40,6 +69,17 @@ export default function Player() {
       episodeStill: "",
     });
   }, [details, episode, id, season, type]);
+
+  useEffect(() => {
+    const onMessage = (event) => {
+      if (!PLAYER_ORIGINS.has(event.origin)) return;
+      const progress = readProgressMessage(event.data);
+      if (!progress) return;
+      saveContinueWatchingProgress({ id: Number(id), type, season, episode }, progress.current, progress.duration);
+    };
+    window.addEventListener("message", onMessage);
+    return () => window.removeEventListener("message", onMessage);
+  }, [episode, id, season, type]);
 
   const close = useCallback(() => {
     if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
