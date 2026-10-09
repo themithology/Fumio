@@ -1,0 +1,17 @@
+name = "fumio-data-proxy"
+main = "src/index.js"
+compatibility_date = "2026-01-01"
+
+# Local dev: `npm run worker:dev` boots this on http://127.0.0.1:8787 via
+# workerd (wrangler's real Cloudflare Workers runtime, not a mock).
+# vite.config.js proxies /tmdb and /api there automatically in `npm run dev`.
+#
+# Production: `npm run worker:deploy` (needs `wrangler login` once) publishes
+# this to your own workers.dev subdomain. Point the site at it with
+# VITE_PROXY_BASES, or skip deploying your own and just rely on the shared
+# Iris proxy ladder baked into src/lib/proxyTiers.js.
+
+[vars]
+# Set your TMDB key here for local dev only (gitignored via .dev.vars), or as
+# a secret in production: `wrangler secret put TMDB_API_KEY`.
+# TMDB_API_KEY = ""

@@ -1,0 +1,7 @@
+node_modules
+dist
+.wrangler
+worker/.dev.vars
+ios
+.DS_Store
+*.local
