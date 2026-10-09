@@ -6,6 +6,21 @@ let state = { ready: false, user: null, initError: "" };
 let initPromise = null;
 let unsubscribe = null;
 const listeners = new Set();
+const AUTH_OPERATION_TIMEOUT_MS = 15000;
+
+const authTimeout = (operation) => {
+  const error = new Error(`${operation} timed out. Check your connection and Firebase Auth setup.`);
+  error.code = "auth/timeout";
+  return error;
+};
+
+const withAuthTimeout = (promise, operation) => {
+  let timer;
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(authTimeout(operation)), AUTH_OPERATION_TIMEOUT_MS);
+  });
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+};
 
 const emit = () => listeners.forEach((listener) => listener());
 const setState = (patch) => {
@@ -96,6 +111,10 @@ const friendlyMessages = {
   "auth/unauthorized-domain": "This site is not enabled for Firebase sign-in yet.",
   "auth/network-request-failed": "The sign-in service could not be reached. Try again.",
   "auth/too-many-requests": "Too many attempts. Wait a moment and try again.",
+  "auth/operation-not-allowed": "This sign-in method is not enabled in Firebase Console yet.",
+  "auth/configuration-not-found": "Firebase Auth is not configured for this app yet.",
+  "auth/api-key-not-valid": "The Firebase web configuration is not valid for this app.",
+  "auth/timeout": "Firebase Auth did not respond. Check the connection, authorized domain, and enabled sign-in provider.",
 };
 
 export const authErrorMessage = (error) => {
@@ -111,45 +130,57 @@ const cleanCredentials = (email, password) => ({
 });
 
 export const signUpWithEmail = async (email, password) => {
-  const auth = await ensureAuthInit();
+  const auth = await withAuthTimeout(ensureAuthInit(), "Account setup");
   if (!auth) throw new Error("Firebase Auth is unavailable.");
-  const mod = await getFirebaseAuthModule();
+  const mod = await withAuthTimeout(getFirebaseAuthModule(), "Firebase Auth loading");
   const { email: cleanEmail, password: cleanPassword } = cleanCredentials(email, password);
-  const result = await mod.createUserWithEmailAndPassword(auth, cleanEmail, cleanPassword);
+  const result = await withAuthTimeout(
+    mod.createUserWithEmailAndPassword(auth, cleanEmail, cleanPassword),
+    "Account creation",
+  );
   settle(result.user);
   return result.user;
 };
 
 export const signInWithEmail = async (email, password) => {
-  const auth = await ensureAuthInit();
+  const auth = await withAuthTimeout(ensureAuthInit(), "Account setup");
   if (!auth) throw new Error("Firebase Auth is unavailable.");
-  const mod = await getFirebaseAuthModule();
+  const mod = await withAuthTimeout(getFirebaseAuthModule(), "Firebase Auth loading");
   const { email: cleanEmail, password: cleanPassword } = cleanCredentials(email, password);
-  const result = await mod.signInWithEmailAndPassword(auth, cleanEmail, cleanPassword);
+  const result = await withAuthTimeout(
+    mod.signInWithEmailAndPassword(auth, cleanEmail, cleanPassword),
+    "Email sign-in",
+  );
   settle(result.user);
   return result.user;
 };
 
 export const resetPassword = async (email) => {
-  const auth = await ensureAuthInit();
+  const auth = await withAuthTimeout(ensureAuthInit(), "Account setup");
   if (!auth) throw new Error("Firebase Auth is unavailable.");
-  const mod = await getFirebaseAuthModule();
-  await mod.sendPasswordResetEmail(auth, String(email || "").trim());
+  const mod = await withAuthTimeout(getFirebaseAuthModule(), "Firebase Auth loading");
+  await withAuthTimeout(
+    mod.sendPasswordResetEmail(auth, String(email || "").trim()),
+    "Password reset",
+  );
 };
 
 export const signInWithGoogle = async () => {
-  const auth = await ensureAuthInit();
+  const auth = await withAuthTimeout(ensureAuthInit(), "Account setup");
   if (!auth) throw new Error("Firebase Auth is unavailable.");
-  const mod = await getFirebaseAuthModule();
+  const mod = await withAuthTimeout(getFirebaseAuthModule(), "Firebase Auth loading");
   const provider = new mod.GoogleAuthProvider();
   provider.setCustomParameters({ prompt: "select_account" });
   try {
-    const result = await mod.signInWithPopup(auth, provider);
+    const result = await withAuthTimeout(
+      mod.signInWithPopup(auth, provider),
+      "Google sign-in",
+    );
     settle(result.user);
     return result.user;
   } catch (error) {
     if (error?.code === "auth/popup-blocked" || error?.code === "auth/operation-not-supported-in-this-environment") {
-      await mod.signInWithRedirect(auth, provider);
+      await withAuthTimeout(mod.signInWithRedirect(auth, provider), "Google sign-in redirect");
       return null;
     }
     throw error;
@@ -157,10 +188,10 @@ export const signInWithGoogle = async () => {
 };
 
 export const signOutUser = async () => {
-  const auth = await ensureAuthInit();
+  const auth = await withAuthTimeout(ensureAuthInit(), "Account setup");
   if (!auth) return false;
-  const mod = await getFirebaseAuthModule();
-  await mod.signOut(auth);
+  const mod = await withAuthTimeout(getFirebaseAuthModule(), "Firebase Auth loading");
+  await withAuthTimeout(mod.signOut(auth), "Sign out");
   settle(null);
   return true;
 };

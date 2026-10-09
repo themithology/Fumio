@@ -18,7 +18,7 @@ const Topnav = () => {
           <img src="/logo.svg" alt="" className="h-8 w-8 shrink-0" />
           <span className="hidden font-display text-[13px] font-bold tracking-tight group-hover:text-zinc-200 xs:inline sm:text-sm">TheOGPirateBot</span>
         </Link>
-        <div className="flex items-center gap-2">
+        <div className="gtv-no-scrollbar flex min-w-0 items-center gap-1.5 overflow-x-auto sm:gap-2">
           <Link
             to="/explore"
             className="inline-flex h-9 shrink-0 items-center gap-1.5 rounded-full border border-white/10 bg-white/5 px-3.5 text-xs font-semibold text-zinc-300 transition hover:bg-white/10 hover:text-white"
@@ -36,13 +36,11 @@ const Topnav = () => {
           </Link>
           <a
             href="https://discord.gg/t6tjszp5eb"
-            target="_blank"
-            rel="noopener noreferrer"
             aria-label="Join our Discord community"
             className="inline-flex h-9 shrink-0 items-center gap-1.5 rounded-full border border-indigo-300/20 bg-indigo-400/10 px-3 text-xs font-bold text-indigo-100 transition hover:border-indigo-200/40 hover:bg-indigo-300/20 hover:text-white"
           >
             <i className="ri-discord-fill" aria-hidden="true" />
-            <span className="hidden sm:inline">Join Discord</span>
+            <span>Join Discord</span>
           </a>
           <Link
             to="/account"
