@@ -7,6 +7,7 @@ export default defineConfig({
   server: {
     host: true,
     allowedHosts: true,
+    watch: { ignored: ["**/android/**", "**/worker/.wrangler/**"] },
     // Local Cloudflare Worker (run with `npm run worker:dev`, i.e. wrangler's
     // workerd runtime on :8787). The app always calls relative /tmdb and
     // /api paths in dev; this proxy forwards them to the local worker so you

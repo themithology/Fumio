@@ -1,8 +1,7 @@
 import { useEffect, useState } from "react";
 import { useParams, useSearchParams, Link } from "react-router-dom";
 import { tmdbGet } from "../lib/tmdb.js";
-import { resolveStream } from "../providers/index.js";
-import VideoPlayer from "../components/VideoPlayer.jsx";
+import StreamFrame from "../components/StreamFrame.jsx";
 import Loading from "../components/Loading.jsx";
 
 export default function Player() {
@@ -12,8 +11,6 @@ export default function Player() {
   const episode = Number(params.get("episode") || 1);
 
   const [details, setDetails] = useState(null);
-  const [stream, setStream] = useState(null);
-  const [error, setError] = useState(null);
 
   useEffect(() => {
     tmdbGet(`${type}/${id}`)
@@ -21,15 +18,14 @@ export default function Player() {
       .catch(() => setDetails(null));
   }, [type, id]);
 
-  useEffect(() => {
-    setStream(null);
-    setError(null);
-    resolveStream({ tmdbId: id, type, season, episode, title: details?.title || details?.name })
-      .then(setStream)
-      .catch((e) => setError(e.message));
-  }, [id, type, season, episode, details]);
-
   const title = details?.title || details?.name || "Loading…";
+
+  useEffect(() => {
+    const year = (details?.release_date || details?.first_air_date || "").slice(0, 4);
+    document.title = details
+      ? `Playing ${title}${year ? ` (${year})` : ""} | TheOGPirateBot`
+      : "TheOGPirateBot — Movies & TV";
+  }, [details, title]);
 
   return (
     <div className="mx-auto flex max-w-5xl flex-col gap-4 px-4 py-6 sm:px-8">
@@ -50,18 +46,8 @@ export default function Player() {
         </Link>
       </div>
 
-      {error && (
-        <div className="rounded-xl border border-red-500/30 bg-red-500/10 p-4 text-sm text-red-300">
-          Couldn't resolve a stream: {error}
-        </div>
-      )}
-      {!error && !stream && <Loading label="Resolving stream…" />}
-      {stream && (
-        <>
-          <VideoPlayer src={stream.url} type={stream.type} />
-          <p className="text-xs text-zinc-600">Source: {stream.providerName || stream.provider}</p>
-        </>
-      )}
+      {!details && <Loading label="Loading…" />}
+      {details && <StreamFrame tmdbId={id} mediaType={type} season={season} episode={episode} />}
     </div>
   );
 }

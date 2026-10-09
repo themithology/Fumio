@@ -1,6 +1,6 @@
 {
   "appId": "com.fumio.app",
-  "appName": "Fumio",
+  "appName": "TheOGPirateBot",
   "webDir": "dist",
   "server": {
     "androidScheme": "https"

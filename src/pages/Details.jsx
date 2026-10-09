@@ -23,6 +23,11 @@ export default function Details() {
       .catch((e) => setErr(e.message));
   }, [type, id]);
 
+  useEffect(() => {
+    const t = details?.title || details?.name;
+    document.title = t ? `${t} | TheOGPirateBot` : "TheOGPirateBot — Movies & TV";
+  }, [details]);
+
   if (err) return <p className="p-8 text-sm text-red-400">Couldn't load title: {err}</p>;
   if (!details) return <Loading label="Loading title…" />;
 
