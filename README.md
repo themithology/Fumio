@@ -11,7 +11,7 @@ library. No Firestore list/history storage is used.
 Branding (logo, name, colors, icons) is the real TheOGPirateBot identity,
 copied straight from Iris's `public/` assets.
 
-- **Home** (`/`) — trending/popular/top-rated rows pulled from TMDB.
+- **Home** (`/`) — Iris-style quality-first hero built from local history/My List plus TMDB top-rated fallback; Discord community recommendations (when Iris's `/api/recommendations/top` is available), local Continue Watching/My List, Top 10 Rated, Trending This Week, Picked For You, streaming-platform filters, Anime, Korean Dramas, Indian Cinema, Action & Crime, Sci-Fi & Horror, Comedy, and API-backed lazy rails.
 - **Search** (`/search?q=...`) — TMDB multi-search (movies + TV), reachable
   from the search box in the header.
 - **Anime** (`/anime`) — a real API-backed anime hub with trending, popular,
@@ -54,7 +54,7 @@ public/                 # Real TheOGPirateBot branding: logo.svg, favicons,
                           icons, manifest — copied from Iris's public/.
 src/
   pages/
-    Home.jsx             # trending/popular/top-rated rows (TMDB)
+    Home.jsx             # full Iris-style quality/personalized home rails
     Search.jsx           # TMDB multi-search
     Details.jsx          # Iris-style details UI + API-backed Iris season/episode browser
     Player.jsx            # fullscreen shell: PlayerStage + close/back handling

@@ -10,6 +10,7 @@ import LiveTv from "./pages/LiveTv.jsx";
 import LiveTvWatch from "./pages/LiveTvWatch.jsx";
 import Anime from "./pages/Anime.jsx";
 import Account from "./pages/Account.jsx";
+import MyList from "./pages/MyList.jsx";
 import { useAccountSync } from "./components/auth/useAccount.js";
 
 // TheOGPirateBot: browse (Home/Search/Explore) -> Details -> Player.
@@ -30,6 +31,7 @@ export default function App() {
         <Route path="/search" element={<Search />} />
         <Route path="/anime" element={<Anime />} />
         <Route path="/account" element={<Account />} />
+        <Route path="/my-list" element={<MyList />} />
         <Route path="/live-tv" element={<LiveTv />} />
         <Route path="/live-tv/watch/:id" element={<LiveTvWatch />} />
         <Route path="/explore" element={<Explore />} />

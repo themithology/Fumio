@@ -20,7 +20,10 @@ export default defineConfig(({ mode }) => {
         // When an Iris/Fumio Node server is running locally, route only the
         // member database paths there; the media proxy keeps using workerd.
         ...(accountApiTarget
-          ? { "/api/db": { target: accountApiTarget, changeOrigin: true } }
+          ? {
+              "/api/db": { target: accountApiTarget, changeOrigin: true },
+              "/api/recommendations": { target: accountApiTarget, changeOrigin: true },
+            }
           : {}),
         "/tmdb": { target: "http://127.0.0.1:8787", changeOrigin: true },
         "/api": { target: "http://127.0.0.1:8787", changeOrigin: true },
