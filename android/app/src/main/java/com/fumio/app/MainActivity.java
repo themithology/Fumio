@@ -324,9 +324,11 @@ public class MainActivity extends BridgeActivity {
                 return true;
             }
             if (isAuthProvider(url)) {
-                // Live site Google stays in this WebView. Local-app Google still
-                // uses the overlay flag so a helper popup cannot steal /account.
-                if (googleRedirectActive || isLiveSite(currentUri())) return false;
+                // Browse mode: Google/Firebase stay inside this WebView (popup or
+                // main frame). Never send them to Chrome. While the in-app player
+                // is up, ignore auth URLs so a helper cannot replace playback.
+                if (playerActive) return true;
+                if (openedLive || googleRedirectActive) return false;
                 return true;
             }
             return true;
@@ -527,6 +529,11 @@ public class MainActivity extends BridgeActivity {
         settings.setJavaScriptEnabled(true);
         settings.setDomStorageEnabled(true);
         settings.setSupportMultipleWindows(false);
+        settings.setJavaScriptCanOpenWindowsAutomatically(true);
+        String ua = settings.getUserAgentString();
+        if (ua != null) {
+            settings.setUserAgentString(ua.replace("; wv", "").replace("Version/4.0 ", ""));
+        }
         CookieManager.getInstance().setAcceptThirdPartyCookies(popup, true);
         popup.setWebChromeClient(
             new WebChromeClient() {
@@ -563,11 +570,9 @@ public class MainActivity extends BridgeActivity {
 
     private boolean handlePopupUrl(Uri url) {
         if (url == null) return true;
-        if (isAuthProvider(url) && !googleRedirectActive) {
-            dismissPopup();
-            return true;
-        }
-        if (isBenignPopupUrl(url)) return false;
+        // Google sign-in on the live site uses window.open(). Keep that popup
+        // in-app: accounts.google.com, Firebase handler, then back to the site.
+        if (isBenignPopupUrl(url) || isAuthProvider(url) || isLiveSite(url)) return false;
         if (isDiscord(url)) {
             openExternal(url);
             dismissPopup();
