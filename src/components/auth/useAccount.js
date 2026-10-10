@@ -1,4 +1,4 @@
-import { useEffect, useSyncExternalStore } from "react";
+import { useEffect, useRef, useSyncExternalStore } from "react";
 import { getAuthSnapshot, isRealUser, subscribeAuth } from "../../utils/auth.js";
 import {
   claimDevice,
@@ -20,7 +20,18 @@ export const useSyncStatus = () => useSyncExternalStore(subscribeSyncStatus, get
 export const useAccountSync = () => {
   const { ready, user } = useAuth();
   const uid = isRealUser(user) ? user.uid : "";
-  const displayName = user?.displayName || "";
+  const displayNameRef = useRef(user?.displayName || "");
+  displayNameRef.current = user?.displayName || "";
+  const prevUidRef = useRef(uid);
+
+  useEffect(() => {
+    const was = prevUidRef.current;
+    prevUidRef.current = uid;
+    if (was && !uid) {
+      releaseDevice(was);
+      resetSyncCache();
+    }
+  }, [uid]);
 
   useEffect(() => {
     if (!uid) {
@@ -39,15 +50,21 @@ export const useAccountSync = () => {
     window.addEventListener("account-sync-changed", onSyncFlag);
 
     const boot = async () => {
-      if (isSyncEnabled()) await pullAndMerge(uid);
+      if (isSyncEnabled()) {
+        for (let attempt = 0; attempt < 3 && !cancelled; attempt += 1) {
+          const ok = await pullAndMerge(uid);
+          if (ok) break;
+          await new Promise((resolve) => setTimeout(resolve, 700 * (attempt + 1)));
+        }
+      }
       if (cancelled) return;
       stopWatcher = startLocalWatcher(uid);
-      stopProfile = startPublicPageWatcher(uid, () => displayName);
+      stopProfile = startPublicPageWatcher(uid, () => displayNameRef.current);
     };
     boot().catch(() => {
       if (!cancelled) {
         stopWatcher = startLocalWatcher(uid);
-        stopProfile = startPublicPageWatcher(uid, () => displayName);
+        stopProfile = startPublicPageWatcher(uid, () => displayNameRef.current);
       }
     });
 
@@ -56,12 +73,8 @@ export const useAccountSync = () => {
       window.removeEventListener("account-sync-changed", onSyncFlag);
       stopWatcher?.();
       stopProfile?.();
-      // Keep the signed-out browser local-first, but never leave account A's
-      // titles in the shared guest bucket for account B to inherit.
-      releaseDevice(uid);
-      resetSyncCache();
     };
-  }, [uid, displayName]);
+  }, [uid]);
 
   return { ready, uid };
 };

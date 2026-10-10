@@ -137,6 +137,37 @@ public class MainActivity extends BridgeActivity {
                 }
             });
         }
+
+        @JavascriptInterface
+        public void requestJson(String method, String url, String headersJson, String body, String requestId) {
+            final String id = requestId == null ? "" : requestId;
+            new Thread(
+                () -> {
+                    JSONObject result = NativeHttp.execute(method, url, headersJson, body);
+                    runOnUiThread(() -> deliverHttpResult(id, result));
+                },
+                "fumio-http"
+            ).start();
+        }
+    }
+
+    private void deliverHttpResult(String requestId, JSONObject result) {
+        Bridge bridge = getBridge();
+        if (bridge == null || bridge.getWebView() == null) return;
+        try {
+            String quotedId = JSONObject.quote(requestId == null ? "" : requestId);
+            String payload = result == null ? "{}" : result.toString();
+            bridge.getWebView().evaluateJavascript(
+                "(function(id,r){try{window.dispatchEvent(new CustomEvent('fumio-native-http',{detail:{id:id,result:r}}));}catch(e){}})("
+                    + quotedId
+                    + ","
+                    + payload
+                    + ")",
+                null
+            );
+        } catch (Exception ignored) {
+            // Sync will retry.
+        }
     }
 
     private void handleAuthIntent(Intent intent) {

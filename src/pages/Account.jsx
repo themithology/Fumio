@@ -372,8 +372,8 @@ const Account = () => {
             <div className="rounded-2xl border border-white/10 bg-white/5 p-5">
               <div className="flex items-center gap-4">
                 <span className="flex h-14 w-14 shrink-0 items-center justify-center overflow-hidden rounded-full bg-white text-xl font-black text-black">
-                  {look.avatar ? (
-                    <img src={look.avatar} alt="" className="h-full w-full object-cover" referrerPolicy="no-referrer" />
+                  {look.avatar || user?.photoURL ? (
+                    <img src={look.avatar || user.photoURL} alt="" className="h-full w-full object-cover" referrerPolicy="no-referrer" />
                   ) : (
                     displayInitial(user)
                   )}

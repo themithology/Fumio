@@ -1,4 +1,5 @@
 import { getUserData, putUserData, deleteUserData } from "./dbApi.js";
+import { coerceLibraryList } from "./libraryItem.js";
 import { readMyList, writeMyList, MY_LIST_CAP } from "./myList.js";
 import { readContinueWatching, writeContinueWatching, HISTORY_CAP } from "./watchHistory.js";
 import { readLook, readLookStamp, writeLook, hasLook, LOOK_EVENT } from "./profileLook.js";
@@ -49,8 +50,7 @@ const listKey = (item) => `${item?.type || item?.media_type || "movie"}-${item?.
 /** Merge by title, retaining the newest copy from either device. */
 export const mergeByNewest = (local, cloud, stamp, cap) => {
   const best = new Map();
-  for (const item of [...(cloud || []), ...(local || [])]) {
-    if (!item?.id) continue;
+  for (const item of coerceLibraryList([...(cloud || []), ...(local || [])])) {
     const key = listKey(item);
     const existing = best.get(key);
     // Local wins a timestamp tie: it is the copy the member can see/edit now.
@@ -146,9 +146,19 @@ let lastPushedByUid = new Map();
 export const pullCloudData = async (uid) => {
   try {
     const data = await getUserData(uid);
+    const myList = Array.isArray(data?.myList)
+      ? data.myList
+      : Array.isArray(data?.watchlist)
+        ? data.watchlist
+        : [];
+    const continueWatching = Array.isArray(data?.continueWatching)
+      ? data.continueWatching
+      : Array.isArray(data?.history)
+        ? data.history
+        : [];
     return {
-      myList: Array.isArray(data?.myList) ? data.myList : [],
-      continueWatching: Array.isArray(data?.continueWatching) ? data.continueWatching : [],
+      myList: coerceLibraryList(myList),
+      continueWatching: coerceLibraryList(continueWatching),
       look: data?.look && typeof data.look === "object" ? data.look : null,
     };
   } catch (error) {
@@ -193,8 +203,8 @@ export const pullAndMerge = async (uid) => {
   const localHistory = readContinueWatching();
   const mergedList = mergeMyList(localList, cloud.myList);
   const mergedHistory = mergeHistory(localHistory, cloud.continueWatching);
-  if (JSON.stringify(mergedList) !== JSON.stringify(localList)) writeMyList(mergedList);
-  if (JSON.stringify(mergedHistory) !== JSON.stringify(localHistory)) writeContinueWatching(mergedHistory);
+  writeMyList(mergedList);
+  writeContinueWatching(mergedHistory);
   const incomingLook = pickSyncedLook(readLook(), readLookStamp(), cloud.look);
   if (incomingLook) writeLook(incomingLook, { stamp: incomingLook.updatedAt || Date.now(), synced: true });
   return pushCloudData(uid);

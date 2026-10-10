@@ -1,3 +1,5 @@
+import { coerceLibraryItem } from "./libraryItem.js";
+
 const HISTORY_KEY = "continueWatching";
 export const HISTORY_UPDATED_EVENT = "history-updated";
 export const HISTORY_PROGRESS_EVENT = "history-progress";
@@ -14,7 +16,7 @@ const getStorage = () => {
 const parse = (raw) => {
   try {
     const value = JSON.parse(raw || "[]");
-    return Array.isArray(value) ? value.filter((item) => item && item.id) : [];
+    return Array.isArray(value) ? value.map(coerceLibraryItem).filter(Boolean) : [];
   } catch {
     return [];
   }
@@ -30,7 +32,8 @@ export const readContinueWatching = () => parse(getStorage()?.getItem(HISTORY_KE
 export const writeContinueWatching = (list, { progress = false } = {}) => {
   const seen = new Set();
   const clean = (Array.isArray(list) ? list : [])
-    .filter((item) => item && item.id)
+    .map(coerceLibraryItem)
+    .filter(Boolean)
     .map((item) => ({ ...item, type: item.type || item.media_type || "movie" }))
     .filter((item) => {
       const key = keyOf(item);

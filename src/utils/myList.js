@@ -1,3 +1,5 @@
+import { coerceLibraryItem } from "./libraryItem.js";
+
 const MY_LIST_KEY = "myList";
 export const MY_LIST_UPDATED_EVENT = "mylist-updated";
 export const MY_LIST_CAP = 100;
@@ -13,7 +15,7 @@ const storage = () => {
 const readJson = (raw) => {
   try {
     const value = JSON.parse(raw || "[]");
-    return Array.isArray(value) ? value.filter((item) => item && item.id) : [];
+    return Array.isArray(value) ? value.map(coerceLibraryItem).filter(Boolean) : [];
   } catch {
     return [];
   }
@@ -35,7 +37,8 @@ export const isInMyList = (itemOrId, mediaType = "movie") => {
 export const writeMyList = (list) => {
   const seen = new Set();
   const clean = (Array.isArray(list) ? list : [])
-    .filter((item) => item && item.id)
+    .map(coerceLibraryItem)
+    .filter(Boolean)
     .map((item) => ({ ...item, type: item.type || item.media_type || "movie" }))
     .filter((item) => {
       const key = keyOf(item);
