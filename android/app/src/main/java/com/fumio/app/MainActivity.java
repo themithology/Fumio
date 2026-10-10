@@ -25,6 +25,9 @@ import android.widget.FrameLayout;
 import com.getcapacitor.Bridge;
 import com.getcapacitor.BridgeActivity;
 import com.getcapacitor.BridgeWebViewClient;
+import java.io.ByteArrayOutputStream;
+import java.io.InputStream;
+import java.nio.charset.StandardCharsets;
 import java.util.Locale;
 import org.json.JSONObject;
 
@@ -44,6 +47,7 @@ public class MainActivity extends BridgeActivity {
     private Dialog popupDialog;
     private WebView popupView;
     private String pendingAuthToken;
+    private final LocalAuthServer localAuthServer = new LocalAuthServer();
 
     @Override
     public void onCreate(Bundle savedInstanceState) {
@@ -97,6 +101,18 @@ public class MainActivity extends BridgeActivity {
             if (!scheme.equals("https") && !scheme.equals("http")) return;
             runOnUiThread(() -> openExternal(uri));
         }
+
+        @JavascriptInterface
+        public String startGoogleAuth() {
+            try {
+                String html = readGoogleHtml();
+                if (html == null || html.isEmpty()) return "";
+                int port = localAuthServer.start(html, (token) -> runOnUiThread(() -> acceptGoogleToken(token)));
+                return "http://localhost:" + port + "/fumio-google.html?redirect=" + Uri.encode("com.fumio.app://auth");
+            } catch (Exception ignored) {
+                return "";
+            }
+        }
     }
 
     private void handleAuthIntent(Intent intent) {
@@ -104,9 +120,32 @@ public class MainActivity extends BridgeActivity {
         Uri data = intent.getData();
         if (data.getScheme() == null || !data.getScheme().equalsIgnoreCase("com.fumio.app")) return;
         String token = data.getQueryParameter("idToken");
+        acceptGoogleToken(token);
+    }
+
+    private void acceptGoogleToken(String token) {
         if (token == null || token.isEmpty()) return;
         pendingAuthToken = token;
         deliverPendingAuthToken();
+        try {
+            Intent bring = new Intent(this, MainActivity.class);
+            bring.addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT | Intent.FLAG_ACTIVITY_SINGLE_TOP);
+            startActivity(bring);
+        } catch (Exception ignored) {
+            // Token is already queued for the WebView.
+        }
+    }
+
+    private String readGoogleHtml() {
+        try (InputStream in = getResources().openRawResource(R.raw.fumio_google);
+             ByteArrayOutputStream out = new ByteArrayOutputStream()) {
+            byte[] buf = new byte[4096];
+            int n;
+            while ((n = in.read(buf)) > 0) out.write(buf, 0, n);
+            return out.toString(StandardCharsets.UTF_8.name());
+        } catch (Exception ignored) {
+            return "";
+        }
     }
 
     private void deliverPendingAuthToken() {
@@ -450,6 +489,7 @@ public class MainActivity extends BridgeActivity {
     @Override
     public void onDestroy() {
         try {
+            localAuthServer.stop();
             dismissPopup();
         } catch (Exception ignored) {
             // Activity is already going away.

@@ -1,25 +1,26 @@
 export const DISCORD_INVITE_URL = "https://discord.gg/t6tjszp5eb";
 export const SITE_ORIGIN = "https://theogpiratebot.online";
 export const NATIVE_AUTH_SCHEME = "com.fumio.app://auth";
-export const FIREBASE_AUTH_HANDLER =
-  "https://ogpb-331d5.firebaseapp.com/__/auth/handler";
-export const FIREBASE_WEB_API_KEY = "AIzaSyDapNgnKdO8l_t7BJPCO8IsbL73aILA1cI";
 
 export const isNativeApp = () =>
   typeof window !== "undefined" && Boolean(window.Capacitor?.isNativePlatform?.());
 
-/** Same helper URL the website popup opens for one-tap Google. */
+/**
+ * Google must start in the same browser that later loads Firebase's
+ * `/__/auth/handler`. Opening the handler as a standalone URL is what
+ * produced "missing initial state" (no sessionStorage from the SDK).
+ *
+ * Native: a loopback page inside the APK, opened in the default browser.
+ * Fallback: the same HTML on the website once it is deployed.
+ */
 export const nativeGoogleAuthUrl = () => {
-  const params = new URLSearchParams({
-    apiKey: FIREBASE_WEB_API_KEY,
-    appName: "[DEFAULT]",
-    authType: "signInViaPopup",
-    redirectUrl: `${SITE_ORIGIN}/account`,
-    v: "12.18.0",
-    providerId: "google.com",
-    scopes: "profile",
-  });
-  return `${FIREBASE_AUTH_HANDLER}?${params.toString()}`;
+  try {
+    const local = window.FumioNative?.startGoogleAuth?.();
+    if (typeof local === "string" && /^https?:\/\//i.test(local)) return local;
+  } catch {
+    // Use the hosted copy.
+  }
+  return `${SITE_ORIGIN}/fumio-google.html?redirect=${encodeURIComponent(NATIVE_AUTH_SCHEME)}`;
 };
 
 export const openSystemBrowser = (url) => {
