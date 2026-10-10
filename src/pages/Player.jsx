@@ -287,6 +287,14 @@ export default function Player() {
   const close = useCallback(() => {
     unlockPlayerOrientation();
     if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
+    try {
+      if (window.FumioNative?.closePlayer) {
+        window.FumioNative.closePlayer();
+        return;
+      }
+    } catch {
+      /* web */
+    }
     navigate(`/details/${type}/${id}`, { replace: true });
   }, [navigate, type, id]);
 

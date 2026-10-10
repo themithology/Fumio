@@ -20,6 +20,7 @@ import android.webkit.ValueCallback;
 import android.webkit.WebChromeClient;
 import android.webkit.WebResourceError;
 import android.webkit.WebResourceRequest;
+import android.webkit.WebResourceResponse;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
@@ -29,10 +30,13 @@ import com.getcapacitor.Bridge;
 import com.getcapacitor.BridgeActivity;
 import com.getcapacitor.BridgeWebViewClient;
 import java.io.BufferedReader;
+import java.io.ByteArrayInputStream;
 import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
 import java.util.Locale;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import org.json.JSONObject;
 
 /**
@@ -54,9 +58,16 @@ public class MainActivity extends BridgeActivity {
     private String pendingAuthToken;
     private volatile boolean googleRedirectActive;
     private final InAppGoogleAuth inAppGoogleAuth = new InAppGoogleAuth();
+    private static final Pattern EMBED_TITLE = Pattern.compile(
+        "(?i)/(movie|tv|anime)/(\\d+)(?:/(\\d+)(?:/(\\d+))?)?"
+    );
     private String playerScript = "";
+    private String localAppUrl = "";
+    private String liveReturnUrl = "";
     private boolean openedLive;
     private boolean liveHistoryCleared;
+    private boolean playerActive;
+    private long lastPlayerOpenAt;
 
     @Override
     public void onCreate(Bundle savedInstanceState) {
@@ -160,6 +171,16 @@ public class MainActivity extends BridgeActivity {
         @JavascriptInterface
         public void unlockOrientation() {
             runOnUiThread(() -> setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED));
+        }
+
+        @JavascriptInterface
+        public void openWatch(String type, String id, String season, String episode) {
+            runOnUiThread(() -> openAppPlayer(type, id, season, episode));
+        }
+
+        @JavascriptInterface
+        public void closePlayer() {
+            runOnUiThread(() -> closeAppPlayer());
         }
 
         @JavascriptInterface
@@ -278,9 +299,16 @@ public class MainActivity extends BridgeActivity {
 
         private Boolean handleExternalUrl(Uri url, boolean mainFrame) {
             if (url == null) return true;
+            if (!mainFrame && (playerActive || isOwnOrigin(currentUri()) || isLiveTvPage(currentUri()))) {
+                return false;
+            }
+            if (isPlayerEmbed(url)) {
+                openAppPlayerFromEmbed(url);
+                return true;
+            }
             if (isLiveSite(url)) {
                 if (mainFrame && isWatchPath(url)) {
-                    openAdFreePlayer(url);
+                    openAppPlayerFromWatch(url);
                     return true;
                 }
                 return false;
@@ -304,11 +332,31 @@ public class MainActivity extends BridgeActivity {
         }
 
         @Override
+        public WebResourceResponse shouldInterceptRequest(WebView view, WebResourceRequest request) {
+            if (
+                request != null &&
+                !request.isForMainFrame() &&
+                !playerActive &&
+                !isOwnOrigin(currentUri()) &&
+                !isLiveTvPage(currentUri()) &&
+                isPlayerEmbed(request.getUrl())
+            ) {
+                view.post(() -> openAppPlayerFromEmbed(request.getUrl()));
+                return new WebResourceResponse(
+                    "text/plain",
+                    "utf-8",
+                    new ByteArrayInputStream(new byte[0])
+                );
+            }
+            return super.shouldInterceptRequest(view, request);
+        }
+
+        @Override
         public void doUpdateVisitedHistory(WebView view, String url, boolean isReload) {
             super.doUpdateVisitedHistory(view, url, isReload);
             Uri uri = url == null ? null : Uri.parse(url);
             if (!isLiveSite(uri) || !isWatchPath(uri)) return;
-            openAdFreePlayer(uri);
+            openAppPlayerFromWatch(uri);
             if (view.canGoBack()) view.goBack();
         }
 
@@ -316,12 +364,22 @@ public class MainActivity extends BridgeActivity {
         public void onPageFinished(WebView view, String url) {
             super.onPageFinished(view, url);
             Uri uri = url == null ? null : Uri.parse(url);
+            if (isOwnOrigin(uri)) rememberLocalAppUrl();
             if (!openedLive && isOwnOrigin(uri)) {
                 openedLive = true;
                 view.loadUrl(LIVE_ORIGIN + "/");
                 return;
             }
+            if (isOwnOrigin(uri) && openedLive) {
+                if (isWatchPath(uri)) {
+                    playerActive = true;
+                    return;
+                }
+                closeAppPlayer();
+                return;
+            }
             if (isLiveSite(uri)) {
+                playerActive = false;
                 if (!liveHistoryCleared) {
                     liveHistoryCleared = true;
                     view.clearHistory();
@@ -588,18 +646,72 @@ public class MainActivity extends BridgeActivity {
         view.evaluateJavascript(playerScript, null);
     }
 
-    private void openAdFreePlayer(Uri url) {
+    private void rememberLocalAppUrl() {
+        if (localAppUrl != null && !localAppUrl.isEmpty()) return;
         Bridge bridge = getBridge();
-        if (bridge == null || bridge.getWebView() == null || url == null) return;
-        WebView view = bridge.getWebView();
-        injectPlayerScript(view);
-        String quoted = JSONObject.quote(url.toString());
-        view.evaluateJavascript(
-            "(function(u){try{return window.__fumioOpenFromUrl?window.__fumioOpenFromUrl(u):false;}catch(e){return false;}})("
-                + quoted
-                + ")",
-            null
+        String app = bridge != null ? bridge.getAppUrl() : null;
+        if (app == null || app.isEmpty()) return;
+        localAppUrl = app.endsWith("/") ? app.substring(0, app.length() - 1) : app;
+    }
+
+    private void openAppPlayerFromWatch(Uri url) {
+        if (url == null) return;
+        String path = url.getPath() == null ? "" : url.getPath();
+        Matcher match = EMBED_TITLE.matcher(path);
+        if (!match.find()) return;
+        openAppPlayer(
+            match.group(1),
+            match.group(2),
+            firstQuery(url, "season", match.group(3)),
+            firstQuery(url, "episode", match.group(4))
         );
+    }
+
+    private void openAppPlayerFromEmbed(Uri url) {
+        if (url == null) return;
+        String path = url.getPath() == null ? "" : url.getPath();
+        Matcher match = EMBED_TITLE.matcher(path);
+        if (!match.find()) return;
+        openAppPlayer(match.group(1), match.group(2), match.group(3), match.group(4));
+    }
+
+    private String firstQuery(Uri url, String key, String fallback) {
+        String value = url.getQueryParameter(key);
+        if (value != null && !value.isEmpty()) return value;
+        return fallback;
+    }
+
+    private void openAppPlayer(String type, String id, String season, String episode) {
+        if (id == null || id.isEmpty()) return;
+        long now = System.currentTimeMillis();
+        if (now - lastPlayerOpenAt < 800) return;
+        lastPlayerOpenAt = now;
+        rememberLocalAppUrl();
+        if (localAppUrl == null || localAppUrl.isEmpty()) return;
+        String media = "movie".equalsIgnoreCase(type) ? "movie" : "tv";
+        StringBuilder path = new StringBuilder("/watch/").append(media).append("/").append(id);
+        if (!"movie".equals(media)) {
+            path.append("?season=").append(season == null || season.isEmpty() ? "1" : season);
+            path.append("&episode=").append(episode == null || episode.isEmpty() ? "1" : episode);
+        }
+        Bridge bridge = getBridge();
+        if (bridge == null || bridge.getWebView() == null) return;
+        Uri current = currentUri();
+        if (isLiveSite(current)) liveReturnUrl = current.toString();
+        playerActive = true;
+        setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE);
+        bridge.getWebView().loadUrl(localAppUrl + path);
+    }
+
+    private void closeAppPlayer() {
+        Bridge bridge = getBridge();
+        if (bridge == null || bridge.getWebView() == null) return;
+        Uri current = currentUri();
+        if (isLiveSite(current) && !playerActive) return;
+        playerActive = false;
+        setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED);
+        String back = liveReturnUrl != null && !liveReturnUrl.isEmpty() ? liveReturnUrl : LIVE_ORIGIN + "/";
+        bridge.getWebView().loadUrl(back);
     }
 
     private Uri currentUri() {
@@ -613,10 +725,45 @@ public class MainActivity extends BridgeActivity {
         return hostMatches(url, "theogpiratebot.online");
     }
 
+    private boolean isLiveTvPage(Uri url) {
+        if (url == null) return false;
+        String path = url.getPath();
+        return path != null && path.toLowerCase(Locale.US).startsWith("/live-tv");
+    }
+
     private boolean isWatchPath(Uri url) {
         if (url == null) return false;
         String path = url.getPath();
         return path != null && path.matches("(?i)^/watch/(movie|tv|anime)/[0-9]+.*");
+    }
+
+    private boolean isPlayerEmbed(Uri url) {
+        if (url == null) return false;
+        String host = url.getHost();
+        if (host == null) return false;
+        host = host.toLowerCase(Locale.US);
+        if (host.contains("vidsrc") || host.contains("videasy") || host.contains("vidfast") || host.contains("vidlink")) {
+            return true;
+        }
+        return hostMatches(
+            url,
+            "vidstuck.xyz",
+            "bingr.one",
+            "zxcstream.xyz",
+            "nxsha.space",
+            "2embed.cc",
+            "2embed.skin",
+            "multiembed.mov",
+            "autoembed.cc",
+            "smashystream.com",
+            "embed.su",
+            "111movies.com",
+            "moviesapi.club",
+            "tgvid.lovable.app",
+            "megaplay.site",
+            "zokoanime.com",
+            "4animo.com"
+        );
     }
 
     private String readAsset(String name) {
@@ -643,6 +790,10 @@ public class MainActivity extends BridgeActivity {
                         dismissPopup();
                         return;
                     }
+                    if (playerActive) {
+                        closeAppPlayer();
+                        return;
+                    }
                     Bridge bridge = getBridge();
                     WebView webView = bridge != null ? bridge.getWebView() : null;
                     if (webView == null) {
@@ -650,17 +801,11 @@ public class MainActivity extends BridgeActivity {
                         getOnBackPressedDispatcher().onBackPressed();
                         return;
                     }
-                    webView.evaluateJavascript(
-                        "(function(){try{return window.__fumioClosePlayer?window.__fumioClosePlayer():false;}catch(e){return false;}})()",
-                        (value) -> {
-                            if ("true".equals(value)) return;
-                            if (webView.canGoBack()) webView.goBack();
-                            else {
-                                setEnabled(false);
-                                getOnBackPressedDispatcher().onBackPressed();
-                            }
-                        }
-                    );
+                    if (webView.canGoBack()) webView.goBack();
+                    else {
+                        setEnabled(false);
+                        getOnBackPressedDispatcher().onBackPressed();
+                    }
                 }
             }
         );
