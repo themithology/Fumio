@@ -58,6 +58,7 @@ public class MainActivity extends BridgeActivity {
     private String pendingAuthToken;
     private volatile boolean googleRedirectActive;
     private final InAppGoogleAuth inAppGoogleAuth = new InAppGoogleAuth();
+    private FumioPlayerOverlay playerOverlay;
     private static final Pattern EMBED_TITLE = Pattern.compile(
         "(?i)/(movie|tv|anime)/(\\d+)(?:/(\\d+)(?:/(\\d+))?)?"
     );
@@ -79,6 +80,7 @@ public class MainActivity extends BridgeActivity {
             WebView webView = bridge.getWebView();
             if (webView == null) return;
             playerScript = readAsset("fumio-player.js");
+            playerOverlay = new FumioPlayerOverlay(this, () -> playerActive = false);
             installClients(webView, bridge);
             installBackHandler();
             handleAuthIntent(getIntent());
@@ -242,6 +244,7 @@ public class MainActivity extends BridgeActivity {
         if (token == null || token.isEmpty()) return;
         pendingAuthToken = token;
         deliverPendingAuthToken();
+        applyGoogleTokenToLiveSite(token);
         try {
             Intent bring = new Intent(this, MainActivity.class);
             bring.addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT | Intent.FLAG_ACTIVITY_SINGLE_TOP);
@@ -364,6 +367,7 @@ public class MainActivity extends BridgeActivity {
             if (!isLiveSite(uri) || !isWatchPath(uri) || playerActive) return;
             openAppPlayerFromWatch(uri);
             view.post(() -> {
+                if (!playerActive) return;
                 if (view.canGoBack()) view.goBack();
             });
         }
@@ -379,13 +383,6 @@ public class MainActivity extends BridgeActivity {
                 return;
             }
             if (isOwnOrigin(uri) && openedLive) {
-                if (isWatchPath(uri)) {
-                    playerActive = true;
-                    return;
-                }
-                if (playerActive) {
-                    view.post(this::closePlayerSafe);
-                }
                 return;
             }
             if (isLiveSite(uri)) {
@@ -398,10 +395,6 @@ public class MainActivity extends BridgeActivity {
                 injectPlayerScript(view);
             }
             deliverPendingAuthToken();
-        }
-
-        private void closePlayerSafe() {
-            closeAppPlayer();
         }
 
         @Override
@@ -711,34 +704,31 @@ public class MainActivity extends BridgeActivity {
     private void openAppPlayer(String type, String id, String season, String episode) {
         if (id == null || id.isEmpty()) return;
         long now = System.currentTimeMillis();
-        if (now - lastPlayerOpenAt < 800) return;
+        if (now - lastPlayerOpenAt < 800 && playerActive) return;
         lastPlayerOpenAt = now;
-        rememberLocalAppUrl();
-        if (localAppUrl == null || localAppUrl.isEmpty()) return;
-        String media = "movie".equalsIgnoreCase(type) ? "movie" : "tv";
-        StringBuilder path = new StringBuilder("/watch/").append(media).append("/").append(id);
-        if (!"movie".equals(media)) {
-            path.append("?season=").append(season == null || season.isEmpty() ? "1" : season);
-            path.append("&episode=").append(episode == null || episode.isEmpty() ? "1" : episode);
-        }
-        Bridge bridge = getBridge();
-        if (bridge == null || bridge.getWebView() == null) return;
-        Uri current = currentUri();
-        if (isLiveSite(current)) liveReturnUrl = current.toString();
         playerActive = true;
-        setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE);
-        bridge.getWebView().loadUrl(localAppUrl + path);
+        if (playerOverlay == null) {
+            playerOverlay = new FumioPlayerOverlay(this, () -> playerActive = false);
+        }
+        playerOverlay.open(type, id, season, episode);
     }
 
     private void closeAppPlayer() {
-        Bridge bridge = getBridge();
-        if (bridge == null || bridge.getWebView() == null) return;
-        if (!playerActive && isLiveSite(currentUri())) return;
         playerActive = false;
-        setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED);
-        if (liveFailed) return;
-        String back = liveReturnUrl != null && !liveReturnUrl.isEmpty() ? liveReturnUrl : LIVE_ORIGIN + "/";
-        bridge.getWebView().loadUrl(back);
+        if (playerOverlay != null && playerOverlay.isShowing()) playerOverlay.close();
+    }
+
+    private void applyGoogleTokenToLiveSite(String token) {
+        Bridge bridge = getBridge();
+        if (bridge == null || bridge.getWebView() == null || token == null || token.isEmpty()) return;
+        injectPlayerScript(bridge.getWebView());
+        String quoted = JSONObject.quote(token);
+        bridge.getWebView().evaluateJavascript(
+            "(function(t){try{return window.__fumioApplyGoogleToken?window.__fumioApplyGoogleToken(t):false;}catch(e){return false;}})("
+                + quoted
+                + ")",
+            null
+        );
     }
 
     private Uri currentUri() {
@@ -890,6 +880,7 @@ public class MainActivity extends BridgeActivity {
     public void onDestroy() {
         try {
             setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED);
+            if (playerOverlay != null && playerOverlay.isShowing()) playerOverlay.close();
             inAppGoogleAuth.dismiss();
             dismissPopup();
         } catch (Exception ignored) {

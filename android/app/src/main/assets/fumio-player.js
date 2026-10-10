@@ -99,6 +99,16 @@
   document.addEventListener(
     "click",
     function (event) {
+      var btn = event.target.closest && event.target.closest("a,button,[role='button']");
+      var label = btn
+        ? ((btn.getAttribute("aria-label") || "") + " " + (btn.textContent || "")).toLowerCase()
+        : "";
+      if (btn && /google/.test(label) && native.signInWithGoogle) {
+        event.preventDefault();
+        event.stopPropagation();
+        native.signInWithGoogle();
+        return;
+      }
       if (/^\/live-tv\b/i.test(location.pathname || "")) return;
       var link = event.target.closest && event.target.closest("a[href]");
       if (link && openWatch(parseWatch(link.href))) {
@@ -106,9 +116,7 @@
         event.stopPropagation();
         return;
       }
-      var btn = event.target.closest && event.target.closest("a,button,[role='button']");
       if (!btn) return;
-      var label = ((btn.getAttribute("aria-label") || "") + " " + (btn.textContent || "")).toLowerCase();
       if (/\btrailer\b/.test(label)) return;
       if (!/\b(play|watch now|watch episode)\b/.test(label) && !/^\s*watch\s*$/.test(label)) return;
       var details = parseDetails();
@@ -140,4 +148,115 @@
   observer.observe(document.documentElement, { childList: true, subtree: true, attributes: true, attributeFilter: ["src"] });
 
   if (parseWatch(location.href)) openWatch(parseWatch(location.href));
+
+  var API_KEY = "AIzaSyDapNgnKdO8l_t7BJPCO8IsbL73aILA1cI";
+
+  function putAuthUser(user) {
+    return new Promise(function (resolve) {
+      try {
+        localStorage.setItem("firebase:authUser:" + API_KEY + ":[DEFAULT]", JSON.stringify(user));
+      } catch (e) {
+        /* private */
+      }
+      try {
+        var req = indexedDB.open("firebaseLocalStorageDb");
+        req.onerror = function () {
+          resolve(false);
+        };
+        req.onsuccess = function () {
+          try {
+            var db = req.result;
+            if (!db.objectStoreNames.contains("firebaseLocalStorage")) {
+              resolve(true);
+              return;
+            }
+            var tx = db.transaction("firebaseLocalStorage", "readwrite");
+            tx.objectStore("firebaseLocalStorage").put({
+              fbase_key: "firebase:authUser:" + API_KEY + ":[DEFAULT]",
+              value: user,
+            });
+            tx.oncomplete = function () {
+              resolve(true);
+            };
+            tx.onerror = function () {
+              resolve(true);
+            };
+          } catch (e) {
+            resolve(true);
+          }
+        };
+      } catch (e) {
+        resolve(true);
+      }
+    });
+  }
+
+  window.__fumioApplyGoogleToken = function (idToken) {
+    if (!idToken) return false;
+    fetch("https://identitytoolkit.googleapis.com/v1/accounts:signInWithIdp?key=" + API_KEY, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        postBody: "id_token=" + encodeURIComponent(idToken) + "&providerId=google.com",
+        requestUri: location.origin,
+        returnIdpCredential: true,
+        returnSecureToken: true,
+      }),
+    })
+      .then(function (res) {
+        return res.json();
+      })
+      .then(function (data) {
+        if (!data || !data.idToken || !data.localId) throw new Error((data && data.error && data.error.message) || "sign-in failed");
+        var expires = (Number(data.expiresIn) || 3600) * 1000;
+        var raw = {};
+        try {
+          raw = data.rawUserInfo ? JSON.parse(data.rawUserInfo) : {};
+        } catch (e) {
+          raw = {};
+        }
+        var user = {
+          uid: data.localId,
+          email: data.email || "",
+          emailVerified: Boolean(data.emailVerified),
+          displayName: data.displayName || "",
+          photoURL: data.photoUrl || "",
+          phoneNumber: null,
+          isAnonymous: false,
+          tenantId: null,
+          providerData: [
+            {
+              uid: raw.sub || data.federatedId || data.localId,
+              displayName: data.displayName || "",
+              email: data.email || "",
+              photoURL: data.photoUrl || "",
+              providerId: "google.com",
+            },
+          ],
+          apiKey: API_KEY,
+          appName: "[DEFAULT]",
+          authDomain: "ogpb-331d5.firebaseapp.com",
+          stsTokenManager: {
+            refreshToken: data.refreshToken,
+            accessToken: data.idToken,
+            expirationTime: Date.now() + expires,
+          },
+          createdAt: String(Date.now()),
+          lastLoginAt: String(Date.now()),
+        };
+        return putAuthUser(user);
+      })
+      .then(function () {
+        location.reload();
+      })
+      .catch(function () {
+        /* overlay already closed; user can retry */
+      });
+    return true;
+  };
+
+  window.addEventListener("fumio-native-auth", function (event) {
+    var token = event && event.detail && event.detail.idToken;
+    if (token) window.__fumioApplyGoogleToken(token);
+  });
 })();
