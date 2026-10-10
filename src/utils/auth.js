@@ -217,23 +217,19 @@ export const signInWithGoogleIdToken = async (idToken) => {
   return result.user;
 };
 
+const startGoogleRedirect = (auth, mod) => {
+  const provider = new mod.GoogleAuthProvider();
+  return mod.signInWithRedirect(auth, provider).then(() => null);
+};
+
 const fallbackGoogleSignIn = async (auth, mod, error) => {
   if (!popupBlocked(error)) throw error;
-  // Redirect inside an iframe or Capacitor WebView is swallowed (X-Frame-Options
-  // or the app's own external-navigation guard). Surface a real error instead.
-  if (isEmbeddedFrame() || isNativeApp()) {
+  if (isEmbeddedFrame()) {
     const blocked = new Error(friendlyMessages["auth/popup-blocked"]);
     blocked.code = "auth/popup-blocked";
     throw blocked;
   }
-  await mod.signInWithRedirect(auth, providerFrom(mod));
-  return null;
-};
-
-const providerFrom = (mod) => {
-  const provider = new mod.GoogleAuthProvider();
-  provider.setCustomParameters({ prompt: "select_account" });
-  return provider;
+  return startGoogleRedirect(auth, mod);
 };
 
 export const signInWithGoogle = () => {
@@ -247,24 +243,23 @@ export const signInWithGoogle = () => {
     return auth;
   };
 
+  const run = (auth, mod) =>
+    applyDomain(auth).then(() => {
+      // Same WebView — Google stays in the app. A second window/browser is
+      // what caused "missing initial state" (the handler had no session).
+      if (isNativeApp()) return startGoogleRedirect(auth, mod);
+      return startGooglePopup(auth, mod).catch((error) => fallbackGoogleSignIn(auth, mod, error));
+    });
+
   const auth = getFirebaseAuthSync();
   const mod = getFirebaseAuthModuleSync();
-  if (auth && mod) {
-    return applyDomain(auth)
-      .then(() => startGooglePopup(auth, mod))
-      .catch((error) => fallbackGoogleSignIn(auth, mod, error));
-  }
+  if (auth && mod) return run(auth, mod);
 
   return (async () => {
     const loadedAuth = await ensureAuthInit();
     if (!loadedAuth) throw new Error("Firebase Auth is unavailable.");
     const loadedMod = await getFirebaseAuthModule();
-    await applyDomain(loadedAuth);
-    try {
-      return await startGooglePopup(loadedAuth, loadedMod);
-    } catch (error) {
-      return fallbackGoogleSignIn(loadedAuth, loadedMod, error);
-    }
+    return run(loadedAuth, loadedMod);
   })();
 };
 

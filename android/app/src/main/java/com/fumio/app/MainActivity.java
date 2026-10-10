@@ -44,7 +44,6 @@ public class MainActivity extends BridgeActivity {
     private Dialog popupDialog;
     private WebView popupView;
     private String pendingAuthToken;
-    private final InAppGoogleAuth inAppGoogleAuth = new InAppGoogleAuth();
 
     @Override
     public void onCreate(Bundle savedInstanceState) {
@@ -103,23 +102,6 @@ public class MainActivity extends BridgeActivity {
             runOnUiThread(() -> openExternal(uri));
         }
 
-        @JavascriptInterface
-        public void signInWithGoogle() {
-            inAppGoogleAuth.start(
-                MainActivity.this,
-                new InAppGoogleAuth.Result() {
-                    @Override
-                    public void onIdToken(String idToken) {
-                        runOnUiThread(() -> acceptGoogleToken(idToken));
-                    }
-
-                    @Override
-                    public void onError(String message) {
-                        runOnUiThread(() -> emitGoogleError(message));
-                    }
-                }
-            );
-        }
     }
 
     private void handleAuthIntent(Intent intent) {
@@ -140,20 +122,6 @@ public class MainActivity extends BridgeActivity {
             startActivity(bring);
         } catch (Exception ignored) {
             // Token is already queued for the WebView.
-        }
-    }
-
-    private void emitGoogleError(String message) {
-        Bridge bridge = getBridge();
-        if (bridge == null || bridge.getWebView() == null) return;
-        try {
-            String quoted = JSONObject.quote(message == null || message.isEmpty() ? "Google sign-in failed." : message);
-            bridge.getWebView().evaluateJavascript(
-                "(function(m){try{window.dispatchEvent(new CustomEvent('fumio-native-auth-error',{detail:{message:m}}));}catch(e){}})(" + quoted + ")",
-                null
-            );
-        } catch (Exception ignored) {
-            // The overlay already closed; the form can be tried again.
         }
     }
 
@@ -355,7 +323,16 @@ public class MainActivity extends BridgeActivity {
     }
 
     private boolean handlePopupUrl(Uri url) {
-        if (url == null || isBenignPopupUrl(url)) return false;
+        if (url == null) return true;
+        if (isAuthProvider(url) || isOwnOrigin(url)) {
+            Bridge bridge = getBridge();
+            if (bridge != null && bridge.getWebView() != null) {
+                bridge.getWebView().loadUrl(url.toString());
+            }
+            dismissPopup();
+            return true;
+        }
+        if (isBenignPopupUrl(url)) return false;
         if (isDiscord(url)) {
             openExternal(url);
             dismissPopup();
@@ -498,7 +475,6 @@ public class MainActivity extends BridgeActivity {
     @Override
     public void onDestroy() {
         try {
-            inAppGoogleAuth.dismiss();
             dismissPopup();
         } catch (Exception ignored) {
             // Activity is already going away.
