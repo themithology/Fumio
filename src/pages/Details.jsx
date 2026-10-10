@@ -14,6 +14,7 @@ import Footer from "../components/Footer.jsx";
 import Topnav from "../components/partials/Topnav.jsx";
 import SeasonEpisodeBrowser from "../components/partials/SeasonEpisodeBrowser.jsx";
 import { isInMyList, toggleMyList } from "../utils/myList.js";
+import { saveContinueWatching } from "../utils/watchHistory.js";
 import { lockPlayerLandscape } from "../utils/playerOrientation.js";
 import { isTmdbEpisodeDisplay, isTmdbSeasonDisplay } from "../utils/animeMapping.js";
 
@@ -391,6 +392,7 @@ export default function Details() {
     }
     await lockPlayerLandscape();
     if (type === "movie") {
+      saveContinueWatching({ ...libraryItem, type: "movie", media_type: "movie" });
       navigate(`/watch/movie/${id}`);
       return;
     }
@@ -408,6 +410,17 @@ export default function Details() {
       watchParams.set("uiSeason", String(selectedSeason));
       watchParams.set("uiEpisode", String(episodeItem?.episode_number || selectedEpisode || 1));
     }
+    saveContinueWatching({
+      ...libraryItem,
+      type: "tv",
+      media_type: "tv",
+      season: pair.season,
+      episode: pair.episode,
+      uiSeason: animeDetails ? selectedSeason : undefined,
+      uiEpisode: animeDetails ? (episodeItem?.episode_number || selectedEpisode || 1) : undefined,
+      episodeName: episodeItem?.name || "",
+      episodeStill: episodeItem?.still_path || "",
+    });
     navigate(`/watch/tv/${id}?${watchParams.toString()}`);
   };
 

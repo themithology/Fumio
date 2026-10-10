@@ -310,10 +310,12 @@ export default function Home() {
     reload();
     window.addEventListener("storage", reload);
     window.addEventListener("history-updated", reload);
+    window.addEventListener("history-progress", reload);
     window.addEventListener("mylist-updated", reload);
     return () => {
       window.removeEventListener("storage", reload);
       window.removeEventListener("history-updated", reload);
+      window.removeEventListener("history-progress", reload);
       window.removeEventListener("mylist-updated", reload);
     };
   }, []);
