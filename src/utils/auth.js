@@ -288,6 +288,55 @@ export const displayLabel = (user) => {
 
 export const displayInitial = (user) => (displayLabel(user) || "M").charAt(0).toUpperCase();
 
+export const DISPLAY_NAME_MAX = 40;
+
+export const normalizeDisplayName = (raw) =>
+  String(raw ?? "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, DISPLAY_NAME_MAX);
+
+export const displayNameError = (raw) => {
+  const name = normalizeDisplayName(raw);
+  if (!name) return "Type a name first.";
+  if (String(raw ?? "").replace(/\s+/g, " ").trim().length > DISPLAY_NAME_MAX)
+    return `Keep it to ${DISPLAY_NAME_MAX} characters or fewer.`;
+  return "";
+};
+
+export const updateDisplayName = async (raw) => {
+  const name = normalizeDisplayName(raw);
+  const problem = displayNameError(raw);
+  if (problem) return { ok: false, message: problem };
+
+  const auth = await ensureAuthInit();
+  const user = auth?.currentUser;
+  if (!isRealUser(user)) {
+    return { ok: false, message: "Sign in first — a guest name is not saved anywhere." };
+  }
+  if (user.displayName === name) return { ok: true, name, unchanged: true };
+
+  try {
+    const mod = await getFirebaseAuthModule();
+    await mod.updateProfile(user, { displayName: name });
+    settle(auth.currentUser);
+    return { ok: true, name };
+  } catch (err) {
+    return { ok: false, message: authErrorMessage(err) };
+  }
+};
+
+export const deleteAccount = async () => {
+  const auth = await ensureAuthInit();
+  const user = auth?.currentUser;
+  if (!user || user.isAnonymous) return false;
+  const { deleteCloudData } = await import("./accountSync.js");
+  await deleteCloudData(user.uid).catch(() => {});
+  await user.delete();
+  settle(null);
+  return true;
+};
+
 export const disposeAuth = () => {
   unsubscribe?.();
   unsubscribe = null;

@@ -41,7 +41,7 @@ export const setTokenProvider = (provider) => {
   tokenProvider = provider;
 };
 
-const currentIdToken = async (forceRefresh = false) => {
+export const currentIdToken = async (forceRefresh = false) => {
   if (tokenProvider) {
     try {
       return (await tokenProvider(forceRefresh)) || "";
@@ -124,21 +124,40 @@ export const dbFetch = async (
   throw new DbApiError(CODE_BY_STATUS[response.status] || "internal", message, response.status);
 };
 
+const handlePath = (handle) => `/api/db/profile/${encodeURIComponent(handle)}`;
+const uidPath = (uid) => `/api/db/handle/${encodeURIComponent(uid)}`;
+const userPath = (uid) => `/api/db/user/${encodeURIComponent(uid)}`;
+
+export const getProfile = (handle) => dbFetch(handlePath(handle), { timeoutMs: DB_READ_ANSWER_TIMEOUT_MS });
+export const searchProfiles = (term, limit = 12) =>
+  dbFetch(`/api/db/profiles?q=${encodeURIComponent(String(term ?? ""))}&limit=${encodeURIComponent(limit)}`, {
+    timeoutMs: DB_READ_ANSWER_TIMEOUT_MS,
+  });
+export const putProfile = (handle, profile) =>
+  dbFetch(handlePath(handle), { method: "PUT", body: { profile }, auth: true });
+export const deleteProfile = (handle) => dbFetch(handlePath(handle), { method: "DELETE", auth: true });
+export const getHandle = (uid) => dbFetch(uidPath(uid), { auth: true, timeoutMs: DB_READ_ANSWER_TIMEOUT_MS });
+export const putHandle = (uid, handle) => dbFetch(uidPath(uid), { method: "PUT", body: { handle }, auth: true });
+export const deleteHandle = (uid) => dbFetch(uidPath(uid), { method: "DELETE", auth: true });
+export const getMe = () => dbFetch("/api/db/me", { auth: true, timeoutMs: DB_READ_ANSWER_TIMEOUT_MS });
+export const postEvent = (event) => dbFetch("/api/events", { method: "POST", body: event, auth: true });
+export const getVersion = () => dbFetch("/api/version", { timeoutMs: DB_READ_ANSWER_TIMEOUT_MS });
+
 export const getUserData = (uid) =>
-  dbFetch(`/api/db/user/${encodeURIComponent(uid)}`, {
+  dbFetch(userPath(uid), {
     auth: true,
     timeoutMs: DB_READ_ANSWER_TIMEOUT_MS,
   });
 
 export const putUserData = (uid, payload) =>
-  dbFetch(`/api/db/user/${encodeURIComponent(uid)}`, {
+  dbFetch(userPath(uid), {
     method: "PUT",
     body: payload,
     auth: true,
   });
 
 export const deleteUserData = (uid) =>
-  dbFetch(`/api/db/user/${encodeURIComponent(uid)}`, {
+  dbFetch(userPath(uid), {
     method: "DELETE",
     auth: true,
   });

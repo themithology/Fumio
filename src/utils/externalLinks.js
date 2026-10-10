@@ -1,12 +1,26 @@
 export const DISCORD_INVITE_URL = "https://discord.gg/t6tjszp5eb";
 export const SITE_ORIGIN = "https://theogpiratebot.online";
 export const NATIVE_AUTH_SCHEME = "com.fumio.app://auth";
+export const FIREBASE_AUTH_HANDLER =
+  "https://ogpb-331d5.firebaseapp.com/__/auth/handler";
+export const FIREBASE_WEB_API_KEY = "AIzaSyDapNgnKdO8l_t7BJPCO8IsbL73aILA1cI";
 
 export const isNativeApp = () =>
   typeof window !== "undefined" && Boolean(window.Capacitor?.isNativePlatform?.());
 
-export const nativeGoogleAuthUrl = () =>
-  `${SITE_ORIGIN}/account?fumioNative=1&redirect=${encodeURIComponent(NATIVE_AUTH_SCHEME)}`;
+/** Same helper URL the website popup opens for one-tap Google. */
+export const nativeGoogleAuthUrl = () => {
+  const params = new URLSearchParams({
+    apiKey: FIREBASE_WEB_API_KEY,
+    appName: "[DEFAULT]",
+    authType: "signInViaPopup",
+    redirectUrl: `${SITE_ORIGIN}/account`,
+    v: "12.18.0",
+    providerId: "google.com",
+    scopes: "profile",
+  });
+  return `${FIREBASE_AUTH_HANDLER}?${params.toString()}`;
+};
 
 export const openSystemBrowser = (url) => {
   if (!url) return false;

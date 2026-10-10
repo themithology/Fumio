@@ -9,13 +9,12 @@ import Footer from "../components/Footer.jsx";
 import axios from "../lib/irisAxios.js";
 import { safeBack } from "../utils/goBack.js";
 import { clampTotalPages, isTitle, searchPageUrl, walkPages } from "../utils/searchPaging.js";
+import { searchPublicProfiles } from "../utils/profiles.js";
 
 // ─── /search — Hotstar-style dedicated search page ───
-// Ported from Iris's components/Search.jsx, trimmed: no Users/member-profile
-// directory category and no Random Watch
-// link (that page isn't ported). All/Movies/Series tabs, recent-search
-// chips, debounced live results and the Trending Searches empty state are
-// kept as-is.
+// Ported from Iris's components/Search.jsx: All/Movies/Series/Users tabs,
+// recent-search chips, debounced live results and the Trending Searches empty
+// state. Users is the public-profile directory (/api/db/profiles).
 
 const RECENT_SEARCHES_KEY = "recentSearches";
 const MAX_RECENTS = 6;
@@ -25,7 +24,42 @@ const SEARCH_CATEGORIES = [
   { id: "all", label: "All", icon: "ri-apps-2-line" },
   { id: "movie", label: "Movies", icon: "ri-movie-2-line" },
   { id: "tv", label: "Series", icon: "ri-tv-2-line" },
+  { id: "users", label: "Users", icon: "ri-user-3-line" },
 ];
+
+export const MemberCard = ({ member }) => {
+  const initial = (member.displayName || member.handle || "?").trim().charAt(0).toUpperCase() || "?";
+  return (
+    <Link
+      to={`/u/${member.handle}`}
+      className="flex items-center gap-3 rounded-2xl border border-white/10 bg-[var(--gtv-surface-2)] p-2.5 transition hover:border-white/25 hover:bg-white/10"
+    >
+      {member.avatar ? (
+        <img
+          src={member.avatar}
+          alt=""
+          loading="lazy"
+          decoding="async"
+          className="h-11 w-11 shrink-0 rounded-xl object-cover ring-1 ring-white/10"
+        />
+      ) : (
+        <span
+          className="grid h-11 w-11 shrink-0 place-items-center rounded-xl font-display text-base font-black text-black/80"
+          style={{ backgroundImage: member.accent ? undefined : "linear-gradient(135deg,#fbbf24,#f59e0b)" }}
+        >
+          {initial}
+        </span>
+      )}
+      <span className="min-w-0 flex-1">
+        <span className="block truncate text-[13px] font-bold text-white">
+          {member.displayName || member.handle}
+        </span>
+        <span className="block truncate text-[11px] text-zinc-500">@{member.handle}</span>
+        {member.bio && <span className="mt-0.5 block truncate text-[10px] text-zinc-600">{member.bio}</span>}
+      </span>
+    </Link>
+  );
+};
 const normalizeCategory = (raw) => (SEARCH_CATEGORIES.some((c) => c.id === raw) ? raw : "all");
 const searchUrl = (q, category) => {
   const params = new URLSearchParams();
@@ -65,6 +99,7 @@ const Search = () => {
   const pageRef = useRef(1);
   const totalPagesRef = useRef(1);
   const [recents, setRecents] = useState(readRecents);
+  const [users, setUsers] = useState([]);
   const [category, setCategory] = useState(() => normalizeCategory(searchParams.get("type")));
   const categoryRef = useRef(category);
   categoryRef.current = category;
@@ -91,6 +126,7 @@ const Search = () => {
   useEffect(() => {
     if (!query) {
       setResults(null);
+      setUsers([]);
       setLoading(false);
       setHasMore(false);
       setTotalResults(0);
@@ -105,6 +141,7 @@ const Search = () => {
     pageRef.current = 1;
     totalPagesRef.current = 1;
     (async () => {
+      const people = searchPublicProfiles(query, 12).catch(() => []);
       try {
         const res = await axios.get(searchPageUrl(query, 1));
         const data = res.data || {};
@@ -122,8 +159,11 @@ const Search = () => {
           setTotalResults(0);
           setHasMore(false);
         }
-      } finally {
-        if (!cancelled) setLoading(false);
+      }
+      const found = await people;
+      if (!cancelled) {
+        setUsers(found);
+        setLoading(false);
       }
     })();
     return () => {
@@ -175,8 +215,8 @@ const Search = () => {
   const items = (results || []).filter((s) => s && s.id && (s.media_type === "movie" || s.media_type === "tv"));
   const movies = items.filter((s) => s.media_type === "movie");
   const shows = items.filter((s) => s.media_type === "tv");
-  const hasResults = items.length > 0;
-  const counts = { all: items.length, movie: movies.length, tv: shows.length };
+  const hasResults = items.length > 0 || users.length > 0;
+  const counts = { all: items.length + users.length, movie: movies.length, tv: shows.length, users: users.length };
 
   const pickCategory = (id) => {
     setCategory(id);
@@ -205,10 +245,10 @@ const Search = () => {
             <input
               ref={inputRef}
               type="text"
-              aria-label="Search movies and series"
+              aria-label="Search movies, series and members"
               value={text}
               onChange={(e) => setText(e.target.value)}
-              placeholder="Movies, series..."
+              placeholder="Movies, series, users..."
               autoComplete="off"
               className="w-full rounded-full border border-white/10 bg-[var(--gtv-surface-2)] py-3 pl-4 pr-11 sm:pl-11 text-sm sm:text-base text-white outline-none transition-all placeholder:text-zinc-500 focus:border-[var(--gtv-accent)] focus:bg-[var(--gtv-surface)] focus:ring-2 focus:ring-[var(--gtv-accent-ring)]"
             />
@@ -347,6 +387,21 @@ const Search = () => {
                 {loadingMore ? "Loading more..." : `Showing ${items.length} of ${totalResults} matches — keep scrolling a row for more`}
               </p>
             )}
+            {users.length > 0 && (
+              <div className="pt-6">
+                <h2 className="section-rule mb-3 font-editorial text-lg sm:text-xl font-bold text-white">
+                  Users <span className="text-zinc-600 text-sm font-semibold">({users.length})</span>
+                </h2>
+                <p className="mb-3 text-[11px] text-zinc-500">
+                  Members with a public page — tap one to see what they are watching.
+                </p>
+                <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-4">
+                  {users.map((member) => (
+                    <MemberCard key={member.handle} member={member} />
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
         )}
 
@@ -360,7 +415,30 @@ const Search = () => {
               }
             }}
           >
-            {(category === "movie" ? movies : shows).length > 0 ? (
+            {category === "users" ? (
+              users.length > 0 ? (
+                <>
+                  <p className="mb-3 text-[11px] text-zinc-500">
+                    Members with a public page — tap one to see what they are watching.
+                  </p>
+                  <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-4">
+                    {users.map((member) => (
+                      <MemberCard key={member.handle} member={member} />
+                    ))}
+                  </div>
+                </>
+              ) : (
+                <div className="flex flex-col items-center gap-2 py-12 text-center">
+                  <i className="ri-user-search-line text-4xl text-zinc-600" />
+                  <p className="text-sm font-semibold text-zinc-300">No users found for &ldquo;{query}&rdquo;</p>
+                  <p className="max-w-sm text-xs text-zinc-500">
+                    {query.replace(/^@+/, "").length < 2
+                      ? "Type at least 2 letters of a username."
+                      : "Only members who made their page public show up here. Search by username or display name."}
+                  </p>
+                </div>
+              )
+            ) : (category === "movie" ? movies : shows).length > 0 ? (
               <InfiniteScroll
                 dataLength={(category === "movie" ? movies : shows).length}
                 next={loadMore}
@@ -396,7 +474,7 @@ const Search = () => {
             {query && !hasResults && (
               <>
                 <p className="text-sm text-zinc-500 font-medium py-2">
-                  Nothing found for &ldquo;{query}&rdquo;. Try a different spelling, or browse by genre instead:
+                  Nothing found for &ldquo;{query}&rdquo;. Try a different spelling, the Users tab above to find a member by username — or browse by genre instead:
                 </p>
                 <Link
                   to="/explore"

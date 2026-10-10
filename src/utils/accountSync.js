@@ -1,6 +1,7 @@
-import { getUserData, putUserData } from "./dbApi.js";
+import { getUserData, putUserData, deleteUserData } from "./dbApi.js";
 import { readMyList, writeMyList, MY_LIST_CAP } from "./myList.js";
 import { readContinueWatching, writeContinueWatching, HISTORY_CAP } from "./watchHistory.js";
+import { readLook, readLookStamp, writeLook, hasLook, LOOK_EVENT } from "./profileLook.js";
 
 const OWNER_KEY = "fumio-account-owner";
 const STASH_PREFIX = "fumio-account-stash:";
@@ -148,9 +149,10 @@ export const pullCloudData = async (uid) => {
     return {
       myList: Array.isArray(data?.myList) ? data.myList : [],
       continueWatching: Array.isArray(data?.continueWatching) ? data.continueWatching : [],
+      look: data?.look && typeof data.look === "object" ? data.look : null,
     };
   } catch (error) {
-    if (error?.code === "not-found") return { myList: [], continueWatching: [] };
+    if (error?.code === "not-found") return { myList: [], continueWatching: [], look: null };
     setStatus({ state: "error", message: explainFailure(error), at: Date.now() });
     console.warn("Cloud sync read failed:", error?.code || error?.message);
     return null;
@@ -163,6 +165,9 @@ export const pushCloudData = async (uid) => {
     myList: readMyList().slice(0, MY_LIST_CAP),
     continueWatching: readContinueWatching().slice(0, HISTORY_CAP),
   };
+  const look = readLook();
+  const lookAt = readLookStamp();
+  if (lookAt || hasLook(look)) payload.look = { ...look, updatedAt: lookAt };
   const serialised = JSON.stringify(payload);
   if (serialised === lastPushedByUid.get(uid)) return true;
 
@@ -190,7 +195,33 @@ export const pullAndMerge = async (uid) => {
   const mergedHistory = mergeHistory(localHistory, cloud.continueWatching);
   if (JSON.stringify(mergedList) !== JSON.stringify(localList)) writeMyList(mergedList);
   if (JSON.stringify(mergedHistory) !== JSON.stringify(localHistory)) writeContinueWatching(mergedHistory);
+  const incomingLook = pickSyncedLook(readLook(), readLookStamp(), cloud.look);
+  if (incomingLook) writeLook(incomingLook, { stamp: incomingLook.updatedAt || Date.now(), synced: true });
   return pushCloudData(uid);
+};
+
+export const pickSyncedLook = (localLook, localAt, cloudLook) => {
+  if (!cloudLook || typeof cloudLook !== "object") return null;
+  const cloudAt = Number(cloudLook.updatedAt) || 0;
+  const localEmpty = !localAt && !hasLook(localLook);
+  if (localEmpty) return hasLook(cloudLook) || cloudAt ? cloudLook : null;
+  return cloudAt > localAt ? cloudLook : null;
+};
+
+export const readHistory = () => readContinueWatching();
+
+export const deleteCloudData = async (uid) => {
+  if (!uid) return false;
+  try {
+    await deleteUserData(uid);
+    lastPushedByUid.delete(uid);
+    setStatus({ state: "idle", message: "", at: Date.now() });
+    return true;
+  } catch (error) {
+    if (error?.code === "not-found") return true;
+    setStatus({ state: "error", message: explainFailure(error), at: Date.now() });
+    return false;
+  }
 };
 
 let debounceTimer = null;
@@ -228,6 +259,7 @@ export const startLocalWatcher = (uid) => {
 
   window.addEventListener("mylist-updated", onChange);
   window.addEventListener("history-updated", onChange);
+  window.addEventListener(LOOK_EVENT, onChange);
   window.addEventListener("history-progress", onProgress);
   window.addEventListener("storage", onProgress);
   document.addEventListener("visibilitychange", onVisibility);
@@ -235,6 +267,7 @@ export const startLocalWatcher = (uid) => {
   return () => {
     window.removeEventListener("mylist-updated", onChange);
     window.removeEventListener("history-updated", onChange);
+    window.removeEventListener(LOOK_EVENT, onChange);
     window.removeEventListener("history-progress", onProgress);
     window.removeEventListener("storage", onProgress);
     document.removeEventListener("visibilitychange", onVisibility);

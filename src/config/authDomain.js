@@ -169,10 +169,12 @@ export const resolveAuthDomain = async ({
   const override = normaliseDomain(env?.VITE_FIREBASE_AUTH_DOMAIN ?? "");
   if (override) return override;
 
-  const cached = freshCache(storage, now);
-  if (cached) return cached.ready ? primary : fallback;
-
-  const ready = await probeAuthDomain(primary, { fetchImpl });
-  writeAuthDomainCache(storage, { ready, at: now });
-  return ready ? primary : fallback;
+  // One-click Google must open Firebase Hosting's helper, not the site's SPA
+  // at theogpiratebot.online/__/auth/handler. Always use the known-working host
+  // unless an env override is set.
+  void primary;
+  void storage;
+  void fetchImpl;
+  void now;
+  return fallback;
 };

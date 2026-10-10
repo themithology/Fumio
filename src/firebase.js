@@ -1,7 +1,6 @@
 import { getApp, getApps, initializeApp } from "firebase/app";
 import {
   FALLBACK_AUTH_DOMAIN,
-  PRIMARY_AUTH_DOMAIN,
   normaliseDomain,
   resolveAuthDomain,
 } from "./config/authDomain.js";
@@ -11,8 +10,10 @@ import {
 // service (src/utils/dbApi.js).
 const firebaseConfig = {
   apiKey: import.meta.env.VITE_FIREBASE_API_KEY || "AIzaSyDapNgnKdO8l_t7BJPCO8IsbL73aILA1cI",
+  // Google one-tap must load Firebase Hosting's helper
+  // (https://ogpb-331d5.firebaseapp.com/__/auth/handler), not the site SPA.
   authDomain:
-    normaliseDomain(import.meta.env.VITE_FIREBASE_AUTH_DOMAIN) || PRIMARY_AUTH_DOMAIN,
+    normaliseDomain(import.meta.env.VITE_FIREBASE_AUTH_DOMAIN) || FALLBACK_AUTH_DOMAIN,
   projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID || "ogpb-331d5",
   storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET || "ogpb-331d5.firebasestorage.app",
   messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID || "352929408479",
