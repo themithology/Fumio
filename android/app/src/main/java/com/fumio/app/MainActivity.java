@@ -315,6 +315,8 @@ public class MainActivity extends BridgeActivity {
                     openAppPlayerFromWatch(url);
                     return true;
                 }
+                String livePath = url.getPath();
+                if (livePath != null && livePath.toLowerCase(Locale.US).contains("watch-party")) return true;
                 return false;
             }
             if (isOwnOrigin(url)) {

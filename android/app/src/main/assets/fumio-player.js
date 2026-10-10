@@ -7,8 +7,25 @@
 
   var style = document.createElement("style");
   style.textContent =
-    'iframe[src*="vidsrc"],iframe[src*="videasy"],iframe[src*="vidfast"],iframe[src*="vidstuck"],iframe[src*="bingr"],iframe[src*="zxcstream"],iframe[src*="nxsha"],iframe[src*="2embed"],iframe[src*="multiembed"],iframe[src*="autoembed"],iframe[src*="smashy"],iframe[src*="vidlink"],iframe[src*="embed.su"],iframe[src*="tgvid"],iframe[src*="megaplay"],iframe[src*="zoko"],iframe[src*="4animo"]{display:none!important}';
+    'iframe[src*="vidsrc"],iframe[src*="videasy"],iframe[src*="vidfast"],iframe[src*="vidstuck"],iframe[src*="bingr"],iframe[src*="zxcstream"],iframe[src*="nxsha"],iframe[src*="2embed"],iframe[src*="multiembed"],iframe[src*="autoembed"],iframe[src*="smashy"],iframe[src*="vidlink"],iframe[src*="embed.su"],iframe[src*="tgvid"],iframe[src*="megaplay"],iframe[src*="zoko"],iframe[src*="4animo"]{display:none!important}' +
+    'a[href*="watch-party"],a[href*="watchparty"],[data-nav="watch-party"]{display:none!important}';
   document.documentElement.appendChild(style);
+
+  function hideWatchParty() {
+    var nodes = document.querySelectorAll("a,button,span");
+    for (var i = 0; i < nodes.length; i += 1) {
+      var text = (nodes[i].textContent || "").replace(/\s+/g, " ").trim().toLowerCase();
+      if (text !== "watch party") continue;
+      var el = nodes[i].closest("a,button,li") || nodes[i];
+      el.style.display = "none";
+    }
+  }
+  hideWatchParty();
+  try {
+    new MutationObserver(hideWatchParty).observe(document.documentElement, { childList: true, subtree: true });
+  } catch (e) {
+    /* observer optional */
+  }
 
   function parseWatch(href) {
     if (!href) return null;
@@ -107,6 +124,11 @@
         event.preventDefault();
         event.stopPropagation();
         native.signInWithGoogle();
+        return;
+      }
+      if (btn && /watch party/.test(label)) {
+        event.preventDefault();
+        event.stopPropagation();
         return;
       }
       if (/^\/live-tv\b/i.test(location.pathname || "")) return;

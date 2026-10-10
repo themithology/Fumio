@@ -5,9 +5,14 @@ import android.app.Dialog;
 import android.content.pm.ActivityInfo;
 import android.content.res.AssetManager;
 import android.net.Uri;
+import android.os.Build;
+import android.view.View;
 import android.view.ViewGroup;
+import android.view.Window;
+import android.view.WindowManager;
 import android.webkit.CookieManager;
 import android.webkit.JavascriptInterface;
+import android.webkit.WebChromeClient;
 import android.webkit.WebResourceRequest;
 import android.webkit.WebResourceResponse;
 import android.webkit.WebSettings;
@@ -27,7 +32,10 @@ final class FumioPlayerOverlay {
     private final Activity activity;
     private final Host host;
     private Dialog dialog;
+    private FrameLayout root;
     private WebView webView;
+    private View customView;
+    private WebChromeClient.CustomViewCallback customCallback;
     private int previousOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED;
 
     FumioPlayerOverlay(Activity activity, Host host) {
@@ -52,14 +60,28 @@ final class FumioPlayerOverlay {
         if (webView == null) webView = buildPlayerView();
         if (dialog == null) {
             dialog = new Dialog(activity, android.R.style.Theme_Black_NoTitleBar_Fullscreen);
-            dialog.setContentView(webView);
+            Window window = dialog.getWindow();
+            if (window != null) {
+                window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+                window.setFlags(
+                    WindowManager.LayoutParams.FLAG_FULLSCREEN,
+                    WindowManager.LayoutParams.FLAG_FULLSCREEN
+                );
+                if (Build.VERSION.SDK_INT >= 28) {
+                    window.getAttributes().layoutInDisplayCutoutMode =
+                        WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES;
+                }
+            }
+            dialog.setContentView(root);
             dialog.setOnCancelListener((d) -> close());
         }
         if (!dialog.isShowing()) dialog.show();
+        hideSystemUi();
         webView.loadUrl("https://localhost" + path);
     }
 
     void close() {
+        hideCustomView();
         try {
             if (dialog != null && dialog.isShowing()) dialog.dismiss();
         } catch (Exception ignored) {
@@ -78,6 +100,9 @@ final class FumioPlayerOverlay {
     private void destroyView() {
         WebView view = webView;
         webView = null;
+        root = null;
+        customView = null;
+        customCallback = null;
         if (view == null) return;
         try {
             if (view.getParent() instanceof ViewGroup) {
@@ -90,6 +115,11 @@ final class FumioPlayerOverlay {
     }
 
     private WebView buildPlayerView() {
+        root = new FrameLayout(activity);
+        root.setLayoutParams(
+            new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
+        );
+        root.setBackgroundColor(0xFF000000);
         WebView view = new WebView(activity);
         view.setLayoutParams(
             new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
@@ -99,6 +129,8 @@ final class FumioPlayerOverlay {
         settings.setDomStorageEnabled(true);
         settings.setMediaPlaybackRequiresUserGesture(false);
         settings.setSupportMultipleWindows(false);
+        settings.setLoadWithOverviewMode(true);
+        settings.setUseWideViewPort(true);
         String ua = settings.getUserAgentString();
         if (ua != null) {
             settings.setUserAgentString(ua.replace("; wv", "").replace("Version/4.0 ", ""));
@@ -140,8 +172,71 @@ final class FumioPlayerOverlay {
                 }
             }
         );
+        view.setWebChromeClient(
+            new WebChromeClient() {
+                @Override
+                public void onShowCustomView(View video, CustomViewCallback callback) {
+                    if (customView != null) {
+                        callback.onCustomViewHidden();
+                        return;
+                    }
+                    customView = video;
+                    customCallback = callback;
+                    video.setBackgroundColor(0xFF000000);
+                    root.addView(
+                        video,
+                        new FrameLayout.LayoutParams(
+                            ViewGroup.LayoutParams.MATCH_PARENT,
+                            ViewGroup.LayoutParams.MATCH_PARENT
+                        )
+                    );
+                    webView.setVisibility(View.GONE);
+                    hideSystemUi();
+                }
+
+                @Override
+                public void onHideCustomView() {
+                    hideCustomView();
+                }
+            }
+        );
         view.addJavascriptInterface(new Bridge(), "FumioNative");
+        root.addView(view);
         return view;
+    }
+
+    private void hideCustomView() {
+        if (customView == null) return;
+        try {
+            root.removeView(customView);
+        } catch (Exception ignored) {
+            /* already removed */
+        }
+        customView = null;
+        if (webView != null) webView.setVisibility(View.VISIBLE);
+        WebChromeClient.CustomViewCallback callback = customCallback;
+        customCallback = null;
+        if (callback != null) {
+            try {
+                callback.onCustomViewHidden();
+            } catch (Exception ignored) {
+                /* player already exited fullscreen */
+            }
+        }
+        hideSystemUi();
+    }
+
+    private void hideSystemUi() {
+        if (dialog == null || dialog.getWindow() == null) return;
+        View decor = dialog.getWindow().getDecorView();
+        decor.setSystemUiVisibility(
+            View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
+                | View.SYSTEM_UI_FLAG_FULLSCREEN
+                | View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
+                | View.SYSTEM_UI_FLAG_LAYOUT_STABLE
+                | View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
+                | View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
+        );
     }
 
     private static boolean isSpaRoute(String path) {

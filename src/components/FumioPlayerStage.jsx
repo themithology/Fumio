@@ -138,8 +138,10 @@ export default function FumioPlayerStage({
             onLoad={handleLoad}
             onError={() => setPhase("error")}
             className="absolute inset-0 h-full w-full"
-            allow="autoplay; encrypted-media; fullscreen"
+            allow="autoplay; encrypted-media; fullscreen; picture-in-picture"
             allowFullScreen
+            webkitallowfullscreen="true"
+            mozallowfullscreen="true"
             frameBorder="0"
             title={`${source.name} player`}
           />
