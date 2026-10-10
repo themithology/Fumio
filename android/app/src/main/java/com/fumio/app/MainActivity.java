@@ -45,6 +45,7 @@ public class MainActivity extends BridgeActivity {
     private WebView popupView;
     private String pendingAuthToken;
     private volatile boolean googleRedirectActive;
+    private final InAppGoogleAuth inAppGoogleAuth = new InAppGoogleAuth();
 
     @Override
     public void onCreate(Bundle savedInstanceState) {
@@ -104,6 +105,24 @@ public class MainActivity extends BridgeActivity {
         }
 
         @JavascriptInterface
+        public void signInWithGoogle() {
+            inAppGoogleAuth.start(
+                MainActivity.this,
+                new InAppGoogleAuth.Result() {
+                    @Override
+                    public void onIdToken(String idToken) {
+                        runOnUiThread(() -> acceptGoogleToken(idToken));
+                    }
+
+                    @Override
+                    public void onError(String message) {
+                        runOnUiThread(() -> emitGoogleError(message));
+                    }
+                }
+            );
+        }
+
+        @JavascriptInterface
         public void beginGoogleRedirect() {
             googleRedirectActive = true;
         }
@@ -126,6 +145,20 @@ public class MainActivity extends BridgeActivity {
         if (data.getScheme() == null || !data.getScheme().equalsIgnoreCase("com.fumio.app")) return;
         String token = data.getQueryParameter("idToken");
         acceptGoogleToken(token);
+    }
+
+    private void emitGoogleError(String message) {
+        Bridge bridge = getBridge();
+        if (bridge == null || bridge.getWebView() == null) return;
+        try {
+            String quoted = JSONObject.quote(message == null || message.isEmpty() ? "Google sign-in failed." : message);
+            bridge.getWebView().evaluateJavascript(
+                "(function(m){try{window.dispatchEvent(new CustomEvent('fumio-native-auth-error',{detail:{message:m}}));}catch(e){}})(" + quoted + ")",
+                null
+            );
+        } catch (Exception ignored) {
+            // Form can be tried again.
+        }
     }
 
     private void acceptGoogleToken(String token) {
@@ -502,6 +535,7 @@ public class MainActivity extends BridgeActivity {
     @Override
     public void onDestroy() {
         try {
+            inAppGoogleAuth.dismiss();
             dismissPopup();
         } catch (Exception ignored) {
             // Activity is already going away.

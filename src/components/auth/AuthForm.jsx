@@ -9,6 +9,7 @@ import {
   signInWithGoogle,
   signUpWithEmail,
 } from "../../utils/auth.js";
+import { isNativeApp } from "../../utils/externalLinks.js";
 
 const inEmbeddedFrame = () => {
   try {
@@ -92,6 +93,11 @@ export default function AuthForm({ initialMode = "signin" }) {
   const google = () => {
     setError("");
     setMessage("");
+    if (isNativeApp() && window.FumioNative?.signInWithGoogle) {
+      setBusy(true);
+      window.FumioNative.signInWithGoogle();
+      return;
+    }
     const pending = signInWithGoogle();
     setBusy(true);
     pending

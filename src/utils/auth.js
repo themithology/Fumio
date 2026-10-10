@@ -76,7 +76,9 @@ export const ensureAuthInit = () => {
       const cred = await mod.getRedirectResult(auth);
       if (cred?.user) setState({ ready: true, user: cred.user, initError: "" });
     } catch (error) {
-      setState({ initError: authErrorMessage(error) });
+      if (error?.code !== "auth/argument-error") {
+        setState({ initError: authErrorMessage(error) });
+      }
     }
     try {
       window.FumioNative?.endGoogleRedirect?.();
@@ -152,6 +154,7 @@ const friendlyMessages = {
   "auth/api-key-not-valid": "The Firebase web configuration is not valid for this app.",
   "auth/timeout": "Firebase Auth did not respond. Check the connection, authorized domain, and enabled sign-in provider.",
   "auth/operation-not-supported-in-this-environment": "Google sign-in is not available in this window. Open Sign in in a new tab.",
+  "auth/argument-error": "Google sign-in could not start. Try Continue with Google again.",
 };
 
 export const authErrorMessage = (error) => {
@@ -235,24 +238,16 @@ export const signInWithGoogleIdToken = async (idToken) => {
   return result.user;
 };
 
-const startGoogleRedirect = (auth, mod) => {
-  try {
-    window.FumioNative?.beginGoogleRedirect?.();
-  } catch {
-    /* web */
-  }
-  const provider = new mod.GoogleAuthProvider();
-  return mod.signInWithRedirect(auth, provider).then(() => null);
-};
-
 const fallbackGoogleSignIn = async (auth, mod, error) => {
   if (!popupBlocked(error)) throw error;
-  if (isEmbeddedFrame()) {
+  if (isEmbeddedFrame() || isNativeApp()) {
     const blocked = new Error(friendlyMessages["auth/popup-blocked"]);
     blocked.code = "auth/popup-blocked";
     throw blocked;
   }
-  return startGoogleRedirect(auth, mod);
+  const provider = new mod.GoogleAuthProvider();
+  await mod.signInWithRedirect(auth, provider);
+  return null;
 };
 
 export const signInWithGoogle = () => {
@@ -267,12 +262,7 @@ export const signInWithGoogle = () => {
   };
 
   const run = (auth, mod) =>
-    applyDomain(auth).then(() => {
-      // Same WebView — Google stays in the app. A second window/browser is
-      // what caused "missing initial state" (the handler had no session).
-      if (isNativeApp()) return startGoogleRedirect(auth, mod);
-      return startGooglePopup(auth, mod).catch((error) => fallbackGoogleSignIn(auth, mod, error));
-    });
+    applyDomain(auth).then(() => startGooglePopup(auth, mod).catch((error) => fallbackGoogleSignIn(auth, mod, error)));
 
   const auth = getFirebaseAuthSync();
   const mod = getFirebaseAuthModuleSync();

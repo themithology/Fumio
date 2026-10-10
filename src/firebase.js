@@ -74,13 +74,9 @@ if (isConfigured) ensureAuthDomainReady();
 const cacheAuth = async () => {
   const mod = await import("firebase/auth");
   authModule = mod;
-  try {
-    authInstance = mod.initializeAuth(app, {
-      persistence: [mod.indexedDBLocalPersistence, mod.browserLocalPersistence],
-    });
-  } catch {
-    authInstance = mod.getAuth(app);
-  }
+  // getAuth() wires the browser popup/redirect resolver. initializeAuth
+  // without that resolver throws auth/argument-error on Google sign-in.
+  authInstance = mod.getAuth(app);
   const domain = await ensureAuthDomainReady().catch(() => FALLBACK_AUTH_DOMAIN);
   applyAuthDomain(domain);
   return authInstance;
