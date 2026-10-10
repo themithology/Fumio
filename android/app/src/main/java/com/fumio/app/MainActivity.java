@@ -2,6 +2,7 @@ package com.fumio.app;
 
 import android.app.Dialog;
 import android.content.Intent;
+import android.content.pm.ActivityInfo;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
@@ -17,14 +18,20 @@ import android.webkit.JsResult;
 import android.webkit.PermissionRequest;
 import android.webkit.ValueCallback;
 import android.webkit.WebChromeClient;
+import android.webkit.WebResourceError;
 import android.webkit.WebResourceRequest;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
 import android.widget.FrameLayout;
+import androidx.activity.OnBackPressedCallback;
 import com.getcapacitor.Bridge;
 import com.getcapacitor.BridgeActivity;
 import com.getcapacitor.BridgeWebViewClient;
+import java.io.BufferedReader;
+import java.io.InputStream;
+import java.io.InputStreamReader;
+import java.nio.charset.StandardCharsets;
 import java.util.Locale;
 import org.json.JSONObject;
 
@@ -41,11 +48,15 @@ import org.json.JSONObject;
  */
 public class MainActivity extends BridgeActivity {
 
+    private static final String LIVE_ORIGIN = "https://theogpiratebot.online";
     private Dialog popupDialog;
     private WebView popupView;
     private String pendingAuthToken;
     private volatile boolean googleRedirectActive;
     private final InAppGoogleAuth inAppGoogleAuth = new InAppGoogleAuth();
+    private String playerScript = "";
+    private boolean openedLive;
+    private boolean liveHistoryCleared;
 
     @Override
     public void onCreate(Bundle savedInstanceState) {
@@ -55,7 +66,9 @@ public class MainActivity extends BridgeActivity {
             if (bridge == null) return;
             WebView webView = bridge.getWebView();
             if (webView == null) return;
+            playerScript = readAsset("fumio-player.js");
             installClients(webView, bridge);
+            installBackHandler();
             handleAuthIntent(getIntent());
         } catch (Exception ignored) {
             // Prefer a running Capacitor shell over a crash loop.
@@ -86,6 +99,7 @@ public class MainActivity extends BridgeActivity {
         settings.setJavaScriptCanOpenWindowsAutomatically(true);
         settings.setJavaScriptEnabled(true);
         settings.setDomStorageEnabled(true);
+        settings.setMediaPlaybackRequiresUserGesture(false);
         String ua = settings.getUserAgentString();
         if (ua != null) {
             settings.setUserAgentString(ua.replace("; wv", "").replace("Version/4.0 ", ""));
@@ -136,6 +150,16 @@ public class MainActivity extends BridgeActivity {
                     bridge.getWebView().clearHistory();
                 }
             });
+        }
+
+        @JavascriptInterface
+        public void lockLandscape() {
+            runOnUiThread(() -> setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE));
+        }
+
+        @JavascriptInterface
+        public void unlockOrientation() {
+            runOnUiThread(() -> setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED));
         }
 
         @JavascriptInterface
@@ -254,6 +278,13 @@ public class MainActivity extends BridgeActivity {
 
         private Boolean handleExternalUrl(Uri url, boolean mainFrame) {
             if (url == null) return true;
+            if (isLiveSite(url)) {
+                if (mainFrame && isWatchPath(url)) {
+                    openAdFreePlayer(url);
+                    return true;
+                }
+                return false;
+            }
             if (isOwnOrigin(url)) {
                 if (googleRedirectActive && mainFrame) stayOnApp();
                 return null;
@@ -264,17 +295,50 @@ public class MainActivity extends BridgeActivity {
                 return true;
             }
             if (isAuthProvider(url)) {
-                // Only the tap-started Google redirect may own the main frame.
-                // A later helper popup would otherwise replace /account.
-                return !googleRedirectActive;
+                // Live site Google stays in this WebView. Local-app Google still
+                // uses the overlay flag so a helper popup cannot steal /account.
+                if (googleRedirectActive || isLiveSite(currentUri())) return false;
+                return true;
             }
             return true;
         }
 
         @Override
+        public void doUpdateVisitedHistory(WebView view, String url, boolean isReload) {
+            super.doUpdateVisitedHistory(view, url, isReload);
+            Uri uri = url == null ? null : Uri.parse(url);
+            if (!isLiveSite(uri) || !isWatchPath(uri)) return;
+            openAdFreePlayer(uri);
+            if (view.canGoBack()) view.goBack();
+        }
+
+        @Override
         public void onPageFinished(WebView view, String url) {
             super.onPageFinished(view, url);
+            Uri uri = url == null ? null : Uri.parse(url);
+            if (!openedLive && isOwnOrigin(uri)) {
+                openedLive = true;
+                view.loadUrl(LIVE_ORIGIN + "/");
+                return;
+            }
+            if (isLiveSite(uri)) {
+                if (!liveHistoryCleared) {
+                    liveHistoryCleared = true;
+                    view.clearHistory();
+                }
+                injectPlayerScript(view);
+            }
             deliverPendingAuthToken();
+        }
+
+        @Override
+        public void onReceivedError(WebView view, WebResourceRequest request, WebResourceError error) {
+            if (request != null && request.isForMainFrame() && isLiveSite(request.getUrl())) {
+                Bridge bridge = getBridge();
+                String app = bridge != null ? bridge.getAppUrl() : null;
+                if (app != null && !app.isEmpty()) view.loadUrl(app);
+            }
+            super.onReceivedError(view, request, error);
         }
     }
 
@@ -519,6 +583,89 @@ public class MainActivity extends BridgeActivity {
             appScheme.equalsIgnoreCase(url.getScheme());
     }
 
+    private void injectPlayerScript(WebView view) {
+        if (view == null || playerScript == null || playerScript.isEmpty()) return;
+        view.evaluateJavascript(playerScript, null);
+    }
+
+    private void openAdFreePlayer(Uri url) {
+        Bridge bridge = getBridge();
+        if (bridge == null || bridge.getWebView() == null || url == null) return;
+        WebView view = bridge.getWebView();
+        injectPlayerScript(view);
+        String quoted = JSONObject.quote(url.toString());
+        view.evaluateJavascript(
+            "(function(u){try{return window.__fumioOpenFromUrl?window.__fumioOpenFromUrl(u):false;}catch(e){return false;}})("
+                + quoted
+                + ")",
+            null
+        );
+    }
+
+    private Uri currentUri() {
+        Bridge bridge = getBridge();
+        if (bridge == null || bridge.getWebView() == null) return null;
+        String url = bridge.getWebView().getUrl();
+        return url == null || url.isEmpty() ? null : Uri.parse(url);
+    }
+
+    private boolean isLiveSite(Uri url) {
+        return hostMatches(url, "theogpiratebot.online");
+    }
+
+    private boolean isWatchPath(Uri url) {
+        if (url == null) return false;
+        String path = url.getPath();
+        return path != null && path.matches("(?i)^/watch/(movie|tv|anime)/[0-9]+.*");
+    }
+
+    private String readAsset(String name) {
+        StringBuilder out = new StringBuilder();
+        try (InputStream in = getAssets().open(name);
+            BufferedReader reader = new BufferedReader(new InputStreamReader(in, StandardCharsets.UTF_8))) {
+            String line;
+            while ((line = reader.readLine()) != null) {
+                out.append(line).append('\n');
+            }
+        } catch (Exception ignored) {
+            return "";
+        }
+        return out.toString();
+    }
+
+    private void installBackHandler() {
+        getOnBackPressedDispatcher().addCallback(
+            this,
+            new OnBackPressedCallback(true) {
+                @Override
+                public void handleOnBackPressed() {
+                    if (popupDialog != null && popupDialog.isShowing()) {
+                        dismissPopup();
+                        return;
+                    }
+                    Bridge bridge = getBridge();
+                    WebView webView = bridge != null ? bridge.getWebView() : null;
+                    if (webView == null) {
+                        setEnabled(false);
+                        getOnBackPressedDispatcher().onBackPressed();
+                        return;
+                    }
+                    webView.evaluateJavascript(
+                        "(function(){try{return window.__fumioClosePlayer?window.__fumioClosePlayer():false;}catch(e){return false;}})()",
+                        (value) -> {
+                            if ("true".equals(value)) return;
+                            if (webView.canGoBack()) webView.goBack();
+                            else {
+                                setEnabled(false);
+                                getOnBackPressedDispatcher().onBackPressed();
+                            }
+                        }
+                    );
+                }
+            }
+        );
+    }
+
     private boolean isDiscord(Uri url) {
         return hostMatches(url, "discord.com", "discord.gg", "discordapp.com", "discordapp.net");
     }
@@ -549,7 +696,7 @@ public class MainActivity extends BridgeActivity {
         if (scheme.equals("about") || scheme.equals("javascript") || scheme.equals("data") || scheme.equals("blob")) {
             return true;
         }
-        return isOwnOrigin(url) || isAuthProvider(url);
+        return isOwnOrigin(url) || isLiveSite(url) || isAuthProvider(url);
     }
 
     private boolean hostMatches(Uri url, String... allowed) {
@@ -566,6 +713,7 @@ public class MainActivity extends BridgeActivity {
     @Override
     public void onDestroy() {
         try {
+            setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED);
             inAppGoogleAuth.dismiss();
             dismissPopup();
         } catch (Exception ignored) {
