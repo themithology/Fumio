@@ -74,7 +74,13 @@ if (isConfigured) ensureAuthDomainReady();
 const cacheAuth = async () => {
   const mod = await import("firebase/auth");
   authModule = mod;
-  authInstance = mod.getAuth(app);
+  try {
+    authInstance = mod.initializeAuth(app, {
+      persistence: [mod.indexedDBLocalPersistence, mod.browserLocalPersistence],
+    });
+  } catch {
+    authInstance = mod.getAuth(app);
+  }
   const domain = await ensureAuthDomainReady().catch(() => FALLBACK_AUTH_DOMAIN);
   applyAuthDomain(domain);
   return authInstance;

@@ -44,6 +44,7 @@ public class MainActivity extends BridgeActivity {
     private Dialog popupDialog;
     private WebView popupView;
     private String pendingAuthToken;
+    private volatile boolean googleRedirectActive;
 
     @Override
     public void onCreate(Bundle savedInstanceState) {
@@ -102,6 +103,21 @@ public class MainActivity extends BridgeActivity {
             runOnUiThread(() -> openExternal(uri));
         }
 
+        @JavascriptInterface
+        public void beginGoogleRedirect() {
+            googleRedirectActive = true;
+        }
+
+        @JavascriptInterface
+        public void endGoogleRedirect() {
+            googleRedirectActive = false;
+            runOnUiThread(() -> {
+                Bridge bridge = getBridge();
+                if (bridge != null && bridge.getWebView() != null) {
+                    bridge.getWebView().clearHistory();
+                }
+            });
+        }
     }
 
     private void handleAuthIntent(Intent intent) {
@@ -174,13 +190,20 @@ public class MainActivity extends BridgeActivity {
 
         private Boolean handleExternalUrl(Uri url, boolean mainFrame) {
             if (url == null) return true;
-            if (isOwnOrigin(url)) return null;
+            if (isOwnOrigin(url)) {
+                if (googleRedirectActive && mainFrame) stayOnApp();
+                return null;
+            }
             if (!mainFrame) return false;
             if (isDiscord(url)) {
                 openExternal(url);
                 return true;
             }
-            if (isAuthProvider(url)) return false;
+            if (isAuthProvider(url)) {
+                // Only the tap-started Google redirect may own the main frame.
+                // A later helper popup would otherwise replace /account.
+                return !googleRedirectActive;
+            }
             return true;
         }
 
@@ -322,13 +345,17 @@ public class MainActivity extends BridgeActivity {
         return popup;
     }
 
+    private void stayOnApp() {
+        googleRedirectActive = false;
+        Bridge bridge = getBridge();
+        if (bridge != null && bridge.getWebView() != null) {
+            bridge.getWebView().clearHistory();
+        }
+    }
+
     private boolean handlePopupUrl(Uri url) {
         if (url == null) return true;
-        if (isAuthProvider(url) || isOwnOrigin(url)) {
-            Bridge bridge = getBridge();
-            if (bridge != null && bridge.getWebView() != null) {
-                bridge.getWebView().loadUrl(url.toString());
-            }
+        if (isAuthProvider(url) && !googleRedirectActive) {
             dismissPopup();
             return true;
         }

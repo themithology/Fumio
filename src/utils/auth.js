@@ -70,6 +70,30 @@ export const ensureAuthInit = () => {
     }
 
     const mod = await getFirebaseAuthModule();
+
+    // Consume the Google redirect BEFORE anything else can start another one.
+    try {
+      const cred = await mod.getRedirectResult(auth);
+      if (cred?.user) setState({ ready: true, user: cred.user, initError: "" });
+    } catch (error) {
+      setState({ initError: authErrorMessage(error) });
+    }
+    try {
+      window.FumioNative?.endGoogleRedirect?.();
+    } catch {
+      /* web */
+    }
+    if (isNativeApp() && typeof window !== "undefined") {
+      try {
+        const url = new URL(window.location.href);
+        if (url.search || url.hash) {
+          window.history.replaceState(window.history.state, "", url.pathname || "/account");
+        }
+      } catch {
+        /* ignore */
+      }
+    }
+
     await new Promise((resolve) => {
       let settled = false;
       const finish = () => {
@@ -93,12 +117,6 @@ export const ensureAuthInit = () => {
       // spinner forever. The listener will still update the snapshot later.
       setTimeout(finish, 4000);
     });
-
-    try {
-      await mod.getRedirectResult(auth);
-    } catch (error) {
-      setState({ initError: authErrorMessage(error) });
-    }
     return auth;
   })().catch((error) => {
     console.warn("Firebase Auth initialization failed:", error?.code || error?.message);
@@ -218,6 +236,11 @@ export const signInWithGoogleIdToken = async (idToken) => {
 };
 
 const startGoogleRedirect = (auth, mod) => {
+  try {
+    window.FumioNative?.beginGoogleRedirect?.();
+  } catch {
+    /* web */
+  }
   const provider = new mod.GoogleAuthProvider();
   return mod.signInWithRedirect(auth, provider).then(() => null);
 };
