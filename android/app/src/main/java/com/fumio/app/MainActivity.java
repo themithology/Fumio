@@ -66,7 +66,8 @@ public class MainActivity extends BridgeActivity {
     private String liveReturnUrl = "";
     private boolean openedLive;
     private boolean liveHistoryCleared;
-    private boolean playerActive;
+    private boolean liveFailed;
+    private volatile boolean playerActive;
     private long lastPlayerOpenAt;
 
     @Override
@@ -333,20 +334,23 @@ public class MainActivity extends BridgeActivity {
 
         @Override
         public WebResourceResponse shouldInterceptRequest(WebView view, WebResourceRequest request) {
-            if (
-                request != null &&
-                !request.isForMainFrame() &&
-                !playerActive &&
-                !isOwnOrigin(currentUri()) &&
-                !isLiveTvPage(currentUri()) &&
-                isPlayerEmbed(request.getUrl())
-            ) {
-                view.post(() -> openAppPlayerFromEmbed(request.getUrl()));
-                return new WebResourceResponse(
-                    "text/plain",
-                    "utf-8",
-                    new ByteArrayInputStream(new byte[0])
-                );
+            try {
+                if (
+                    !playerActive &&
+                    request != null &&
+                    !request.isForMainFrame() &&
+                    isPlayerEmbed(request.getUrl())
+                ) {
+                    final Uri embed = request.getUrl();
+                    view.post(() -> openAppPlayerFromEmbed(embed));
+                    return new WebResourceResponse(
+                        "text/html",
+                        "utf-8",
+                        new ByteArrayInputStream(new byte[0])
+                    );
+                }
+            } catch (Exception ignored) {
+                // Never crash the WebView thread on a probe.
             }
             return super.shouldInterceptRequest(view, request);
         }
@@ -355,9 +359,11 @@ public class MainActivity extends BridgeActivity {
         public void doUpdateVisitedHistory(WebView view, String url, boolean isReload) {
             super.doUpdateVisitedHistory(view, url, isReload);
             Uri uri = url == null ? null : Uri.parse(url);
-            if (!isLiveSite(uri) || !isWatchPath(uri)) return;
+            if (!isLiveSite(uri) || !isWatchPath(uri) || playerActive) return;
             openAppPlayerFromWatch(uri);
-            if (view.canGoBack()) view.goBack();
+            view.post(() -> {
+                if (view.canGoBack()) view.goBack();
+            });
         }
 
         @Override
@@ -365,9 +371,9 @@ public class MainActivity extends BridgeActivity {
             super.onPageFinished(view, url);
             Uri uri = url == null ? null : Uri.parse(url);
             if (isOwnOrigin(uri)) rememberLocalAppUrl();
-            if (!openedLive && isOwnOrigin(uri)) {
+            if (!openedLive && !liveFailed && isOwnOrigin(uri)) {
                 openedLive = true;
-                view.loadUrl(LIVE_ORIGIN + "/");
+                view.post(() -> view.loadUrl(LIVE_ORIGIN + "/"));
                 return;
             }
             if (isOwnOrigin(uri) && openedLive) {
@@ -375,11 +381,14 @@ public class MainActivity extends BridgeActivity {
                     playerActive = true;
                     return;
                 }
-                closeAppPlayer();
+                if (playerActive) {
+                    view.post(this::closePlayerSafe);
+                }
                 return;
             }
             if (isLiveSite(uri)) {
                 playerActive = false;
+                liveFailed = false;
                 if (!liveHistoryCleared) {
                     liveHistoryCleared = true;
                     view.clearHistory();
@@ -389,12 +398,25 @@ public class MainActivity extends BridgeActivity {
             deliverPendingAuthToken();
         }
 
+        private void closePlayerSafe() {
+            closeAppPlayer();
+        }
+
         @Override
         public void onReceivedError(WebView view, WebResourceRequest request, WebResourceError error) {
-            if (request != null && request.isForMainFrame() && isLiveSite(request.getUrl())) {
-                Bridge bridge = getBridge();
-                String app = bridge != null ? bridge.getAppUrl() : null;
-                if (app != null && !app.isEmpty()) view.loadUrl(app);
+            if (
+                !playerActive &&
+                !liveFailed &&
+                request != null &&
+                request.isForMainFrame() &&
+                isLiveSite(request.getUrl())
+            ) {
+                liveFailed = true;
+                openedLive = true;
+                rememberLocalAppUrl();
+                if (localAppUrl != null && !localAppUrl.isEmpty()) {
+                    view.post(() -> view.loadUrl(localAppUrl + "/"));
+                }
             }
             super.onReceivedError(view, request, error);
         }
@@ -706,19 +728,23 @@ public class MainActivity extends BridgeActivity {
     private void closeAppPlayer() {
         Bridge bridge = getBridge();
         if (bridge == null || bridge.getWebView() == null) return;
-        Uri current = currentUri();
-        if (isLiveSite(current) && !playerActive) return;
+        if (!playerActive && isLiveSite(currentUri())) return;
         playerActive = false;
         setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED);
+        if (liveFailed) return;
         String back = liveReturnUrl != null && !liveReturnUrl.isEmpty() ? liveReturnUrl : LIVE_ORIGIN + "/";
         bridge.getWebView().loadUrl(back);
     }
 
     private Uri currentUri() {
-        Bridge bridge = getBridge();
-        if (bridge == null || bridge.getWebView() == null) return null;
-        String url = bridge.getWebView().getUrl();
-        return url == null || url.isEmpty() ? null : Uri.parse(url);
+        try {
+            Bridge bridge = getBridge();
+            if (bridge == null || bridge.getWebView() == null) return null;
+            String url = bridge.getWebView().getUrl();
+            return url == null || url.isEmpty() ? null : Uri.parse(url);
+        } catch (Exception ignored) {
+            return null;
+        }
     }
 
     private boolean isLiveSite(Uri url) {
