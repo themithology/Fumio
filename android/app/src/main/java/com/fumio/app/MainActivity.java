@@ -25,9 +25,6 @@ import android.widget.FrameLayout;
 import com.getcapacitor.Bridge;
 import com.getcapacitor.BridgeActivity;
 import com.getcapacitor.BridgeWebViewClient;
-import java.io.ByteArrayOutputStream;
-import java.io.InputStream;
-import java.nio.charset.StandardCharsets;
 import java.util.Locale;
 import org.json.JSONObject;
 
@@ -47,7 +44,7 @@ public class MainActivity extends BridgeActivity {
     private Dialog popupDialog;
     private WebView popupView;
     private String pendingAuthToken;
-    private final LocalAuthServer localAuthServer = new LocalAuthServer();
+    private final InAppGoogleAuth inAppGoogleAuth = new InAppGoogleAuth();
 
     @Override
     public void onCreate(Bundle savedInstanceState) {
@@ -88,6 +85,10 @@ public class MainActivity extends BridgeActivity {
         settings.setJavaScriptCanOpenWindowsAutomatically(true);
         settings.setJavaScriptEnabled(true);
         settings.setDomStorageEnabled(true);
+        String ua = settings.getUserAgentString();
+        if (ua != null) {
+            settings.setUserAgentString(ua.replace("; wv", "").replace("Version/4.0 ", ""));
+        }
     }
 
     public class NativeBridge {
@@ -103,15 +104,21 @@ public class MainActivity extends BridgeActivity {
         }
 
         @JavascriptInterface
-        public String startGoogleAuth() {
-            try {
-                String html = readGoogleHtml();
-                if (html == null || html.isEmpty()) return "";
-                int port = localAuthServer.start(html, (token) -> runOnUiThread(() -> acceptGoogleToken(token)));
-                return "http://localhost:" + port + "/fumio-google.html?redirect=" + Uri.encode("com.fumio.app://auth");
-            } catch (Exception ignored) {
-                return "";
-            }
+        public void signInWithGoogle() {
+            inAppGoogleAuth.start(
+                MainActivity.this,
+                new InAppGoogleAuth.Result() {
+                    @Override
+                    public void onIdToken(String idToken) {
+                        runOnUiThread(() -> acceptGoogleToken(idToken));
+                    }
+
+                    @Override
+                    public void onError(String message) {
+                        runOnUiThread(() -> emitGoogleError(message));
+                    }
+                }
+            );
         }
     }
 
@@ -136,15 +143,17 @@ public class MainActivity extends BridgeActivity {
         }
     }
 
-    private String readGoogleHtml() {
-        try (InputStream in = getResources().openRawResource(R.raw.fumio_google);
-             ByteArrayOutputStream out = new ByteArrayOutputStream()) {
-            byte[] buf = new byte[4096];
-            int n;
-            while ((n = in.read(buf)) > 0) out.write(buf, 0, n);
-            return out.toString(StandardCharsets.UTF_8.name());
+    private void emitGoogleError(String message) {
+        Bridge bridge = getBridge();
+        if (bridge == null || bridge.getWebView() == null) return;
+        try {
+            String quoted = JSONObject.quote(message == null || message.isEmpty() ? "Google sign-in failed." : message);
+            bridge.getWebView().evaluateJavascript(
+                "(function(m){try{window.dispatchEvent(new CustomEvent('fumio-native-auth-error',{detail:{message:m}}));}catch(e){}})(" + quoted + ")",
+                null
+            );
         } catch (Exception ignored) {
-            return "";
+            // The overlay already closed; the form can be tried again.
         }
     }
 
@@ -489,7 +498,7 @@ public class MainActivity extends BridgeActivity {
     @Override
     public void onDestroy() {
         try {
-            localAuthServer.stop();
+            inAppGoogleAuth.dismiss();
             dismissPopup();
         } catch (Exception ignored) {
             // Activity is already going away.

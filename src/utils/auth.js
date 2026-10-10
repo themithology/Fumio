@@ -350,8 +350,16 @@ if (typeof window !== "undefined") {
   window.addEventListener("fumio-native-auth", (event) => {
     const token = event?.detail?.idToken;
     if (!token) return;
-    signInWithGoogleIdToken(token).catch((error) => {
-      console.warn("Native Google sign-in failed:", error?.code || error?.message);
-    });
+    signInWithGoogleIdToken(token)
+      .then(() => {
+        window.dispatchEvent(new CustomEvent("fumio-native-auth-done"));
+      })
+      .catch((error) => {
+        window.dispatchEvent(
+          new CustomEvent("fumio-native-auth-error", {
+            detail: { message: authErrorMessage(error) },
+          }),
+        );
+      });
   });
 }

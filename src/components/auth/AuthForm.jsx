@@ -9,7 +9,7 @@ import {
   signInWithGoogle,
   signUpWithEmail,
 } from "../../utils/auth.js";
-import { isNativeApp, nativeGoogleAuthUrl, openSystemBrowser } from "../../utils/externalLinks.js";
+import { isNativeApp } from "../../utils/externalLinks.js";
 
 const inEmbeddedFrame = () => {
   try {
@@ -36,6 +36,23 @@ export default function AuthForm({ initialMode = "signin" }) {
     // Warm Auth so Continue with Google can open the popup in this click.
     ensureAuthInit().catch(() => {});
   }, []);
+
+  useEffect(() => {
+    const onError = (event) => {
+      setBusy(false);
+      setError(event?.detail?.message || "Google sign-in failed.");
+    };
+    const onDone = () => {
+      setBusy(false);
+      navigate("/account", { replace: true });
+    };
+    window.addEventListener("fumio-native-auth-error", onError);
+    window.addEventListener("fumio-native-auth-done", onDone);
+    return () => {
+      window.removeEventListener("fumio-native-auth-error", onError);
+      window.removeEventListener("fumio-native-auth-done", onDone);
+    };
+  }, [navigate]);
 
   const switchMode = (next) => {
     setMode(next);
@@ -76,9 +93,9 @@ export default function AuthForm({ initialMode = "signin" }) {
   const google = () => {
     setError("");
     setMessage("");
-    if (isNativeApp() && !nativeHandoff) {
-      openSystemBrowser(nativeGoogleAuthUrl());
-      setMessage("Google sign-in opened in your browser. Finish it there to return to the app.");
+    if (isNativeApp() && !nativeHandoff && window.FumioNative?.signInWithGoogle) {
+      setBusy(true);
+      window.FumioNative.signInWithGoogle();
       return;
     }
     const pending = signInWithGoogle();
