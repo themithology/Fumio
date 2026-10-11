@@ -7,9 +7,15 @@
 
   var style = document.createElement("style");
   style.textContent =
-    'iframe[src*="vidsrc"],iframe[src*="videasy"],iframe[src*="vidfast"],iframe[src*="vidstuck"],iframe[src*="bingr"],iframe[src*="zxcstream"],iframe[src*="nxsha"],iframe[src*="2embed"],iframe[src*="multiembed"],iframe[src*="autoembed"],iframe[src*="smashy"],iframe[src*="vidlink"],iframe[src*="embed.su"],iframe[src*="tgvid"],iframe[src*="megaplay"],iframe[src*="zoko"],iframe[src*="4animo"]{display:none!important}' +
+    'html:not([data-fumio-download]) iframe[src*="vidsrc"]:not([src*="vidsrc.party"]),iframe[src*="videasy"],iframe[src*="vidfast"],iframe[src*="vidstuck"],iframe[src*="bingr"],iframe[src*="zxcstream"],iframe[src*="2embed"],iframe[src*="multiembed"],iframe[src*="autoembed"],iframe[src*="smashy"],iframe[src*="vidlink"],iframe[src*="embed.su"],iframe[src*="tgvid.lovable"],iframe[src*="megaplay"],iframe[src*="zoko"],iframe[src*="4animo"]{display:none!important}' +
     'a[href*="watch-party"],a[href*="watchparty"],[data-nav="watch-party"]{display:none!important}';
   document.documentElement.appendChild(style);
+
+  function markDownloadPage() {
+    if (/^\/download\b/i.test(location.pathname || "")) document.documentElement.setAttribute("data-fumio-download", "1");
+    else document.documentElement.removeAttribute("data-fumio-download");
+  }
+  markDownloadPage();
 
   function hideWatchParty() {
     var nodes = document.querySelectorAll("a,button,span");
@@ -36,7 +42,18 @@
       return null;
     }
     var path = url.pathname || "";
-    if (/^\/live-tv\b/i.test(path)) return null;
+    if (/^\/live-tv\b/i.test(path) || /^\/download\b/i.test(path)) return null;
+    if (/^\/player\/?$/i.test(path)) {
+      var playerId = url.searchParams.get("id");
+      if (!playerId) return null;
+      var playerType = (url.searchParams.get("type") || "movie").toLowerCase();
+      return {
+        type: playerType === "movie" ? "movie" : "tv",
+        id: String(playerId),
+        season: String(Number(url.searchParams.get("season") || url.searchParams.get("s") || 1) || 1),
+        episode: String(Number(url.searchParams.get("episode") || url.searchParams.get("e") || 1) || 1),
+      };
+    }
     var match = path.match(/\/watch\/(movie|tv|anime)\/(\d+)(?:\/(\d+)(?:\/(\d+))?)?/i);
     if (!match) match = path.match(/\/(movie|tv|anime)\/(?:details\/)?(\d+)\/watch(?:\/(\d+)(?:\/(\d+))?)?/i);
     if (!match) return null;
@@ -74,8 +91,64 @@
     return { season: season, episode: episode };
   }
 
+  function pageMeta() {
+    var title = "";
+    var image = "";
+    var ogTitle = document.querySelector('meta[property="og:title"]');
+    var ogImage = document.querySelector('meta[property="og:image"]');
+    if (ogTitle) title = ogTitle.getAttribute("content") || "";
+    if (ogImage) image = ogImage.getAttribute("content") || "";
+    if (!title) {
+      var heading = document.querySelector("h1");
+      if (heading) title = (heading.textContent || "").replace(/\s+/g, " ").trim();
+    }
+    if (!title) title = (document.title || "").replace(/\s*[|—\-].*$/, "").trim();
+    var posterPath = null;
+    var posterMatch = String(image).match(/\/t\/p\/\w+(\/[A-Za-z0-9]+\.(?:jpg|png|webp))/i);
+    if (posterMatch) posterPath = posterMatch[1];
+    return { title: title, poster_path: posterPath };
+  }
+
+  function saveContinue(info) {
+    try {
+      var list = [];
+      try {
+        list = JSON.parse(localStorage.getItem("continueWatching") || "[]");
+      } catch (e) {
+        list = [];
+      }
+      if (!Array.isArray(list)) list = [];
+      var meta = pageMeta();
+      var id = Number(info.id);
+      var type = info.type === "movie" ? "movie" : "tv";
+      var item = {
+        id: id,
+        type: type,
+        media_type: type,
+        title: meta.title || ("Title " + id),
+        poster_path: meta.poster_path,
+        backdrop_path: meta.poster_path,
+        lastUpdated: Date.now(),
+      };
+      if (type !== "movie") {
+        item.season = Number(info.season) || 1;
+        item.episode = Number(info.episode) || 1;
+      }
+      list = list.filter(function (row) {
+        return row && String(row.id) !== String(id);
+      });
+      list.unshift(item);
+      localStorage.setItem("continueWatching", JSON.stringify(list.slice(0, 10)));
+      window.dispatchEvent(new Event("history-updated"));
+      window.dispatchEvent(new Event("history-progress"));
+    } catch (e) {
+      /* playback still opens */
+    }
+  }
+
   function openWatch(info) {
     if (!info || !info.id) return false;
+    saveContinue(info);
     try {
       native.openWatch(info.type || "tv", info.id, info.season || "1", info.episode || "1");
       return true;
@@ -106,12 +179,17 @@
   var replace = history.replaceState;
   history.pushState = function (state, title, url) {
     if (url && openWatch(parseWatch(url))) return;
-    return push.apply(this, arguments);
+    var out = push.apply(this, arguments);
+    markDownloadPage();
+    return out;
   };
   history.replaceState = function (state, title, url) {
     if (url && openWatch(parseWatch(url))) return;
-    return replace.apply(this, arguments);
+    var out = replace.apply(this, arguments);
+    markDownloadPage();
+    return out;
   };
+  window.addEventListener("popstate", markDownloadPage);
 
   document.addEventListener(
     "click",
@@ -132,7 +210,17 @@
         return;
       }
       if (/^\/live-tv\b/i.test(location.pathname || "")) return;
+      if (/^\/download\b/i.test(location.pathname || "")) return;
       var link = event.target.closest && event.target.closest("a[href]");
+      if (link) {
+        try {
+          var linkPath = new URL(link.href, location.origin).pathname || "";
+          if (/\/download\b/i.test(linkPath)) return;
+        } catch (e) {
+          /* keep going */
+        }
+      }
+      if (btn && /\bdownload\b/.test(label)) return;
       if (link && openWatch(parseWatch(link.href))) {
         event.preventDefault();
         event.stopPropagation();
@@ -154,6 +242,8 @@
   );
 
   function stealFrames() {
+    markDownloadPage();
+    if (/^\/download\b/i.test(location.pathname || "")) return;
     var frames = document.querySelectorAll("iframe[src]");
     for (var i = 0; i < frames.length; i += 1) {
       var info = fromEmbed(frames[i].src);

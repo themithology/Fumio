@@ -116,6 +116,11 @@ public class MainActivity extends BridgeActivity {
         settings.setJavaScriptEnabled(true);
         settings.setDomStorageEnabled(true);
         settings.setMediaPlaybackRequiresUserGesture(false);
+        webView.setDownloadListener((url, userAgent, contentDisposition, mimeType, contentLength) -> {
+            if (url == null || url.isEmpty()) return;
+            if (url.startsWith("blob:") || url.startsWith("data:")) return;
+            openExternal(Uri.parse(url));
+        });
         String ua = settings.getUserAgentString();
         if (ua != null) {
             settings.setUserAgentString(ua.replace("; wv", "").replace("Version/4.0 ", ""));
@@ -308,7 +313,10 @@ public class MainActivity extends BridgeActivity {
             if (!mainFrame && (playerActive || isOwnOrigin(currentUri()) || isLiveTvPage(currentUri()))) {
                 return false;
             }
-            if (isPlayerEmbed(url)) {
+            if (isDownloadPath(url) || isDownloadPath(currentUri())) {
+                if (isLiveSite(url) || !mainFrame) return false;
+            }
+            if (isPlayerEmbed(url) && !isDownloadPath(currentUri()) && !isDownloadPath(url)) {
                 openAppPlayerFromEmbed(url);
                 return true;
             }
@@ -338,6 +346,14 @@ public class MainActivity extends BridgeActivity {
                 if (openedLive || googleRedirectActive) return false;
                 return true;
             }
+            String scheme = url.getScheme();
+            if (scheme != null) {
+                scheme = scheme.toLowerCase(Locale.US);
+                if (scheme.equals("https") || scheme.equals("http")) {
+                    openExternal(url);
+                    return true;
+                }
+            }
             return true;
         }
 
@@ -348,7 +364,8 @@ public class MainActivity extends BridgeActivity {
                     !playerActive &&
                     request != null &&
                     !request.isForMainFrame() &&
-                    isPlayerEmbed(request.getUrl())
+                    isPlayerEmbed(request.getUrl()) &&
+                    !isDownloadHost(request.getUrl())
                 ) {
                     final Uri embed = request.getUrl();
                     view.post(() -> openAppPlayerFromEmbed(embed));
@@ -570,7 +587,21 @@ public class MainActivity extends BridgeActivity {
         if (url == null) return true;
         // Google sign-in on the live site uses window.open(). Keep that popup
         // in-app: accounts.google.com, Firebase handler, then back to the site.
-        if (isBenignPopupUrl(url) || isAuthProvider(url) || isLiveSite(url)) return false;
+        if (isBenignPopupUrl(url) || isAuthProvider(url) || isLiveSite(url) || isDownloadPath(url)) return false;
+        if (isPlayerEmbed(url) && !isDownloadHost(url)) {
+            openAppPlayerFromEmbed(url);
+            dismissPopup();
+            return true;
+        }
+        String scheme = url.getScheme();
+        if (scheme != null) {
+            scheme = scheme.toLowerCase(Locale.US);
+            if (scheme.equals("https") || scheme.equals("http")) {
+                openExternal(url);
+                dismissPopup();
+                return true;
+            }
+        }
         if (isDiscord(url)) {
             openExternal(url);
             dismissPopup();
@@ -682,6 +713,15 @@ public class MainActivity extends BridgeActivity {
     private void openAppPlayerFromWatch(Uri url) {
         if (url == null) return;
         String path = url.getPath() == null ? "" : url.getPath();
+        if (path.toLowerCase(Locale.US).startsWith("/player")) {
+            openAppPlayer(
+                firstQuery(url, "type", "movie"),
+                firstQuery(url, "id", null),
+                firstQuery(url, "season", "1"),
+                firstQuery(url, "episode", "1")
+            );
+            return;
+        }
         Matcher match = EMBED_TITLE.matcher(path);
         if (!match.find()) return;
         openAppPlayer(
@@ -803,11 +843,31 @@ public class MainActivity extends BridgeActivity {
     private boolean isWatchPath(Uri url) {
         if (url == null) return false;
         String path = url.getPath();
-        return path != null && path.matches("(?i)^/watch/(movie|tv|anime)/[0-9]+.*");
+        if (path == null) return false;
+        path = path.toLowerCase(Locale.US);
+        if (path.equals("/player") || path.equals("/player/")) return true;
+        return path.matches("(?i)^/watch/(movie|tv|anime)/[0-9]+.*");
+    }
+
+    private boolean isDownloadPath(Uri url) {
+        if (url == null) return false;
+        String path = url.getPath();
+        return path != null && path.toLowerCase(Locale.US).startsWith("/download");
+    }
+
+    private boolean isDownloadHost(Uri url) {
+        if (url == null) return false;
+        String host = url.getHost();
+        if (host == null) return false;
+        host = host.toLowerCase(Locale.US);
+        if (host.contains("vidsrc.party") || host.contains("tgdl.") || host.contains("hubcloud") || host.contains("filepress")) {
+            return true;
+        }
+        return hostMatches(url, "tgdl.lovable.app", "vidsrc.party");
     }
 
     private boolean isPlayerEmbed(Uri url) {
-        if (url == null) return false;
+        if (url == null || isDownloadHost(url)) return false;
         String host = url.getHost();
         if (host == null) return false;
         host = host.toLowerCase(Locale.US);
@@ -819,7 +879,6 @@ public class MainActivity extends BridgeActivity {
             "vidstuck.xyz",
             "bingr.one",
             "zxcstream.xyz",
-            "nxsha.space",
             "2embed.cc",
             "2embed.skin",
             "multiembed.mov",
