@@ -3,6 +3,67 @@
   window.__fumioLivePlayer = true;
 
   var native = window.FumioNative;
+
+  function killSmartlink() {
+    try {
+      document.documentElement.setAttribute("data-smartlink-off", "true");
+    } catch (e) {
+      /* ignore */
+    }
+    try {
+      sessionStorage.setItem(
+        "sl-hotspot-state-v1",
+        JSON.stringify({
+          total: 99,
+          byKind: { cta: 9, text: 9, image: 9, back: 9, download: 9 },
+          lastFireAt: Date.now(),
+        }),
+      );
+    } catch (e) {
+      /* private */
+    }
+    var rawOpen = window.open;
+    window.open = function (url, name, features) {
+      try {
+        if (url == null || url === "" || url === "about:blank") return null;
+        var parsed = new URL(String(url), location.href);
+        var path = parsed.pathname || "";
+        if (parsed.origin === location.origin && /^\/download\b/i.test(path)) {
+          location.assign(parsed.href);
+          return null;
+        }
+        var host = (parsed.hostname || "").toLowerCase();
+        if (
+          host.indexOf("accounts.google") >= 0 ||
+          host.indexOf("google.com") >= 0 ||
+          host.indexOf("firebaseapp.com") >= 0 ||
+          host.indexOf("discord.") >= 0
+        ) {
+          if (typeof rawOpen === "function") return rawOpen.call(window, url, name, features);
+        }
+      } catch (e) {
+        /* drop */
+      }
+      return null;
+    };
+    function stripSmartlink() {
+      var nodes = document.querySelectorAll("[data-smartlink]");
+      for (var i = 0; i < nodes.length; i += 1) nodes[i].removeAttribute("data-smartlink");
+    }
+    stripSmartlink();
+    try {
+      new MutationObserver(stripSmartlink).observe(document.documentElement, {
+        childList: true,
+        subtree: true,
+        attributes: true,
+        attributeFilter: ["data-smartlink"],
+      });
+    } catch (e) {
+      /* observer optional */
+    }
+  }
+  killSmartlink();
+
   if (!native || !native.openWatch) return;
 
   var style = document.createElement("style");

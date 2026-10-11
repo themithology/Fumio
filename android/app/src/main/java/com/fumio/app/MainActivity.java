@@ -588,25 +588,13 @@ public class MainActivity extends BridgeActivity {
         // Google sign-in on the live site uses window.open(). Keep that popup
         // in-app: accounts.google.com, Firebase handler, then back to the site.
         if (isBenignPopupUrl(url) || isAuthProvider(url) || isLiveSite(url) || isDownloadPath(url)) return false;
-        if (isPlayerEmbed(url) && !isDownloadHost(url)) {
-            openAppPlayerFromEmbed(url);
-            dismissPopup();
-            return true;
-        }
-        String scheme = url.getScheme();
-        if (scheme != null) {
-            scheme = scheme.toLowerCase(Locale.US);
-            if (scheme.equals("https") || scheme.equals("http")) {
-                openExternal(url);
-                dismissPopup();
-                return true;
-            }
-        }
         if (isDiscord(url)) {
             openExternal(url);
             dismissPopup();
             return true;
         }
+        // Smartlink / extra ad tabs: drop them. File hosts still open from the
+        // main WebView via handleExternalUrl.
         dismissPopup();
         return true;
     }
