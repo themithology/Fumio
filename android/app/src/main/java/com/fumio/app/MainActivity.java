@@ -455,6 +455,9 @@ public class MainActivity extends BridgeActivity {
                     openExternal(hitUrl);
                     return false;
                 }
+                // Google/Firebase only. Player iframe popunders used this hole
+                // once multiple windows was turned on for sign-in.
+                if (!isAuthProvider(hitUrl) && !googleRedirectActive) return false;
                 WebView popup = createPopupWebView();
                 ((WebView.WebViewTransport) resultMsg.obj).setWebView(popup);
                 resultMsg.sendToTarget();

@@ -220,13 +220,33 @@ final class FumioPlayerOverlay {
                 }
 
                 @Override
+                public boolean shouldOverrideUrlLoading(WebView v, WebResourceRequest request) {
+                    return blockPlayerPopunder(request.getUrl(), request.isForMainFrame());
+                }
+
+                @Override
+                @SuppressWarnings("deprecation")
+                public boolean shouldOverrideUrlLoading(WebView v, String url) {
+                    return blockPlayerPopunder(url == null ? null : Uri.parse(url), true);
+                }
+
+                @Override
                 public void onPageFinished(WebView v, String url) {
+                    v.evaluateJavascript(
+                        "(function(){try{window.open=function(){return null;};}catch(e){}})()",
+                        null
+                    );
                     applySeed();
                 }
             }
         );
         view.setWebChromeClient(
             new WebChromeClient() {
+                @Override
+                public boolean onCreateWindow(WebView v, boolean isDialog, boolean isUserGesture, android.os.Message resultMsg) {
+                    return false;
+                }
+
                 @Override
                 public void onShowCustomView(View video, CustomViewCallback callback) {
                     showCustomView(video, callback);
@@ -335,6 +355,13 @@ final class FumioPlayerOverlay {
         } catch (Exception ignored) {
             /* sync will retry */
         }
+    }
+
+    private static boolean blockPlayerPopunder(Uri url, boolean mainFrame) {
+        if (url == null) return true;
+        if (!mainFrame) return false;
+        String host = url.getHost();
+        return host == null || !"localhost".equalsIgnoreCase(host);
     }
 
     private static boolean isSpaRoute(String path) {
