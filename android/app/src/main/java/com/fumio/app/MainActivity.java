@@ -784,8 +784,15 @@ public class MainActivity extends BridgeActivity {
                 if (isFinishing() || isDestroyed()) return;
                 playerOverlay.open(type, id, season, episode, seed);
             };
-            if (ads != null) ads.showIntro(play);
-            else play.run();
+            if (ads != null) {
+                ads.showIntro(
+                    () -> {
+                        notifyAdsChanged();
+                        play.run();
+                    },
+                    () -> playerActive = false
+                );
+            } else play.run();
         });
     }
 

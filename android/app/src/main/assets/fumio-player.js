@@ -482,8 +482,19 @@
   function syncAdsChrome() {}
 
   function injectSponsored() {
-    if (document.querySelector("[data-fumio-sponsored]")) return;
     if (!/^\/?$/.test((location.pathname || "").replace(/\/+$/, "") || "/")) return;
+    var existing = document.querySelector("[data-fumio-sponsored]");
+    var adFree = false;
+    try {
+      adFree = !!(native.isAdFree && native.isAdFree());
+    } catch (e) {
+      adFree = false;
+    }
+    if (adFree) {
+      if (existing && existing.parentNode) existing.parentNode.removeChild(existing);
+      return;
+    }
+    if (existing) return;
     var cards = [];
     try {
       cards = JSON.parse(native.nativeCards ? native.nativeCards() : "[]") || [];
@@ -494,9 +505,9 @@
       cards = [
         {
           label: "Sponsored",
-          title: "Keep TheOGPirateBot free",
-          subtitle: "Watch a short ad to skip intros for an hour.",
-          cta: "Watch an ad",
+          title: "1 hour ad-free",
+          subtitle: "View one ads page, then watch in peace.",
+          cta: "View ads",
           reward: true,
         },
       ];
@@ -561,6 +572,7 @@
   window.addEventListener("fumio-ads-updated", function () {
     syncAdsChrome();
     hideAppOnlyChrome();
+    injectSponsored();
   });
   try {
     new MutationObserver(injectSponsored).observe(document.documentElement, { childList: true, subtree: true });

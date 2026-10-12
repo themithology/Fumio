@@ -9,8 +9,9 @@ import android.net.Uri;
 import android.os.Handler;
 import android.os.Looper;
 import android.view.Gravity;
-import android.view.View;
 import android.view.ViewGroup;
+import android.webkit.WebChromeClient;
+import android.webkit.WebResourceRequest;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
@@ -21,16 +22,14 @@ import org.json.JSONArray;
 import org.json.JSONObject;
 
 /**
- * Contained ads only: a short skippable intro before play, an optional rewarded
- * unlock, and labeled native cards on Home. Never pop-unders or extra windows.
+ * One packed ads screen (banners + native). After the user views it, play is
+ * ad-free for an hour. Ads stay in this overlay — no pop-unders.
  */
 final class FumioAds {
 
-
-
     private static final String PREFS = "fumio-ads";
     private static final String AD_FREE_UNTIL = "adFreeUntil";
-    private static final String LAST_INTRO = "lastIntroAt";
+    private static final String BASE = "https://theogpiratebot.online/fumio-ads";
 
     private final Activity activity;
     private final Handler handler = new Handler(Looper.getMainLooper());
@@ -54,8 +53,8 @@ final class FumioAds {
     }
 
     String nativeCardsJson() {
-        JSONArray cards = config.optJSONArray("nativeCards");
-        return cards == null ? "[]" : cards.toString();
+        if (isAdFree()) return "[]";
+        return "[{\"label\":\"Sponsored\",\"title\":\"1 hour ad-free\",\"subtitle\":\"View one ads page, then watch in peace.\",\"cta\":\"View ads\",\"reward\":true}]";
     }
 
     String supportUrl() {
@@ -63,37 +62,24 @@ final class FumioAds {
     }
 
     void showIntro(Runnable then) {
+        showIntro(then, null);
+    }
+
+    void showIntro(Runnable then, Runnable onCancel) {
         if (then == null) return;
-        if (isAdFree() || !dueForIntro()) {
+        if (isAdFree()) {
             then.run();
             return;
         }
-        prefs.edit().putLong(LAST_INTRO, System.currentTimeMillis()).apply();
-        showSheet(
-            false,
-            config.optInt("introSeconds", 8),
-            config.optInt("skipAfterSeconds", 5),
-            config.optString("introUrl", ""),
-            "Ad",
-            "A short pause keeps TheOGPirateBot free.",
-            "Skip",
-            then,
-            null
-        );
+        showPack(true, then, null, onCancel);
     }
 
     void showRewarded(Runnable onReward) {
-        showSheet(
-            true,
-            config.optInt("rewardSeconds", 15),
-            config.optInt("rewardSeconds", 15),
-            config.optString("rewardUrl", ""),
-            "Rewarded ad",
-            "Watch this to skip intro ads for 1 hour.",
-            "Unlock after the ad",
-            () -> {},
-            onReward
-        );
+        if (isAdFree()) {
+            if (onReward != null) onReward.run();
+            return;
+        }
+        showPack(true, () -> {}, onReward, null);
     }
 
     void dismiss() {
@@ -107,117 +93,99 @@ final class FumioAds {
         dialog = null;
     }
 
-    private boolean dueForIntro() {
-        long every = Math.max(1, config.optInt("introEveryMinutes", 12)) * 60_000L;
-        return System.currentTimeMillis() - prefs.getLong(LAST_INTRO, 0) >= every;
-    }
-
     private void grantReward() {
         long adFree = System.currentTimeMillis() + Math.max(5, config.optInt("adFreeMinutes", 60)) * 60_000L;
         prefs.edit().putLong(AD_FREE_UNTIL, adFree).apply();
     }
 
-    private void showSheet(
-        boolean reward,
-        int totalSec,
-        int skipAfterSec,
-        String url,
-        String badge,
-        String message,
-        String skipLabel,
-        Runnable onClose,
-        Runnable onReward
-    ) {
+    private void showPack(boolean grant, Runnable onClose, Runnable onReward, Runnable onCancel) {
         dismiss();
         showing = true;
-        int total = Math.max(3, totalSec);
-        int skipAfter = Math.min(total, Math.max(0, skipAfterSec));
+        int total = Math.max(8, config.optInt("viewSeconds", 15));
 
         LinearLayout root = new LinearLayout(activity);
         root.setOrientation(LinearLayout.VERTICAL);
         root.setBackgroundColor(0xFF0B0B0B);
-        int pad = dp(16);
-        int inset = activity.getResources().getDisplayMetrics().heightPixels < dp(640) ? dp(12) : dp(24);
-        root.setPadding(pad, inset, pad, pad);
+        int pad = dp(12);
+        root.setPadding(pad, dp(10), pad, dp(8));
 
-        TextView badgeView = text(badge.toUpperCase(), 10, 0xFFB8B8B8, true);
-        badgeView.setLetterSpacing(0.12f);
-        root.addView(badgeView);
+        TextView badge = text("ADS · THEN 1 HOUR AD-FREE", 10, 0xFFB8B8B8, true);
+        badge.setLetterSpacing(0.08f);
+        root.addView(badge);
 
-        TextView msg = text(message, 15, 0xFFFFFFFF, true);
+        TextView msg = text("All ads on this page. Then you can watch.", 13, 0xFFFFFFFF, true);
         LinearLayout.LayoutParams msgLp = new LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT,
             ViewGroup.LayoutParams.WRAP_CONTENT
         );
-        msgLp.topMargin = dp(6);
+        msgLp.topMargin = dp(4);
+        msgLp.bottomMargin = dp(8);
         root.addView(msg, msgLp);
 
-        LinearLayout.LayoutParams slotLp = new LinearLayout.LayoutParams(
+        WebView web = new WebView(activity);
+        web.setBackgroundColor(0xFF0B0B0B);
+        WebSettings settings = web.getSettings();
+        settings.setJavaScriptEnabled(true);
+        settings.setDomStorageEnabled(true);
+        settings.setUseWideViewPort(true);
+        settings.setLoadWithOverviewMode(true);
+        settings.setSupportMultipleWindows(false);
+        settings.setJavaScriptCanOpenWindowsAutomatically(false);
+        settings.setMixedContentMode(WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE);
+        web.setWebChromeClient(new WebChromeClient());
+        web.setWebViewClient(new WebViewClient() {
+            @Override
+            public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
+                if (request == null || request.getUrl() == null) return true;
+                if (!request.isForMainFrame()) return false;
+                Uri uri = request.getUrl();
+                String scheme = uri.getScheme() == null ? "" : uri.getScheme();
+                if ("http".equals(scheme) || "https".equals(scheme)) {
+                    openExternal(uri);
+                    return true;
+                }
+                return true;
+            }
+        });
+        web.loadDataWithBaseURL(BASE, adsPageHtml(), "text/html", "utf-8", null);
+        LinearLayout.LayoutParams webLp = new LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT,
             0,
             1f
         );
-        slotLp.topMargin = dp(12);
-        slotLp.bottomMargin = dp(8);
-        if (url != null && url.startsWith("http")) {
-            WebView web = new WebView(activity);
-            web.setBackgroundColor(0xFF111111);
-            WebSettings settings = web.getSettings();
-            settings.setJavaScriptEnabled(true);
-            settings.setDomStorageEnabled(true);
-            settings.setUseWideViewPort(true);
-            settings.setLoadWithOverviewMode(true);
-            web.setWebViewClient(new WebViewClient());
-            web.loadUrl(url);
-            root.addView(web, slotLp);
-        } else {
-            LinearLayout card = new LinearLayout(activity);
-            card.setOrientation(LinearLayout.VERTICAL);
-            card.setGravity(Gravity.CENTER);
-            card.setBackgroundColor(0xFF161616);
-            card.setPadding(dp(16), dp(16), dp(16), dp(16));
-            card.addView(text("TheOGPirateBot", 18, 0xFFFFFFFF, true));
-            TextView sub = text("Ads stay on this screen. Never extra tabs.", 12, 0xFFA1A1AA, false);
-            sub.setGravity(Gravity.CENTER);
-            LinearLayout.LayoutParams subLp = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT
-            );
-            subLp.topMargin = dp(6);
-            card.addView(sub, subLp);
-            root.addView(card, slotLp);
-        }
+        root.addView(web, webLp);
 
-        TextView timer = text("", 12, 0xFFA1A1AA, false);
+        TextView timer = text(total + "s", 12, 0xFFA1A1AA, false);
+        timer.setPadding(0, dp(6), 0, 0);
         root.addView(timer);
 
-        Button skip = new Button(activity);
-        skip.setText(skipAfter == 0 ? skipLabel : "Skip in " + skipAfter + "s");
-        skip.setAllCaps(false);
-        skip.setEnabled(skipAfter == 0);
-        skip.setTextColor(0xFF111111);
-        skip.setBackgroundColor(skipAfter == 0 ? 0xFFFFFFFF : 0xFF3F3F46);
-        LinearLayout.LayoutParams skipLp = new LinearLayout.LayoutParams(
+        Button go = new Button(activity);
+        go.setAllCaps(false);
+        go.setEnabled(false);
+        go.setText("Start watching in " + total + "s");
+        go.setTextColor(0xFFA1A1AA);
+        go.setBackgroundColor(0xFF3F3F46);
+        LinearLayout.LayoutParams goLp = new LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT,
             dp(44)
         );
-        skipLp.topMargin = dp(8);
-        root.addView(skip, skipLp);
+        goLp.topMargin = dp(6);
+        root.addView(go, goLp);
 
         TextView support = text("Support instead", 12, 0xFFA1A1AA, false);
         support.setGravity(Gravity.CENTER);
-        support.setPadding(0, dp(10), 0, dp(4));
+        support.setPadding(0, dp(8), 0, dp(2));
         root.addView(support);
 
         Dialog next = new Dialog(activity, android.R.style.Theme_Black_NoTitleBar_Fullscreen);
         next.setContentView(root);
         next.setCancelable(true);
-        next.setOnCancelListener((d) -> finish(false, onClose, onReward));
+        next.setOnCancelListener((d) -> finish(false, onClose, onReward, onCancel));
         dialog = next;
         try {
             next.show();
         } catch (Exception ignored) {
-            finish(false, onClose, onReward);
+            finish(false, onClose, onReward, onCancel);
             return;
         }
 
@@ -227,34 +195,30 @@ final class FumioAds {
             public void run() {
                 if (!showing) return;
                 int remain = left[0];
-                int untilSkip = Math.max(0, skipAfter - (total - remain));
-                timer.setText(remain + "s");
-                if (untilSkip <= 0) {
-                    skip.setEnabled(true);
-                    skip.setText(skipLabel);
-                    skip.setBackgroundColor(0xFFFFFFFF);
-                    skip.setTextColor(0xFF111111);
-                } else {
-                    skip.setText("Skip in " + untilSkip + "s");
-                }
                 if (remain <= 0) {
-                    finish(reward, onClose, onReward);
+                    timer.setText("Ready");
+                    go.setEnabled(true);
+                    go.setText("Start watching · 1 hour ad-free");
+                    go.setBackgroundColor(0xFFFFFFFF);
+                    go.setTextColor(0xFF111111);
                     return;
                 }
+                timer.setText(remain + "s left on this page");
+                go.setText("Start watching in " + remain + "s");
                 left[0] = remain - 1;
                 handler.postDelayed(this, 1000);
             }
         };
         tick.run();
 
-        skip.setOnClickListener((v) -> {
-            if (!skip.isEnabled()) return;
-            finish(reward, onClose, onReward);
+        go.setOnClickListener((v) -> {
+            if (!go.isEnabled()) return;
+            finish(grant, onClose, onReward, onCancel);
         });
         support.setOnClickListener((v) -> openSupport());
     }
 
-    private void finish(boolean reward, Runnable onClose, Runnable onReward) {
+    private void finish(boolean grant, Runnable onClose, Runnable onReward, Runnable onCancel) {
         if (!showing) return;
         showing = false;
         handler.removeCallbacksAndMessages(null);
@@ -264,16 +228,75 @@ final class FumioAds {
             /* already gone */
         }
         dialog = null;
-        if (reward) {
+        if (grant) {
             grantReward();
             if (onReward != null) onReward.run();
+            if (onClose != null) onClose.run();
+        } else if (onCancel != null) {
+            onCancel.run();
         }
-        if (onClose != null) onClose.run();
+    }
+
+    private String adsPageHtml() {
+        StringBuilder slots = new StringBuilder();
+        JSONArray list = config.optJSONArray("slots");
+        if (list == null || list.length() == 0) {
+            slots.append(placeholder("native", "Native banner"));
+            slots.append(placeholder("box", "300×250 banner"));
+            slots.append(placeholder("banner", "320×50 banner"));
+        } else {
+            for (int i = 0; i < list.length(); i += 1) {
+                JSONObject slot = list.optJSONObject(i);
+                if (slot == null) continue;
+                String kind = slot.optString("kind", "native");
+                String label = slot.optString("label", "Ad");
+                String html = slot.optString("html", "").trim();
+                slots.append("<div class=\"slot ").append(esc(kind)).append("\">");
+                if (html.isEmpty()) {
+                    slots.append("<div class=\"ph\"><b>")
+                        .append(esc(label))
+                        .append("</b>Paste your Adsterra code in fumio-ads.json</div>");
+                } else {
+                    slots.append(html);
+                }
+                slots.append("</div>");
+            }
+        }
+        return "<!doctype html><html><head><meta charset=\"utf-8\">"
+            + "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1,maximum-scale=1\">"
+            + "<style>"
+            + "*{box-sizing:border-box}html,body{margin:0;background:#0b0b0b;color:#fff;"
+            + "font-family:sans-serif;-webkit-text-size-adjust:100%}"
+            + ".stack{display:flex;flex-direction:column;gap:8px;padding:0 0 12px}"
+            + ".slot{width:100%;background:#161616;border:1px solid rgba(255,255,255,.08);"
+            + "border-radius:10px;overflow:auto;display:flex;justify-content:center;align-items:center}"
+            + ".slot.banner{min-height:50px}.slot.native{min-height:110px}.slot.box{min-height:250px}"
+            + ".ph{padding:14px 10px;text-align:center;color:#a1a1aa;font-size:11px;line-height:1.35}"
+            + ".ph b{display:block;color:#fff;font-size:12px;margin-bottom:4px}"
+            + "iframe,ins,img{max-width:100%}"
+            + "</style></head><body><div class=\"stack\">"
+            + slots
+            + "</div></body></html>";
+    }
+
+    private String placeholder(String kind, String label) {
+        return "<div class=\"slot " + kind + "\"><div class=\"ph\"><b>"
+            + esc(label)
+            + "</b>Paste your Adsterra code in fumio-ads.json</div></div>";
+    }
+
+    private String esc(String value) {
+        if (value == null) return "";
+        return value.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\"", "&quot;");
     }
 
     private void openSupport() {
+        openExternal(Uri.parse(supportUrl()));
+    }
+
+    private void openExternal(Uri uri) {
         try {
-            Intent intent = new Intent(Intent.ACTION_VIEW, Uri.parse(supportUrl()));
+            Intent intent = new Intent(Intent.ACTION_VIEW, uri);
             intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
             activity.startActivity(intent);
         } catch (Exception ignored) {

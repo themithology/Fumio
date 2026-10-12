@@ -1,19 +1,32 @@
 {
-  "introSeconds": 8,
-  "skipAfterSeconds": 5,
-  "rewardSeconds": 15,
+  "viewSeconds": 15,
   "adFreeMinutes": 60,
-  "introEveryMinutes": 12,
   "supportUrl": "https://theogpiratebot.online/support",
-  "introUrl": "",
-  "rewardUrl": "",
-  "nativeCards": [
+  "slots": [
     {
-      "label": "Sponsored",
-      "title": "Keep the app free",
-      "subtitle": "Watch a short ad to skip intros for 1 hour.",
-      "cta": "Watch ad",
-      "reward": true
+      "kind": "banner",
+      "label": "320×50 banner",
+      "html": ""
+    },
+    {
+      "kind": "native",
+      "label": "Native banner",
+      "html": ""
+    },
+    {
+      "kind": "box",
+      "label": "300×250 banner",
+      "html": ""
+    },
+    {
+      "kind": "native",
+      "label": "Native banner",
+      "html": ""
+    },
+    {
+      "kind": "banner",
+      "label": "320×50 banner",
+      "html": ""
     }
   ]
 }
