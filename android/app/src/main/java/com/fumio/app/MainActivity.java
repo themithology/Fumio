@@ -69,6 +69,7 @@ public class MainActivity extends BridgeActivity {
     private boolean liveHistoryCleared;
     private boolean liveFailed;
     private volatile boolean playerActive;
+    private volatile boolean suppressEmbedOpen = true;
     private long lastPlayerOpenAt;
     private String vastUrl = "";
     private int vastSkipAfter = 5;
@@ -359,13 +360,14 @@ public class MainActivity extends BridgeActivity {
         public WebResourceResponse shouldInterceptRequest(WebView view, WebResourceRequest request) {
             try {
                 if (
-                    !playerActive &&
                     request != null &&
                     !request.isForMainFrame() &&
                     isPlayerEmbed(request.getUrl())
                 ) {
-                    final Uri embed = request.getUrl();
-                    view.post(() -> openAppPlayerFromEmbed(embed));
+                    if (!playerActive && !suppressEmbedOpen) {
+                        final Uri embed = request.getUrl();
+                        view.post(() -> openAppPlayerFromEmbed(embed));
+                    }
                     return new WebResourceResponse(
                         "text/html",
                         "utf-8",
@@ -382,6 +384,7 @@ public class MainActivity extends BridgeActivity {
         public void doUpdateVisitedHistory(WebView view, String url, boolean isReload) {
             super.doUpdateVisitedHistory(view, url, isReload);
             Uri uri = url == null ? null : Uri.parse(url);
+            noteBrowsePage(uri);
             if (!isLiveSite(uri) || !isWatchPath(uri) || playerActive) return;
             openAppPlayerFromWatch(uri);
             view.post(() -> {
@@ -405,6 +408,7 @@ public class MainActivity extends BridgeActivity {
             }
             if (isLiveSite(uri)) {
                 liveFailed = false;
+                noteBrowsePage(uri);
                 if (!liveHistoryCleared) {
                     liveHistoryCleared = true;
                     view.clearHistory();
@@ -890,6 +894,10 @@ public class MainActivity extends BridgeActivity {
 
     private boolean isLiveSite(Uri url) {
         return hostMatches(url, "theogpiratebot.online");
+    }
+
+    private void noteBrowsePage(Uri url) {
+        suppressEmbedOpen = !isWatchPath(url);
     }
 
     private boolean isLiveTvPage(Uri url) {

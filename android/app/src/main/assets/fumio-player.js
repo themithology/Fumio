@@ -65,9 +65,15 @@
 
   var style = document.createElement("style");
   style.textContent =
+    "html,body{overflow-x:hidden!important;max-width:100vw!important}" +
+    "img,video,canvas{max-width:100%;height:auto}" +
     'html:not([data-fumio-download]) iframe[src*="vidsrc"]:not([src*="vidsrc.party"]),iframe[src*="videasy"],iframe[src*="vidfast"],iframe[src*="vidstuck"],iframe[src*="bingr"],iframe[src*="zxcstream"],iframe[src*="2embed"],iframe[src*="multiembed"],iframe[src*="autoembed"],iframe[src*="smashy"],iframe[src*="vidlink"],iframe[src*="embed.su"],iframe[src*="tgvid.lovable"],iframe[src*="megaplay"],iframe[src*="zoko"],iframe[src*="4animo"]{display:none!important}' +
     'a[href*="watch-party"],a[href*="watchparty"],[data-nav="watch-party"]{display:none!important}' +
-    'a[href*="/download"],a[href*="download?"]{display:none!important}';
+    'a[href*="/download"],a[href*="download?"]{display:none!important}' +
+    ".fixed,[class*=\"fixed\"]{max-width:100vw;box-sizing:border-box}" +
+    ".fixed.bottom-0,.fixed.inset-x-0,[class*=\"bottom-3\"],[class*=\"bottom-4\"],[class*=\"bottom-5\"],[class*=\"bottom-6\"]{left:0!important;right:0!important;width:auto!important;max-width:calc(100vw - 16px)!important;margin-left:auto!important;margin-right:auto!important;overflow-x:auto!important;-webkit-overflow-scrolling:touch;padding-left:max(8px,env(safe-area-inset-left))!important;padding-right:max(8px,env(safe-area-inset-right))!important;padding-bottom:max(8px,env(safe-area-inset-bottom))!important}" +
+    "body{padding-bottom:calc(84px + env(safe-area-inset-bottom,0px))}" +
+    "[role=\"tablist\"], [class*=\"chip\"]{max-width:100%;overflow-x:auto;-webkit-overflow-scrolling:touch}";
   document.documentElement.appendChild(style);
 
   function isDownloadHref(href) {
@@ -79,27 +85,15 @@
   }
 
   function hideAppOnlyChrome() {
-    var nodes = document.querySelectorAll("a,button,span");
+    var nodes = document.querySelectorAll(
+      'a[href*="watch-party"],a[href*="watchparty"],a[href*="/download"],[data-nav="watch-party"]',
+    );
     for (var i = 0; i < nodes.length; i += 1) {
-      var node = nodes[i];
-      var text = (node.textContent || "").replace(/\s+/g, " ").trim().toLowerCase();
-      var href = node.getAttribute && node.getAttribute("href");
-      var hide =
-        text === "watch party" ||
-        text === "download" ||
-        /^download episode\b/.test(text) ||
-        (href && isDownloadHref(href));
-      if (!hide) continue;
-      var el = node.closest("a,button,li") || node;
+      var el = nodes[i].closest("a,button,li") || nodes[i];
       el.style.display = "none";
     }
   }
   hideAppOnlyChrome();
-  try {
-    new MutationObserver(hideAppOnlyChrome).observe(document.documentElement, { childList: true, subtree: true });
-  } catch (e) {
-    /* observer optional */
-  }
   if (/^\/download\b/i.test(location.pathname || "")) {
     try {
       location.replace("/");
@@ -350,21 +344,53 @@
   );
 
   function stealFrames() {
-    if (/^\/download\b/i.test(location.pathname || "")) return;
+    var path = location.pathname || "";
+    if (/^\/live-tv\b/i.test(path) || /^\/download\b/i.test(path)) return;
+    var autoOpen = /^\/watch\b/i.test(path) || /^\/player\/?$/i.test(path);
     var frames = document.querySelectorAll("iframe[src]");
     for (var i = 0; i < frames.length; i += 1) {
       var info = fromEmbed(frames[i].src);
       if (!info) continue;
       frames[i].removeAttribute("src");
       frames[i].remove();
-      openWatch(info);
+      if (autoOpen) openWatch(info);
       break;
     }
   }
 
-  stealFrames();
-  var observer = new MutationObserver(stealFrames);
-  observer.observe(document.documentElement, { childList: true, subtree: true, attributes: true, attributeFilter: ["src"] });
+  function fitScreen() {
+    try {
+      document.documentElement.style.maxWidth = "100vw";
+      document.body.style.maxWidth = "100vw";
+      document.documentElement.style.overflowX = "hidden";
+      document.body.style.overflowX = "hidden";
+    } catch (e) {
+      /* ignore */
+    }
+    var nodes = document.querySelectorAll("nav,footer,[class*=\"fixed\"]");
+    for (var i = 0; i < nodes.length; i += 1) {
+      var el = nodes[i];
+      var pos = window.getComputedStyle(el).position;
+      if (pos !== "fixed" && pos !== "sticky") continue;
+      el.style.maxWidth = "calc(100vw - 16px)";
+      el.style.boxSizing = "border-box";
+      if (el.scrollWidth > window.innerWidth) {
+        el.style.overflowX = "auto";
+        el.style.webkitOverflowScrolling = "touch";
+      }
+    }
+  }
+
+  function debounce(fn, ms) {
+    var t = 0;
+    return function () {
+      if (t) return;
+      t = setTimeout(function () {
+        t = 0;
+        fn();
+      }, ms || 160);
+    };
+  }
 
   if (parseWatch(location.href)) openWatch(parseWatch(location.href));
 
@@ -631,18 +657,21 @@
     placeSponsoredRail(existing, kind);
   }
 
-  syncAdsChrome();
-  injectSponsored();
-  patchContinueRail();
-  window.addEventListener("fumio-ads-updated", function () {
-    syncAdsChrome();
+  var onDom = debounce(function () {
     hideAppOnlyChrome();
+    stealFrames();
     injectSponsored();
-  });
+    patchContinueRail();
+    fitScreen();
+  }, 180);
+  syncAdsChrome();
+  onDom();
+  window.addEventListener("fumio-ads-updated", onDom);
   window.addEventListener("history-updated", patchContinueRail);
   window.addEventListener("fumio-cw-updated", patchContinueRail);
+  window.addEventListener("resize", debounce(fitScreen, 120));
   try {
-    new MutationObserver(injectSponsored).observe(document.documentElement, { childList: true, subtree: true });
+    new MutationObserver(onDom).observe(document.documentElement, { childList: true, subtree: true });
   } catch (e) {
     /* optional */
   }
