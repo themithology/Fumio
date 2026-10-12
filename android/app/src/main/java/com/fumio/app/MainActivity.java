@@ -71,8 +71,6 @@ public class MainActivity extends BridgeActivity {
     private volatile boolean playerActive;
     private volatile boolean suppressEmbedOpen = true;
     private long lastPlayerOpenAt;
-    private String vastUrl = "";
-    private int vastSkipAfter = 5;
     private View fullscreenView;
     private WebChromeClient.CustomViewCallback fullscreenCallback;
 
@@ -85,13 +83,6 @@ public class MainActivity extends BridgeActivity {
             WebView webView = bridge.getWebView();
             if (webView == null) return;
             playerScript = readAsset("fumio-player.js");
-            try {
-                JSONObject ads = new JSONObject(readAsset("fumio-ads.json"));
-                vastUrl = ads.optString("vastUrl", "");
-                vastSkipAfter = ads.optInt("skipAfterSeconds", 5);
-            } catch (Exception ignored) {
-                vastUrl = "";
-            }
             playerOverlay = new FumioPlayerOverlay(this, this::onOverlayClosed);
             installClients(webView, bridge);
             installBackHandler();
@@ -715,7 +706,7 @@ public class MainActivity extends BridgeActivity {
 
     private void injectPlayerScript(WebView view) {
         if (view == null || playerScript == null || playerScript.isEmpty()) return;
-        view.evaluateJavascript(playerScript, (v) -> notifyAdsChanged());
+        view.evaluateJavascript(playerScript, null);
     }
 
     private void rememberLocalAppUrl() {
@@ -773,31 +764,12 @@ public class MainActivity extends BridgeActivity {
             playerOverlay = new FumioPlayerOverlay(this, this::onOverlayClosed);
         }
         snapshotLiveSession((seed) -> {
-            if (isFinishing() || isDestroyed()) return;
-            Runnable play = () -> {
-                if (isFinishing() || isDestroyed()) {
-                    onOverlayClosed(null);
-                    return;
-                }
-                playerOverlay.open(type, id, season, episode, seed);
-            };
-            FumioVast.play(
-                this,
-                vastUrl,
-                vastSkipAfter,
-                play,
-                () -> onOverlayClosed(null)
-            );
+            if (isFinishing() || isDestroyed()) {
+                onOverlayClosed(null);
+                return;
+            }
+            playerOverlay.open(type, id, season, episode, seed);
         });
-    }
-
-    private void notifyAdsChanged() {
-        Bridge bridge = getBridge();
-        if (bridge == null || bridge.getWebView() == null) return;
-        bridge.getWebView().evaluateJavascript(
-            "(function(){try{window.dispatchEvent(new Event('fumio-ads-updated'));}catch(e){}})()",
-            null
-        );
     }
 
     private void closeAppPlayer() {

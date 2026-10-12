@@ -275,7 +275,6 @@
         event.stopPropagation();
         return;
       }
-      if (event.target.closest && event.target.closest("[data-fumio-sponsored]")) return;
       var link = event.target.closest && event.target.closest("a[href]");
       var nested = event.target.closest && event.target.closest("button,[aria-label]");
       if (nested && link && nested !== link && /remove|close|clear|delete|dismiss/i.test((nested.getAttribute("aria-label") || "") + " " + (nested.textContent || ""))) {
@@ -550,123 +549,13 @@
     }
   }
 
-  function syncAdsChrome() {}
-
-  function bannerFrame(key, width, height) {
-    var frame = document.createElement("iframe");
-    frame.setAttribute("scrolling", "no");
-    frame.setAttribute("title", "Sponsored");
-    frame.style.cssText =
-      "width:100%;max-width:" +
-      width +
-      "px;height:" +
-      height +
-      "px;border:0;margin:0 auto;display:block;background:transparent;";
-    frame.srcdoc =
-      "<!doctype html><html><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">" +
-      "<style>html,body{margin:0;background:transparent;display:flex;justify-content:center;align-items:center}</style></head><body>" +
-      "<script>atOptions={key:'" +
-      key +
-      "',format:'iframe',height:" +
-      height +
-      ",width:" +
-      width +
-      ",params:{}};<\/script>" +
-      "<script src=\"https://bancadeltempoidea.org/22/" +
-      key +
-      "\"><\/script></body></html>";
-    return frame;
-  }
-
-  function detailsKind() {
-    var path = location.pathname || "";
-    var match =
-      path.match(/\/(movie|tv|anime)\/details\//i) || path.match(/\/details\/(movie|tv|anime)\//i);
-    if (!match) return null;
-    return match[1].toLowerCase() === "movie" ? "movie" : "tv";
-  }
-
-  function findBlock(pattern) {
-    var nodes = document.querySelectorAll("h1,h2,h3,h4,p");
-    for (var i = 0; i < nodes.length; i += 1) {
-      var text = (nodes[i].textContent || "").replace(/\s+/g, " ").trim();
-      if (!pattern.test(text)) continue;
-      return nodes[i].closest("section") || nodes[i].parentElement;
-    }
-    return null;
-  }
-
-  function buildSponsoredRail() {
-    var rail = document.createElement("section");
-    rail.setAttribute("data-fumio-sponsored", "1");
-    rail.style.cssText = "padding:8px 16px 16px;max-width:1200px;margin:0 auto;width:100%;";
-    var heading = document.createElement("p");
-    heading.textContent = "Sponsored";
-    heading.style.cssText =
-      "margin:0 0 8px;font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:#a1a1aa;font-weight:700;";
-    rail.appendChild(heading);
-    var nativeWrap = document.createElement("div");
-    nativeWrap.style.cssText =
-      "max-height:180px;overflow:hidden;border-radius:12px;background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.08);padding:6px;";
-    var nativeScript = document.createElement("script");
-    nativeScript.async = true;
-    nativeScript.setAttribute("data-cfasync", "false");
-    nativeScript.src = "https://bancadeltempoidea.org/21/f59c3af8bc1986dfe1379fd3cfb3bebc";
-    var nativeMount = document.createElement("div");
-    nativeMount.id = "container-f59c3af8bc1986dfe1379fd3cfb3bebc";
-    nativeWrap.appendChild(nativeScript);
-    nativeWrap.appendChild(nativeMount);
-    rail.appendChild(nativeWrap);
-    return rail;
-  }
-
-  function placeSponsoredRail(rail, kind) {
-    if (kind === "tv") {
-      var episodes = findBlock(/choose your episode/i) || findBlock(/^\s*episodes\b/i) || findBlock(/\d+\s+episodes\b/i);
-      if (!episodes || !episodes.parentNode) return false;
-      if (rail.previousElementSibling === episodes) return true;
-      episodes.parentNode.insertBefore(rail, episodes.nextSibling);
-      return true;
-    }
-    var like =
-      findBlock(/you may like/i) ||
-      findBlock(/more like this/i) ||
-      findBlock(/recommendations/i) ||
-      findBlock(/^\s*similar\b/i);
-    if (like && like.parentNode) {
-      if (rail.nextElementSibling === like || like.previousElementSibling === rail) return true;
-      like.parentNode.insertBefore(rail, like);
-      return true;
-    }
-    var footer = document.querySelector("footer");
-    if (footer && footer.parentNode) {
-      footer.parentNode.insertBefore(rail, footer);
-      return true;
-    }
-    return false;
-  }
-
-  function injectSponsored() {
-    var kind = detailsKind();
-    var existing = document.querySelector("[data-fumio-sponsored]");
-    if (!kind) {
-      if (existing && existing.parentNode) existing.parentNode.removeChild(existing);
-      return;
-    }
-    if (!existing) existing = buildSponsoredRail();
-    placeSponsoredRail(existing, kind);
-  }
-
   var onDom = debounce(function () {
     hideAppOnlyChrome();
     stealFrames();
-    injectSponsored();
     patchContinueRail();
     fitScreen();
   }, 180);
-  syncAdsChrome();
   onDom();
-  window.addEventListener("fumio-ads-updated", onDom);
   window.addEventListener("history-updated", patchContinueRail);
   window.addEventListener("fumio-cw-updated", patchContinueRail);
   window.addEventListener("resize", debounce(fitScreen, 120));
