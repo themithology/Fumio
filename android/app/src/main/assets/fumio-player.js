@@ -28,10 +28,7 @@
         if (url == null || url === "" || url === "about:blank") return null;
         var parsed = new URL(String(url), location.href);
         var path = parsed.pathname || "";
-        if (parsed.origin === location.origin && /^\/download\b/i.test(path)) {
-          location.assign(parsed.href);
-          return null;
-        }
+        if (parsed.origin === location.origin && /^\/download\b/i.test(path)) return null;
         var host = (parsed.hostname || "").toLowerCase();
         if (
           host.indexOf("accounts.google") >= 0 ||
@@ -69,29 +66,45 @@
   var style = document.createElement("style");
   style.textContent =
     'html:not([data-fumio-download]) iframe[src*="vidsrc"]:not([src*="vidsrc.party"]),iframe[src*="videasy"],iframe[src*="vidfast"],iframe[src*="vidstuck"],iframe[src*="bingr"],iframe[src*="zxcstream"],iframe[src*="2embed"],iframe[src*="multiembed"],iframe[src*="autoembed"],iframe[src*="smashy"],iframe[src*="vidlink"],iframe[src*="embed.su"],iframe[src*="tgvid.lovable"],iframe[src*="megaplay"],iframe[src*="zoko"],iframe[src*="4animo"]{display:none!important}' +
-    'a[href*="watch-party"],a[href*="watchparty"],[data-nav="watch-party"]{display:none!important}';
+    'a[href*="watch-party"],a[href*="watchparty"],[data-nav="watch-party"],a[href*="/download"],a[href*="download?"]{display:none!important}';
   document.documentElement.appendChild(style);
 
-  function markDownloadPage() {
-    if (/^\/download\b/i.test(location.pathname || "")) document.documentElement.setAttribute("data-fumio-download", "1");
-    else document.documentElement.removeAttribute("data-fumio-download");
+  function isDownloadHref(href) {
+    try {
+      return /^\/download\b/i.test(new URL(href, location.origin).pathname || "");
+    } catch (e) {
+      return /download/i.test(String(href || ""));
+    }
   }
-  markDownloadPage();
 
-  function hideWatchParty() {
+  function hideAppOnlyChrome() {
     var nodes = document.querySelectorAll("a,button,span");
     for (var i = 0; i < nodes.length; i += 1) {
-      var text = (nodes[i].textContent || "").replace(/\s+/g, " ").trim().toLowerCase();
-      if (text !== "watch party") continue;
-      var el = nodes[i].closest("a,button,li") || nodes[i];
+      var node = nodes[i];
+      var text = (node.textContent || "").replace(/\s+/g, " ").trim().toLowerCase();
+      var href = node.getAttribute && node.getAttribute("href");
+      var hide =
+        text === "watch party" ||
+        text === "download" ||
+        /^download episode\b/.test(text) ||
+        (href && isDownloadHref(href));
+      if (!hide) continue;
+      var el = node.closest("a,button,li") || node;
       el.style.display = "none";
     }
   }
-  hideWatchParty();
+  hideAppOnlyChrome();
   try {
-    new MutationObserver(hideWatchParty).observe(document.documentElement, { childList: true, subtree: true });
+    new MutationObserver(hideAppOnlyChrome).observe(document.documentElement, { childList: true, subtree: true });
   } catch (e) {
     /* observer optional */
+  }
+  if (/^\/download\b/i.test(location.pathname || "")) {
+    try {
+      location.replace("/");
+    } catch (e) {
+      /* stay */
+    }
   }
 
   function parseWatch(href) {
@@ -239,18 +252,15 @@
   var push = history.pushState;
   var replace = history.replaceState;
   history.pushState = function (state, title, url) {
+    if (url && isDownloadHref(url)) return;
     if (url && openWatch(parseWatch(url))) return;
-    var out = push.apply(this, arguments);
-    markDownloadPage();
-    return out;
+    return push.apply(this, arguments);
   };
   history.replaceState = function (state, title, url) {
+    if (url && isDownloadHref(url)) return;
     if (url && openWatch(parseWatch(url))) return;
-    var out = replace.apply(this, arguments);
-    markDownloadPage();
-    return out;
+    return replace.apply(this, arguments);
   };
-  window.addEventListener("popstate", markDownloadPage);
 
   document.addEventListener(
     "click",
@@ -270,18 +280,31 @@
         event.stopPropagation();
         return;
       }
-      if (/^\/live-tv\b/i.test(location.pathname || "")) return;
-      if (/^\/download\b/i.test(location.pathname || "")) return;
       var link = event.target.closest && event.target.closest("a[href]");
-      if (link) {
-        try {
-          var linkPath = new URL(link.href, location.origin).pathname || "";
-          if (/\/download\b/i.test(linkPath)) return;
-        } catch (e) {
-          /* keep going */
+      if (link && isDownloadHref(link.href)) {
+        event.preventDefault();
+        event.stopPropagation();
+        return;
+      }
+      if (btn && /\bdownload\b/.test(label)) {
+        event.preventDefault();
+        event.stopPropagation();
+        return;
+      }
+      if (link && native.openBrowser) {
+        var target = (link.getAttribute("target") || "").toLowerCase();
+        if (target === "_blank" || target === "_new") {
+          try {
+            event.preventDefault();
+            event.stopPropagation();
+            native.openBrowser(new URL(link.href, location.origin).href);
+          } catch (e) {
+            /* ignore */
+          }
+          return;
         }
       }
-      if (btn && /\bdownload\b/.test(label)) return;
+      if (/^\/live-tv\b/i.test(location.pathname || "")) return;
       if (link && openWatch(parseWatch(link.href))) {
         event.preventDefault();
         event.stopPropagation();
@@ -303,7 +326,6 @@
   );
 
   function stealFrames() {
-    markDownloadPage();
     if (/^\/download\b/i.test(location.pathname || "")) return;
     var frames = document.querySelectorAll("iframe[src]");
     for (var i = 0; i < frames.length; i += 1) {

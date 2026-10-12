@@ -117,9 +117,7 @@ public class MainActivity extends BridgeActivity {
         settings.setDomStorageEnabled(true);
         settings.setMediaPlaybackRequiresUserGesture(false);
         webView.setDownloadListener((url, userAgent, contentDisposition, mimeType, contentLength) -> {
-            if (url == null || url.isEmpty()) return;
-            if (url.startsWith("blob:") || url.startsWith("data:")) return;
-            openExternal(Uri.parse(url));
+            /* Downloads are disabled in the Android app. */
         });
         String ua = settings.getUserAgentString();
         if (ua != null) {
@@ -313,10 +311,8 @@ public class MainActivity extends BridgeActivity {
             if (!mainFrame && (playerActive || isOwnOrigin(currentUri()) || isLiveTvPage(currentUri()))) {
                 return false;
             }
-            if (isDownloadPath(url) || isDownloadPath(currentUri())) {
-                if (isLiveSite(url) || !mainFrame) return false;
-            }
-            if (isPlayerEmbed(url) && !isDownloadPath(currentUri()) && !isDownloadPath(url)) {
+            if (isDownloadPath(url)) return true;
+            if (isPlayerEmbed(url)) {
                 openAppPlayerFromEmbed(url);
                 return true;
             }
@@ -364,8 +360,7 @@ public class MainActivity extends BridgeActivity {
                     !playerActive &&
                     request != null &&
                     !request.isForMainFrame() &&
-                    isPlayerEmbed(request.getUrl()) &&
-                    !isDownloadHost(request.getUrl())
+                    isPlayerEmbed(request.getUrl())
                 ) {
                     final Uri embed = request.getUrl();
                     view.post(() -> openAppPlayerFromEmbed(embed));
@@ -455,14 +450,27 @@ public class MainActivity extends BridgeActivity {
                     openExternal(hitUrl);
                     return false;
                 }
-                // Google/Firebase only. Player iframe popunders used this hole
-                // once multiple windows was turned on for sign-in.
-                if (!isAuthProvider(hitUrl) && !googleRedirectActive) return false;
-                WebView popup = createPopupWebView();
-                ((WebView.WebViewTransport) resultMsg.obj).setWebView(popup);
-                resultMsg.sendToTarget();
-                showPopup(popup);
-                return true;
+                if (isDownloadPath(hitUrl)) return false;
+                if (isAuthProvider(hitUrl) || googleRedirectActive) {
+                    WebView popup = createPopupWebView();
+                    ((WebView.WebViewTransport) resultMsg.obj).setWebView(popup);
+                    resultMsg.sendToTarget();
+                    showPopup(popup);
+                    return true;
+                }
+                // Real target=_blank links (Donate, payments). Iframe popunders
+                // have no anchor hit, so they stay blocked.
+                if (hitUrl != null && !isPlayerEmbed(hitUrl) && !isWatchPath(hitUrl)) {
+                    String scheme = hitUrl.getScheme();
+                    if (scheme != null) {
+                        scheme = scheme.toLowerCase(Locale.US);
+                        if (scheme.equals("https") || scheme.equals("http")) {
+                            openExternal(hitUrl);
+                            return false;
+                        }
+                    }
+                }
+                return false;
             } catch (Exception ignored) {
                 return false;
             }
@@ -590,7 +598,11 @@ public class MainActivity extends BridgeActivity {
         if (url == null) return true;
         // Google sign-in on the live site uses window.open(). Keep that popup
         // in-app: accounts.google.com, Firebase handler, then back to the site.
-        if (isBenignPopupUrl(url) || isAuthProvider(url) || isLiveSite(url) || isDownloadPath(url)) return false;
+        if (isDownloadPath(url)) {
+            dismissPopup();
+            return true;
+        }
+        if (isBenignPopupUrl(url) || isAuthProvider(url) || isLiveSite(url)) return false;
         if (isDiscord(url)) {
             openExternal(url);
             dismissPopup();
