@@ -3,7 +3,6 @@
   "skipAfterSeconds": 5,
   "rewardSeconds": 15,
   "adFreeMinutes": 60,
-  "downloadUnlockMinutes": 60,
   "introEveryMinutes": 12,
   "supportUrl": "https://theogpiratebot.online/support",
   "introUrl": "",

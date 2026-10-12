@@ -191,11 +191,6 @@ public class MainActivity extends BridgeActivity {
         }
 
         @JavascriptInterface
-        public boolean downloadsUnlocked() {
-            return ads != null && ads.downloadsUnlocked();
-        }
-
-        @JavascriptInterface
         public String nativeCards() {
             return ads == null ? "[]" : ads.nativeCardsJson();
         }
@@ -797,11 +792,8 @@ public class MainActivity extends BridgeActivity {
     private void notifyAdsChanged() {
         Bridge bridge = getBridge();
         if (bridge == null || bridge.getWebView() == null) return;
-        boolean unlocked = ads != null && ads.downloadsUnlocked();
         bridge.getWebView().evaluateJavascript(
-            "(function(on){try{if(on)document.documentElement.setAttribute('data-fumio-downloads','1');else document.documentElement.removeAttribute('data-fumio-downloads');window.dispatchEvent(new Event('fumio-ads-updated'));}catch(e){}})("
-                + (unlocked ? "true" : "false")
-                + ")",
+            "(function(){try{window.dispatchEvent(new Event('fumio-ads-updated'));}catch(e){}})()",
             null
         );
     }

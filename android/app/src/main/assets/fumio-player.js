@@ -67,7 +67,7 @@
   style.textContent =
     'html:not([data-fumio-download]) iframe[src*="vidsrc"]:not([src*="vidsrc.party"]),iframe[src*="videasy"],iframe[src*="vidfast"],iframe[src*="vidstuck"],iframe[src*="bingr"],iframe[src*="zxcstream"],iframe[src*="2embed"],iframe[src*="multiembed"],iframe[src*="autoembed"],iframe[src*="smashy"],iframe[src*="vidlink"],iframe[src*="embed.su"],iframe[src*="tgvid.lovable"],iframe[src*="megaplay"],iframe[src*="zoko"],iframe[src*="4animo"]{display:none!important}' +
     'a[href*="watch-party"],a[href*="watchparty"],[data-nav="watch-party"]{display:none!important}' +
-    'html:not([data-fumio-downloads]) a[href*="/download"],html:not([data-fumio-downloads]) a[href*="download?"]{display:none!important}';
+    'a[href*="/download"],a[href*="download?"]{display:none!important}';
   document.documentElement.appendChild(style);
 
   function isDownloadHref(href) {
@@ -84,10 +84,11 @@
       var node = nodes[i];
       var text = (node.textContent || "").replace(/\s+/g, " ").trim().toLowerCase();
       var href = node.getAttribute && node.getAttribute("href");
-      var downloadsOn = document.documentElement.hasAttribute("data-fumio-downloads");
       var hide =
         text === "watch party" ||
-        (!downloadsOn && (text === "download" || /^download episode\b/.test(text) || (href && isDownloadHref(href))));
+        text === "download" ||
+        /^download episode\b/.test(text) ||
+        (href && isDownloadHref(href));
       if (!hide) continue;
       var el = node.closest("a,button,li") || node;
       el.style.display = "none";
@@ -478,17 +479,7 @@
     if (token) window.__fumioApplyGoogleToken(token);
   });
 
-  function syncAdsChrome() {
-    try {
-      if (native.downloadsUnlocked && native.downloadsUnlocked()) {
-        document.documentElement.setAttribute("data-fumio-downloads", "1");
-      } else {
-        document.documentElement.removeAttribute("data-fumio-downloads");
-      }
-    } catch (e) {
-      /* bridge optional */
-    }
-  }
+  function syncAdsChrome() {}
 
   function injectSponsored() {
     if (document.querySelector("[data-fumio-sponsored]")) return;
@@ -504,7 +495,7 @@
         {
           label: "Sponsored",
           title: "Keep TheOGPirateBot free",
-          subtitle: "Watch a short ad to skip intros for an hour and unlock downloads.",
+          subtitle: "Watch a short ad to skip intros for an hour.",
           cta: "Watch an ad",
           reward: true,
         },
@@ -549,17 +540,6 @@
       wrap.appendChild(cta);
       rail.appendChild(wrap);
     });
-    var reward = document.createElement("button");
-    reward.type = "button";
-    reward.textContent = "Watch an ad · unlock downloads for 1 hour";
-    reward.style.cssText =
-      "margin-top:12px;width:100%;border:1px solid rgba(255,255,255,.12);border-radius:999px;padding:12px 16px;font-size:12px;font-weight:700;background:transparent;color:#fff;";
-    reward.addEventListener("click", function (event) {
-      event.preventDefault();
-      event.stopPropagation();
-      if (native.watchRewardAd) native.watchRewardAd();
-    });
-    rail.appendChild(reward);
     var host = document.querySelector("main") || document.body;
     var after = null;
     var titles = document.querySelectorAll("h2,h3");

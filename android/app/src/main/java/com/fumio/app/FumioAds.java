@@ -30,7 +30,6 @@ final class FumioAds {
 
     private static final String PREFS = "fumio-ads";
     private static final String AD_FREE_UNTIL = "adFreeUntil";
-    private static final String DOWNLOADS_UNTIL = "downloadsUntil";
     private static final String LAST_INTRO = "lastIntroAt";
 
     private final Activity activity;
@@ -52,10 +51,6 @@ final class FumioAds {
 
     boolean isAdFree() {
         return prefs.getLong(AD_FREE_UNTIL, 0) > System.currentTimeMillis();
-    }
-
-    boolean downloadsUnlocked() {
-        return prefs.getLong(DOWNLOADS_UNTIL, 0) > System.currentTimeMillis();
     }
 
     String nativeCardsJson() {
@@ -94,7 +89,7 @@ final class FumioAds {
             config.optInt("rewardSeconds", 15),
             config.optString("rewardUrl", ""),
             "Rewarded ad",
-            "Watch this to skip intro ads for 1 hour and unlock downloads.",
+            "Watch this to skip intro ads for 1 hour.",
             "Unlock after the ad",
             () -> {},
             onReward
@@ -118,10 +113,8 @@ final class FumioAds {
     }
 
     private void grantReward() {
-        long now = System.currentTimeMillis();
-        long adFree = now + Math.max(5, config.optInt("adFreeMinutes", 60)) * 60_000L;
-        long downloads = now + Math.max(5, config.optInt("downloadUnlockMinutes", 60)) * 60_000L;
-        prefs.edit().putLong(AD_FREE_UNTIL, adFree).putLong(DOWNLOADS_UNTIL, downloads).apply();
+        long adFree = System.currentTimeMillis() + Math.max(5, config.optInt("adFreeMinutes", 60)) * 60_000L;
+        prefs.edit().putLong(AD_FREE_UNTIL, adFree).apply();
     }
 
     private void showSheet(
