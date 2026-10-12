@@ -10,10 +10,10 @@
   "nativeCards": [
     {
       "label": "Sponsored",
-      "title": "Keep TheOGPirateBot free",
-      "subtitle": "A short ad or a tip runs the servers. Never pop-unders.",
-      "url": "https://theogpiratebot.online/support",
-      "cta": "Support the app"
+      "title": "Keep the app free",
+      "subtitle": "Watch a short ad to skip intros for 1 hour.",
+      "cta": "Watch ad",
+      "reward": true
     }
   ]
 }

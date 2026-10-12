@@ -136,19 +136,20 @@ final class FumioAds {
         LinearLayout root = new LinearLayout(activity);
         root.setOrientation(LinearLayout.VERTICAL);
         root.setBackgroundColor(0xFF0B0B0B);
-        int pad = dp(20);
-        root.setPadding(pad, dp(36), pad, pad);
+        int pad = dp(16);
+        int inset = activity.getResources().getDisplayMetrics().heightPixels < dp(640) ? dp(12) : dp(24);
+        root.setPadding(pad, inset, pad, pad);
 
-        TextView badgeView = text(badge.toUpperCase(), 11, 0xFFB8B8B8, true);
+        TextView badgeView = text(badge.toUpperCase(), 10, 0xFFB8B8B8, true);
         badgeView.setLetterSpacing(0.12f);
         root.addView(badgeView);
 
-        TextView msg = text(message, 18, 0xFFFFFFFF, true);
+        TextView msg = text(message, 15, 0xFFFFFFFF, true);
         LinearLayout.LayoutParams msgLp = new LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT,
             ViewGroup.LayoutParams.WRAP_CONTENT
         );
-        msgLp.topMargin = dp(10);
+        msgLp.topMargin = dp(6);
         root.addView(msg, msgLp);
 
         LinearLayout.LayoutParams slotLp = new LinearLayout.LayoutParams(
@@ -156,14 +157,16 @@ final class FumioAds {
             0,
             1f
         );
-        slotLp.topMargin = dp(16);
-        slotLp.bottomMargin = dp(16);
+        slotLp.topMargin = dp(12);
+        slotLp.bottomMargin = dp(8);
         if (url != null && url.startsWith("http")) {
             WebView web = new WebView(activity);
             web.setBackgroundColor(0xFF111111);
             WebSettings settings = web.getSettings();
             settings.setJavaScriptEnabled(true);
             settings.setDomStorageEnabled(true);
+            settings.setUseWideViewPort(true);
+            settings.setLoadWithOverviewMode(true);
             web.setWebViewClient(new WebViewClient());
             web.loadUrl(url);
             root.addView(web, slotLp);
@@ -172,20 +175,20 @@ final class FumioAds {
             card.setOrientation(LinearLayout.VERTICAL);
             card.setGravity(Gravity.CENTER);
             card.setBackgroundColor(0xFF161616);
-            card.setPadding(pad, pad, pad, pad);
-            card.addView(text("TheOGPirateBot", 22, 0xFFFFFFFF, true));
-            TextView sub = text("Free movies, TV and anime. Ads stay in this screen.", 14, 0xFFA1A1AA, false);
+            card.setPadding(dp(16), dp(16), dp(16), dp(16));
+            card.addView(text("TheOGPirateBot", 18, 0xFFFFFFFF, true));
+            TextView sub = text("Ads stay on this screen. Never extra tabs.", 12, 0xFFA1A1AA, false);
             sub.setGravity(Gravity.CENTER);
             LinearLayout.LayoutParams subLp = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT
             );
-            subLp.topMargin = dp(8);
+            subLp.topMargin = dp(6);
             card.addView(sub, subLp);
             root.addView(card, slotLp);
         }
 
-        TextView timer = text("", 13, 0xFFA1A1AA, false);
+        TextView timer = text("", 12, 0xFFA1A1AA, false);
         root.addView(timer);
 
         Button skip = new Button(activity);
@@ -196,16 +199,14 @@ final class FumioAds {
         skip.setBackgroundColor(skipAfter == 0 ? 0xFFFFFFFF : 0xFF3F3F46);
         LinearLayout.LayoutParams skipLp = new LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT,
-            dp(48)
+            dp(44)
         );
-        skipLp.topMargin = dp(12);
+        skipLp.topMargin = dp(8);
         root.addView(skip, skipLp);
 
-        Button support = new Button(activity);
-        support.setText("Support instead");
-        support.setAllCaps(false);
-        support.setTextColor(0xFFFFFFFF);
-        support.setBackgroundColor(0x00000000);
+        TextView support = text("Support instead", 12, 0xFFA1A1AA, false);
+        support.setGravity(Gravity.CENTER);
+        support.setPadding(0, dp(10), 0, dp(4));
         root.addView(support);
 
         Dialog next = new Dialog(activity, android.R.style.Theme_Black_NoTitleBar_Fullscreen);

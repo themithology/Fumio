@@ -503,40 +503,43 @@
     }
     var rail = document.createElement("section");
     rail.setAttribute("data-fumio-sponsored", "1");
-    rail.style.cssText = "padding:8px 16px 20px;max-width:1200px;margin:0 auto;";
+    rail.style.cssText = "padding:4px 16px 12px;max-width:1200px;margin:0 auto;";
     var heading = document.createElement("p");
     heading.textContent = "Sponsored";
     heading.style.cssText =
-      "margin:0 0 10px;font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:#a1a1aa;font-weight:700;";
+      "margin:0 0 8px;font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:#a1a1aa;font-weight:700;";
     rail.appendChild(heading);
     cards.forEach(function (card) {
       if (!card) return;
       var wrap = document.createElement("div");
       wrap.style.cssText =
-        "display:flex;flex-direction:column;gap:6px;padding:16px 18px;border:1px solid rgba(255,255,255,.08);border-radius:18px;background:rgba(255,255,255,.04);";
+        "display:flex;align-items:center;gap:10px;padding:10px 12px;border:1px solid rgba(255,255,255,.08);border-radius:12px;background:rgba(255,255,255,.04);";
+      var copy = document.createElement("div");
+      copy.style.cssText = "flex:1;min-width:0;";
       var label = document.createElement("span");
       label.textContent = card.label || "Sponsored";
-      label.style.cssText = "font-size:10px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:#d4d4d8;";
+      label.style.cssText = "display:block;font-size:9px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:#d4d4d8;";
       var title = document.createElement("strong");
       title.textContent = card.title || "Sponsored";
-      title.style.cssText = "font-size:16px;color:#fff;";
+      title.style.cssText = "display:block;font-size:13px;line-height:1.25;color:#fff;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;";
       var sub = document.createElement("p");
       sub.textContent = card.subtitle || "";
-      sub.style.cssText = "margin:0;font-size:13px;line-height:1.45;color:#a1a1aa;";
+      sub.style.cssText = "margin:2px 0 0;font-size:11px;line-height:1.3;color:#a1a1aa;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;";
       var cta = document.createElement("button");
       cta.type = "button";
       cta.textContent = card.cta || "Open";
       cta.style.cssText =
-        "margin-top:8px;align-self:flex-start;border:0;border-radius:999px;padding:10px 16px;font-size:12px;font-weight:700;background:#fff;color:#111;";
+        "flex:0 0 auto;border:0;border-radius:999px;padding:8px 12px;font-size:11px;font-weight:700;background:#fff;color:#111;white-space:nowrap;";
       cta.addEventListener("click", function (event) {
         event.preventDefault();
         event.stopPropagation();
         if (card.reward && native.watchRewardAd) native.watchRewardAd();
         else if (card.url && native.openBrowser) native.openBrowser(card.url);
       });
-      wrap.appendChild(label);
-      wrap.appendChild(title);
-      if (card.subtitle) wrap.appendChild(sub);
+      copy.appendChild(label);
+      copy.appendChild(title);
+      if (card.subtitle) copy.appendChild(sub);
+      wrap.appendChild(copy);
       wrap.appendChild(cta);
       rail.appendChild(wrap);
     });
