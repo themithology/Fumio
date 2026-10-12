@@ -760,17 +760,21 @@ public class MainActivity extends BridgeActivity {
 
     private void openAppPlayer(String type, String id, String season, String episode) {
         if (id == null || id.isEmpty()) return;
-        long now = System.currentTimeMillis();
-        if (now - lastPlayerOpenAt < 800 && playerActive) return;
-        lastPlayerOpenAt = now;
+        if (playerActive) return;
         playerActive = true;
+        lastPlayerOpenAt = System.currentTimeMillis();
+        freezeLiveWebView(true);
+        SystemBars.hide(getWindow());
         if (playerOverlay == null) {
             playerOverlay = new FumioPlayerOverlay(this, this::onOverlayClosed);
         }
         snapshotLiveSession((seed) -> {
             if (isFinishing() || isDestroyed()) return;
             Runnable play = () -> {
-                if (isFinishing() || isDestroyed()) return;
+                if (isFinishing() || isDestroyed()) {
+                    onOverlayClosed(null);
+                    return;
+                }
                 playerOverlay.open(type, id, season, episode, seed);
             };
             FumioVast.play(
@@ -778,7 +782,7 @@ public class MainActivity extends BridgeActivity {
                 vastUrl,
                 vastSkipAfter,
                 play,
-                () -> playerActive = false
+                () -> onOverlayClosed(null)
             );
         });
     }
@@ -799,7 +803,20 @@ public class MainActivity extends BridgeActivity {
 
     private void onOverlayClosed(String continueWatching) {
         playerActive = false;
+        freezeLiveWebView(false);
+        SystemBars.show(getWindow());
         applyContinueWatchingToLiveSite(continueWatching);
+    }
+
+    private void freezeLiveWebView(boolean freeze) {
+        Bridge bridge = getBridge();
+        if (bridge == null || bridge.getWebView() == null) return;
+        try {
+            if (freeze) bridge.getWebView().onPause();
+            else bridge.getWebView().onResume();
+        } catch (Exception ignored) {
+            /* webview already gone */
+        }
     }
 
     private void snapshotLiveSession(ValueCallback<String> done) {

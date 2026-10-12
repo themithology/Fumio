@@ -325,7 +325,7 @@ export default function Player() {
   }, [navigate, type, id]);
 
   return (
-    <div className="fixed inset-0 z-50 h-screen w-screen bg-black">
+    <div className="fixed inset-0 z-50 h-[100dvh] w-[100dvw] max-h-[100dvh] max-w-[100vw] overflow-hidden bg-black">
       <PlayerStage
         tmdbId={id}
         mediaType={type}
@@ -337,7 +337,11 @@ export default function Player() {
       <button
         onClick={close}
         aria-label="Close player"
-        className="absolute right-3 top-3 z-20 flex h-10 w-10 items-center justify-center rounded-full bg-black/60 text-white backdrop-blur hover:bg-black/80"
+        className="absolute z-20 flex h-10 w-10 items-center justify-center rounded-full bg-black/60 text-white backdrop-blur hover:bg-black/80"
+        style={{
+          top: "max(12px, env(safe-area-inset-top, 0px))",
+          right: "max(12px, env(safe-area-inset-right, 0px))",
+        }}
       >
         ✕
       </button>

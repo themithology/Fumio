@@ -38,8 +38,8 @@ import java.util.regex.Pattern;
  */
 final class FumioVast {
 
-    private static final int MAX_WRAPPERS = 5;
-    private static final int FETCH_MS = 10000;
+    private static final int MAX_WRAPPERS = 2;
+    private static final int FETCH_MS = 4000;
     private static final String UA =
         "Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Mobile Safari/537.36";
     private static final String REFERER = "https://theogpiratebot.online/";
@@ -134,13 +134,8 @@ final class FumioVast {
 
         Dialog dialog = new Dialog(activity, android.R.style.Theme_Black_NoTitleBar_Fullscreen);
         Window window = dialog.getWindow();
-        if (window != null) {
-            window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
-            window.setFlags(
-                WindowManager.LayoutParams.FLAG_FULLSCREEN,
-                WindowManager.LayoutParams.FLAG_FULLSCREEN
-            );
-        }
+        if (window != null) SystemBars.hide(window);
+        SystemBars.hide(activity.getWindow());
         dialog.setContentView(root);
         dialog.setCancelable(true);
 
@@ -246,6 +241,7 @@ final class FumioVast {
             web.loadDataWithBaseURL(REFERER, playerHtml(ad.mediaUrl), "text/html", "utf-8", null);
             fire(ad.impressions);
             tick.run();
+            handler.postDelayed(finish, 12_000);
         } catch (Exception ignored) {
             finish.run();
         }

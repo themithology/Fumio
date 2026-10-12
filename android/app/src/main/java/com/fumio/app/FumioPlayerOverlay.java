@@ -86,15 +86,7 @@ final class FumioPlayerOverlay {
             dialog = new Dialog(activity, android.R.style.Theme_Black_NoTitleBar_Fullscreen);
             Window window = dialog.getWindow();
             if (window != null) {
-                window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
-                window.setFlags(
-                    WindowManager.LayoutParams.FLAG_FULLSCREEN,
-                    WindowManager.LayoutParams.FLAG_FULLSCREEN
-                );
-                if (Build.VERSION.SDK_INT >= 28) {
-                    window.getAttributes().layoutInDisplayCutoutMode =
-                        WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES;
-                }
+                SystemBars.hide(window);
             }
             dialog.setContentView(root);
             dialog.setOnCancelListener((d) -> close());
@@ -404,16 +396,8 @@ final class FumioPlayerOverlay {
     }
 
     private void hideSystemUi() {
-        if (dialog == null || dialog.getWindow() == null) return;
-        View decor = dialog.getWindow().getDecorView();
-        decor.setSystemUiVisibility(
-            View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
-                | View.SYSTEM_UI_FLAG_FULLSCREEN
-                | View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
-                | View.SYSTEM_UI_FLAG_LAYOUT_STABLE
-                | View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
-                | View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
-        );
+        if (dialog != null) SystemBars.hide(dialog.getWindow());
+        SystemBars.hide(activity.getWindow());
     }
 
     private void deliverHttpResult(String requestId, JSONObject result) {
