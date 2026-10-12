@@ -552,12 +552,28 @@
     return frame;
   }
 
-  function injectSponsored() {
-    if (!/^\/?$/.test((location.pathname || "").replace(/\/+$/, "") || "/")) return;
-    if (document.querySelector("[data-fumio-sponsored]")) return;
+  function detailsKind() {
+    var path = location.pathname || "";
+    var match =
+      path.match(/\/(movie|tv|anime)\/details\//i) || path.match(/\/details\/(movie|tv|anime)\//i);
+    if (!match) return null;
+    return match[1].toLowerCase() === "movie" ? "movie" : "tv";
+  }
+
+  function findBlock(pattern) {
+    var nodes = document.querySelectorAll("h1,h2,h3,h4,p");
+    for (var i = 0; i < nodes.length; i += 1) {
+      var text = (nodes[i].textContent || "").replace(/\s+/g, " ").trim();
+      if (!pattern.test(text)) continue;
+      return nodes[i].closest("section") || nodes[i].parentElement;
+    }
+    return null;
+  }
+
+  function buildSponsoredRail() {
     var rail = document.createElement("section");
     rail.setAttribute("data-fumio-sponsored", "1");
-    rail.style.cssText = "padding:4px 16px 12px;max-width:1200px;margin:0 auto;";
+    rail.style.cssText = "padding:8px 16px 16px;max-width:1200px;margin:0 auto;width:100%;";
     var heading = document.createElement("p");
     heading.textContent = "Sponsored";
     heading.style.cssText =
@@ -565,7 +581,7 @@
     rail.appendChild(heading);
     var nativeWrap = document.createElement("div");
     nativeWrap.style.cssText =
-      "overflow:hidden;border-radius:12px;background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.08);padding:8px;margin-bottom:8px;";
+      "max-height:180px;overflow:hidden;border-radius:12px;background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.08);padding:6px;";
     var nativeScript = document.createElement("script");
     nativeScript.async = true;
     nativeScript.setAttribute("data-cfasync", "false");
@@ -575,18 +591,44 @@
     nativeWrap.appendChild(nativeScript);
     nativeWrap.appendChild(nativeMount);
     rail.appendChild(nativeWrap);
-    rail.appendChild(bannerFrame("00177acbdeb89ce6906c88754bf4de5b", 320, 50));
-    var host = document.querySelector("main") || document.body;
-    var after = null;
-    var titles = document.querySelectorAll("h2,h3");
-    for (var i = 0; i < titles.length; i += 1) {
-      if (/continue watching/i.test(titles[i].textContent || "")) {
-        after = titles[i].closest("section") || titles[i].parentElement;
-        break;
-      }
+    return rail;
+  }
+
+  function placeSponsoredRail(rail, kind) {
+    if (kind === "tv") {
+      var episodes = findBlock(/choose your episode/i) || findBlock(/^\s*episodes\b/i) || findBlock(/\d+\s+episodes\b/i);
+      if (!episodes || !episodes.parentNode) return false;
+      if (rail.previousElementSibling === episodes) return true;
+      episodes.parentNode.insertBefore(rail, episodes.nextSibling);
+      return true;
     }
-    if (after && after.parentNode) after.parentNode.insertBefore(rail, after.nextSibling);
-    else host.insertBefore(rail, host.firstChild);
+    var like =
+      findBlock(/you may like/i) ||
+      findBlock(/more like this/i) ||
+      findBlock(/recommendations/i) ||
+      findBlock(/^\s*similar\b/i);
+    if (like && like.parentNode) {
+      if (rail.nextElementSibling === like || like.previousElementSibling === rail) return true;
+      like.parentNode.insertBefore(rail, like);
+      return true;
+    }
+    var footer = document.querySelector("footer");
+    if (footer && footer.parentNode) {
+      footer.parentNode.insertBefore(rail, footer);
+      return true;
+    }
+    return false;
+  }
+
+  function injectSponsored() {
+    var kind = detailsKind();
+    var existing = document.querySelector("[data-fumio-sponsored]");
+    if (!kind) {
+      if (existing && existing.parentNode) existing.parentNode.removeChild(existing);
+      return;
+    }
+    if (!existing) existing = buildSponsoredRail();
+    placeSponsoredRail(existing, kind);
   }
 
   syncAdsChrome();
