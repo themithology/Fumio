@@ -70,6 +70,8 @@ public class MainActivity extends BridgeActivity {
     private boolean liveFailed;
     private volatile boolean playerActive;
     private long lastPlayerOpenAt;
+    private String vastUrl = "";
+    private int vastSkipAfter = 5;
     private View fullscreenView;
     private WebChromeClient.CustomViewCallback fullscreenCallback;
 
@@ -82,6 +84,13 @@ public class MainActivity extends BridgeActivity {
             WebView webView = bridge.getWebView();
             if (webView == null) return;
             playerScript = readAsset("fumio-player.js");
+            try {
+                JSONObject ads = new JSONObject(readAsset("fumio-ads.json"));
+                vastUrl = ads.optString("vastUrl", "");
+                vastSkipAfter = ads.optInt("skipAfterSeconds", 5);
+            } catch (Exception ignored) {
+                vastUrl = "";
+            }
             playerOverlay = new FumioPlayerOverlay(this, this::onOverlayClosed);
             installClients(webView, bridge);
             installBackHandler();
@@ -760,8 +769,17 @@ public class MainActivity extends BridgeActivity {
         }
         snapshotLiveSession((seed) -> {
             if (isFinishing() || isDestroyed()) return;
-            if (isFinishing() || isDestroyed()) return;
-            playerOverlay.open(type, id, season, episode, seed);
+            Runnable play = () -> {
+                if (isFinishing() || isDestroyed()) return;
+                playerOverlay.open(type, id, season, episode, seed);
+            };
+            FumioVast.play(
+                this,
+                vastUrl,
+                vastSkipAfter,
+                play,
+                () -> playerActive = false
+            );
         });
     }
 
