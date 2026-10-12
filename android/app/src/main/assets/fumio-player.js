@@ -66,7 +66,8 @@
   var style = document.createElement("style");
   style.textContent =
     'html:not([data-fumio-download]) iframe[src*="vidsrc"]:not([src*="vidsrc.party"]),iframe[src*="videasy"],iframe[src*="vidfast"],iframe[src*="vidstuck"],iframe[src*="bingr"],iframe[src*="zxcstream"],iframe[src*="2embed"],iframe[src*="multiembed"],iframe[src*="autoembed"],iframe[src*="smashy"],iframe[src*="vidlink"],iframe[src*="embed.su"],iframe[src*="tgvid.lovable"],iframe[src*="megaplay"],iframe[src*="zoko"],iframe[src*="4animo"]{display:none!important}' +
-    'a[href*="watch-party"],a[href*="watchparty"],[data-nav="watch-party"],a[href*="/download"],a[href*="download?"]{display:none!important}';
+    'a[href*="watch-party"],a[href*="watchparty"],[data-nav="watch-party"]{display:none!important}' +
+    'html:not([data-fumio-downloads]) a[href*="/download"],html:not([data-fumio-downloads]) a[href*="download?"]{display:none!important}';
   document.documentElement.appendChild(style);
 
   function isDownloadHref(href) {
@@ -83,11 +84,10 @@
       var node = nodes[i];
       var text = (node.textContent || "").replace(/\s+/g, " ").trim().toLowerCase();
       var href = node.getAttribute && node.getAttribute("href");
+      var downloadsOn = document.documentElement.hasAttribute("data-fumio-downloads");
       var hide =
         text === "watch party" ||
-        text === "download" ||
-        /^download episode\b/.test(text) ||
-        (href && isDownloadHref(href));
+        (!downloadsOn && (text === "download" || /^download episode\b/.test(text) || (href && isDownloadHref(href))));
       if (!hide) continue;
       var el = node.closest("a,button,li") || node;
       el.style.display = "none";
@@ -280,6 +280,7 @@
         event.stopPropagation();
         return;
       }
+      if (event.target.closest && event.target.closest("[data-fumio-sponsored]")) return;
       var link = event.target.closest && event.target.closest("a[href]");
       var nested = event.target.closest && event.target.closest("button,[aria-label]");
       if (nested && link && nested !== link && /remove|close|clear|delete|dismiss/i.test((nested.getAttribute("aria-label") || "") + " " + (nested.textContent || ""))) {
@@ -476,4 +477,111 @@
     var token = event && event.detail && event.detail.idToken;
     if (token) window.__fumioApplyGoogleToken(token);
   });
+
+  function syncAdsChrome() {
+    try {
+      if (native.downloadsUnlocked && native.downloadsUnlocked()) {
+        document.documentElement.setAttribute("data-fumio-downloads", "1");
+      } else {
+        document.documentElement.removeAttribute("data-fumio-downloads");
+      }
+    } catch (e) {
+      /* bridge optional */
+    }
+  }
+
+  function injectSponsored() {
+    if (document.querySelector("[data-fumio-sponsored]")) return;
+    if (!/^\/?$/.test((location.pathname || "").replace(/\/+$/, "") || "/")) return;
+    var cards = [];
+    try {
+      cards = JSON.parse(native.nativeCards ? native.nativeCards() : "[]") || [];
+    } catch (e) {
+      cards = [];
+    }
+    if (!cards.length) {
+      cards = [
+        {
+          label: "Sponsored",
+          title: "Keep TheOGPirateBot free",
+          subtitle: "Watch a short ad to skip intros for an hour and unlock downloads.",
+          cta: "Watch an ad",
+          reward: true,
+        },
+      ];
+    }
+    var rail = document.createElement("section");
+    rail.setAttribute("data-fumio-sponsored", "1");
+    rail.style.cssText = "padding:8px 16px 20px;max-width:1200px;margin:0 auto;";
+    var heading = document.createElement("p");
+    heading.textContent = "Sponsored";
+    heading.style.cssText =
+      "margin:0 0 10px;font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:#a1a1aa;font-weight:700;";
+    rail.appendChild(heading);
+    cards.forEach(function (card) {
+      if (!card) return;
+      var wrap = document.createElement("div");
+      wrap.style.cssText =
+        "display:flex;flex-direction:column;gap:6px;padding:16px 18px;border:1px solid rgba(255,255,255,.08);border-radius:18px;background:rgba(255,255,255,.04);";
+      var label = document.createElement("span");
+      label.textContent = card.label || "Sponsored";
+      label.style.cssText = "font-size:10px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:#d4d4d8;";
+      var title = document.createElement("strong");
+      title.textContent = card.title || "Sponsored";
+      title.style.cssText = "font-size:16px;color:#fff;";
+      var sub = document.createElement("p");
+      sub.textContent = card.subtitle || "";
+      sub.style.cssText = "margin:0;font-size:13px;line-height:1.45;color:#a1a1aa;";
+      var cta = document.createElement("button");
+      cta.type = "button";
+      cta.textContent = card.cta || "Open";
+      cta.style.cssText =
+        "margin-top:8px;align-self:flex-start;border:0;border-radius:999px;padding:10px 16px;font-size:12px;font-weight:700;background:#fff;color:#111;";
+      cta.addEventListener("click", function (event) {
+        event.preventDefault();
+        event.stopPropagation();
+        if (card.reward && native.watchRewardAd) native.watchRewardAd();
+        else if (card.url && native.openBrowser) native.openBrowser(card.url);
+      });
+      wrap.appendChild(label);
+      wrap.appendChild(title);
+      if (card.subtitle) wrap.appendChild(sub);
+      wrap.appendChild(cta);
+      rail.appendChild(wrap);
+    });
+    var reward = document.createElement("button");
+    reward.type = "button";
+    reward.textContent = "Watch an ad · unlock downloads for 1 hour";
+    reward.style.cssText =
+      "margin-top:12px;width:100%;border:1px solid rgba(255,255,255,.12);border-radius:999px;padding:12px 16px;font-size:12px;font-weight:700;background:transparent;color:#fff;";
+    reward.addEventListener("click", function (event) {
+      event.preventDefault();
+      event.stopPropagation();
+      if (native.watchRewardAd) native.watchRewardAd();
+    });
+    rail.appendChild(reward);
+    var host = document.querySelector("main") || document.body;
+    var after = null;
+    var titles = document.querySelectorAll("h2,h3");
+    for (var i = 0; i < titles.length; i += 1) {
+      if (/continue watching/i.test(titles[i].textContent || "")) {
+        after = titles[i].closest("section") || titles[i].parentElement;
+        break;
+      }
+    }
+    if (after && after.parentNode) after.parentNode.insertBefore(rail, after.nextSibling);
+    else host.insertBefore(rail, host.firstChild);
+  }
+
+  syncAdsChrome();
+  injectSponsored();
+  window.addEventListener("fumio-ads-updated", function () {
+    syncAdsChrome();
+    hideAppOnlyChrome();
+  });
+  try {
+    new MutationObserver(injectSponsored).observe(document.documentElement, { childList: true, subtree: true });
+  } catch (e) {
+    /* optional */
+  }
 })();

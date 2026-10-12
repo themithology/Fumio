@@ -58,6 +58,7 @@ public class MainActivity extends BridgeActivity {
     private String pendingAuthToken;
     private volatile boolean googleRedirectActive;
     private final InAppGoogleAuth inAppGoogleAuth = new InAppGoogleAuth();
+    private FumioAds ads;
     private FumioPlayerOverlay playerOverlay;
     private static final Pattern EMBED_TITLE = Pattern.compile(
         "(?i)/(movie|tv|anime)/(\\d+)(?:/(\\d+)(?:/(\\d+))?)?"
@@ -82,6 +83,7 @@ public class MainActivity extends BridgeActivity {
             WebView webView = bridge.getWebView();
             if (webView == null) return;
             playerScript = readAsset("fumio-player.js");
+            ads = new FumioAds(this, readAsset("fumio-ads.json"));
             playerOverlay = new FumioPlayerOverlay(this, this::onOverlayClosed);
             installClients(webView, bridge);
             installBackHandler();
@@ -181,6 +183,29 @@ public class MainActivity extends BridgeActivity {
         @JavascriptInterface
         public void openWatch(String type, String id, String season, String episode) {
             runOnUiThread(() -> openAppPlayer(type, id, season, episode));
+        }
+
+        @JavascriptInterface
+        public boolean isAdFree() {
+            return ads != null && ads.isAdFree();
+        }
+
+        @JavascriptInterface
+        public boolean downloadsUnlocked() {
+            return ads != null && ads.downloadsUnlocked();
+        }
+
+        @JavascriptInterface
+        public String nativeCards() {
+            return ads == null ? "[]" : ads.nativeCardsJson();
+        }
+
+        @JavascriptInterface
+        public void watchRewardAd() {
+            runOnUiThread(() -> {
+                if (ads == null) return;
+                ads.showRewarded(MainActivity.this::notifyAdsChanged);
+            });
         }
 
         @JavascriptInterface
@@ -702,7 +727,7 @@ public class MainActivity extends BridgeActivity {
 
     private void injectPlayerScript(WebView view) {
         if (view == null || playerScript == null || playerScript.isEmpty()) return;
-        view.evaluateJavascript(playerScript, null);
+        view.evaluateJavascript(playerScript, (v) -> notifyAdsChanged());
     }
 
     private void rememberLocalAppUrl() {
@@ -760,11 +785,29 @@ public class MainActivity extends BridgeActivity {
         }
         snapshotLiveSession((seed) -> {
             if (isFinishing() || isDestroyed()) return;
-            playerOverlay.open(type, id, season, episode, seed);
+            Runnable play = () -> {
+                if (isFinishing() || isDestroyed()) return;
+                playerOverlay.open(type, id, season, episode, seed);
+            };
+            if (ads != null) ads.showIntro(play);
+            else play.run();
         });
     }
 
+    private void notifyAdsChanged() {
+        Bridge bridge = getBridge();
+        if (bridge == null || bridge.getWebView() == null) return;
+        boolean unlocked = ads != null && ads.downloadsUnlocked();
+        bridge.getWebView().evaluateJavascript(
+            "(function(on){try{if(on)document.documentElement.setAttribute('data-fumio-downloads','1');else document.documentElement.removeAttribute('data-fumio-downloads');window.dispatchEvent(new Event('fumio-ads-updated'));}catch(e){}})("
+                + (unlocked ? "true" : "false")
+                + ")",
+            null
+        );
+    }
+
     private void closeAppPlayer() {
+        if (ads != null) ads.dismiss();
         if (playerOverlay != null && playerOverlay.isShowing()) playerOverlay.close();
         else onOverlayClosed(null);
     }
@@ -1035,6 +1078,7 @@ public class MainActivity extends BridgeActivity {
         try {
             exitFullscreen();
             setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED);
+            if (ads != null) ads.dismiss();
             if (playerOverlay != null && playerOverlay.isShowing()) playerOverlay.close();
             inAppGoogleAuth.dismiss();
             dismissPopup();
