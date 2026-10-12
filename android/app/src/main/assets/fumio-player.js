@@ -479,39 +479,35 @@
     if (token) window.__fumioApplyGoogleToken(token);
   });
 
-  function syncAdsChrome() {}
+  function bannerFrame(key, width, height) {
+    var frame = document.createElement("iframe");
+    frame.setAttribute("scrolling", "no");
+    frame.setAttribute("title", "Sponsored");
+    frame.style.cssText =
+      "width:100%;max-width:" +
+      width +
+      "px;height:" +
+      height +
+      "px;border:0;margin:0 auto;display:block;background:transparent;";
+    frame.srcdoc =
+      "<!doctype html><html><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">" +
+      "<style>html,body{margin:0;background:transparent;display:flex;justify-content:center;align-items:center}</style></head><body>" +
+      "<script>atOptions={key:'" +
+      key +
+      "',format:'iframe',height:" +
+      height +
+      ",width:" +
+      width +
+      ",params:{}};<\/script>" +
+      "<script src=\"https://bancadeltempoidea.org/22/" +
+      key +
+      "\"><\/script></body></html>";
+    return frame;
+  }
 
   function injectSponsored() {
     if (!/^\/?$/.test((location.pathname || "").replace(/\/+$/, "") || "/")) return;
-    var existing = document.querySelector("[data-fumio-sponsored]");
-    var adFree = false;
-    try {
-      adFree = !!(native.isAdFree && native.isAdFree());
-    } catch (e) {
-      adFree = false;
-    }
-    if (adFree) {
-      if (existing && existing.parentNode) existing.parentNode.removeChild(existing);
-      return;
-    }
-    if (existing) return;
-    var cards = [];
-    try {
-      cards = JSON.parse(native.nativeCards ? native.nativeCards() : "[]") || [];
-    } catch (e) {
-      cards = [];
-    }
-    if (!cards.length) {
-      cards = [
-        {
-          label: "Sponsored",
-          title: "Want an hour ad-free?",
-          subtitle: "One short page, then enjoy the show.",
-          cta: "Let's go",
-          reward: true,
-        },
-      ];
-    }
+    if (document.querySelector("[data-fumio-sponsored]")) return;
     var rail = document.createElement("section");
     rail.setAttribute("data-fumio-sponsored", "1");
     rail.style.cssText = "padding:4px 16px 12px;max-width:1200px;margin:0 auto;";
@@ -520,40 +516,19 @@
     heading.style.cssText =
       "margin:0 0 8px;font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:#a1a1aa;font-weight:700;";
     rail.appendChild(heading);
-    cards.forEach(function (card) {
-      if (!card) return;
-      var wrap = document.createElement("div");
-      wrap.style.cssText =
-        "display:flex;align-items:center;gap:10px;padding:10px 12px;border:1px solid rgba(255,255,255,.08);border-radius:12px;background:rgba(255,255,255,.04);";
-      var copy = document.createElement("div");
-      copy.style.cssText = "flex:1;min-width:0;";
-      var label = document.createElement("span");
-      label.textContent = card.label || "Sponsored";
-      label.style.cssText = "display:block;font-size:9px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:#d4d4d8;";
-      var title = document.createElement("strong");
-      title.textContent = card.title || "Sponsored";
-      title.style.cssText = "display:block;font-size:13px;line-height:1.25;color:#fff;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;";
-      var sub = document.createElement("p");
-      sub.textContent = card.subtitle || "";
-      sub.style.cssText = "margin:2px 0 0;font-size:11px;line-height:1.3;color:#a1a1aa;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;";
-      var cta = document.createElement("button");
-      cta.type = "button";
-      cta.textContent = card.cta || "Open";
-      cta.style.cssText =
-        "flex:0 0 auto;border:0;border-radius:999px;padding:8px 12px;font-size:11px;font-weight:700;background:#fff;color:#111;white-space:nowrap;";
-      cta.addEventListener("click", function (event) {
-        event.preventDefault();
-        event.stopPropagation();
-        if (card.reward && native.watchRewardAd) native.watchRewardAd();
-        else if (card.url && native.openBrowser) native.openBrowser(card.url);
-      });
-      copy.appendChild(label);
-      copy.appendChild(title);
-      if (card.subtitle) copy.appendChild(sub);
-      wrap.appendChild(copy);
-      wrap.appendChild(cta);
-      rail.appendChild(wrap);
-    });
+    var nativeWrap = document.createElement("div");
+    nativeWrap.style.cssText =
+      "overflow:hidden;border-radius:12px;background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.08);padding:8px;margin-bottom:8px;";
+    var nativeScript = document.createElement("script");
+    nativeScript.async = true;
+    nativeScript.setAttribute("data-cfasync", "false");
+    nativeScript.src = "https://bancadeltempoidea.org/21/f59c3af8bc1986dfe1379fd3cfb3bebc";
+    var nativeMount = document.createElement("div");
+    nativeMount.id = "container-f59c3af8bc1986dfe1379fd3cfb3bebc";
+    nativeWrap.appendChild(nativeScript);
+    nativeWrap.appendChild(nativeMount);
+    rail.appendChild(nativeWrap);
+    rail.appendChild(bannerFrame("00177acbdeb89ce6906c88754bf4de5b", 320, 50));
     var host = document.querySelector("main") || document.body;
     var after = null;
     var titles = document.querySelectorAll("h2,h3");
