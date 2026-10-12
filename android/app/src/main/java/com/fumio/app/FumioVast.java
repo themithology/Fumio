@@ -3,18 +3,24 @@ package com.fumio.app;
 import android.app.Activity;
 import android.app.Dialog;
 import android.content.Intent;
+import android.graphics.Color;
 import android.graphics.Typeface;
-import android.media.MediaPlayer;
 import android.net.Uri;
 import android.os.Handler;
 import android.os.Looper;
 import android.view.Gravity;
-import android.view.View;
 import android.view.ViewGroup;
+import android.view.Window;
+import android.view.WindowManager;
+import android.webkit.JavascriptInterface;
+import android.webkit.WebChromeClient;
+import android.webkit.WebResourceRequest;
+import android.webkit.WebSettings;
+import android.webkit.WebView;
+import android.webkit.WebViewClient;
 import android.widget.Button;
 import android.widget.FrameLayout;
 import android.widget.TextView;
-import android.widget.VideoView;
 import java.io.BufferedReader;
 import java.io.InputStream;
 import java.io.InputStreamReader;
@@ -23,17 +29,32 @@ import java.net.URL;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
-import org.xmlpull.v1.XmlPullParser;
-import org.xmlpull.v1.XmlPullParserFactory;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /**
- * Contained VAST preroll. Plays one mp4, skip after a few seconds, then the
- * Fumio player. Clicks open Chrome. No extra windows, no reward unlock.
+ * Contained VAST preroll. Fetch XML, play the mp4 in a WebView, skip after a
+ * few seconds, then the Fumio player. Clicks open Chrome. No extra windows.
  */
 final class FumioVast {
 
-    private static final int MAX_WRAPPERS = 4;
-    private static final int FETCH_MS = 8000;
+    private static final int MAX_WRAPPERS = 5;
+    private static final int FETCH_MS = 10000;
+    private static final String UA =
+        "Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Mobile Safari/537.36";
+    private static final String REFERER = "https://theogpiratebot.online/";
+    private static final Pattern MEDIA_FILE = Pattern.compile(
+        "(?is)<MediaFile([^>]*)>\\s*(?:<!\\[CDATA\\[)?\\s*(https?://[^\\s\\]<]+)"
+    );
+    private static final Pattern WRAPPER = Pattern.compile(
+        "(?is)<VASTAdTagURI[^>]*>\\s*(?:<!\\[CDATA\\[)?\\s*(https?://[^\\s\\]<]+)"
+    );
+    private static final Pattern IMPRESSION = Pattern.compile(
+        "(?is)<Impression[^>]*>\\s*(?:<!\\[CDATA\\[)?\\s*(https?://[^\\s\\]<]+)"
+    );
+    private static final Pattern CLICK = Pattern.compile(
+        "(?is)<ClickThrough[^>]*>\\s*(?:<!\\[CDATA\\[)?\\s*(https?://[^\\s\\]<]+)"
+    );
 
     static void play(Activity activity, String vastUrl, int skipAfterSec, Runnable then, Runnable onCancel) {
         if (then == null) return;
@@ -44,7 +65,7 @@ final class FumioVast {
         Handler main = new Handler(Looper.getMainLooper());
         new Thread(
             () -> {
-                Creative ad = resolve(vastUrl, 0);
+                Creative ad = resolve(bust(vastUrl), 0);
                 main.post(() -> {
                     if (activity.isFinishing() || activity.isDestroyed()) return;
                     if (ad == null || ad.mediaUrl == null || ad.mediaUrl.isEmpty()) {
@@ -66,29 +87,28 @@ final class FumioVast {
         Runnable onCancel
     ) {
         FrameLayout root = new FrameLayout(activity);
-        root.setBackgroundColor(0xFF000000);
+        root.setBackgroundColor(Color.BLACK);
 
-        VideoView video = new VideoView(activity);
-        FrameLayout.LayoutParams videoLp = new FrameLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT,
-            ViewGroup.LayoutParams.MATCH_PARENT,
-            Gravity.CENTER
-        );
-        root.addView(video, videoLp);
-
-        TextView badge = new TextView(activity);
-        badge.setText("Ad");
-        badge.setTextColor(0xFFD4D4D8);
-        badge.setTextSize(11);
-        badge.setTypeface(Typeface.SANS_SERIF, Typeface.BOLD);
-        badge.setPadding(dp(activity, 14), dp(activity, 12), dp(activity, 14), dp(activity, 8));
-        root.addView(
-            badge,
-            new FrameLayout.LayoutParams(
-                ViewGroup.LayoutParams.WRAP_CONTENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT,
-                Gravity.TOP | Gravity.START
-            )
+        WebView web = new WebView(activity);
+        web.setBackgroundColor(Color.BLACK);
+        WebSettings settings = web.getSettings();
+        settings.setJavaScriptEnabled(true);
+        settings.setDomStorageEnabled(true);
+        settings.setMediaPlaybackRequiresUserGesture(false);
+        settings.setSupportMultipleWindows(false);
+        settings.setJavaScriptCanOpenWindowsAutomatically(false);
+        settings.setUserAgentString(UA);
+        web.setWebChromeClient(new WebChromeClient());
+        web.setWebViewClient(
+            new WebViewClient() {
+                @Override
+                public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
+                    if (request == null || request.getUrl() == null) return true;
+                    if (!request.isForMainFrame()) return false;
+                    openChrome(activity, request.getUrl().toString());
+                    return true;
+                }
+            }
         );
 
         Button skip = new Button(activity);
@@ -104,9 +124,23 @@ final class FumioVast {
         );
         skipLp.topMargin = dp(activity, 10);
         skipLp.rightMargin = dp(activity, 10);
-        root.addView(skip, skipLp);
+
+        TextView badge = new TextView(activity);
+        badge.setText("Ad");
+        badge.setTextColor(0xFFD4D4D8);
+        badge.setTextSize(11);
+        badge.setTypeface(Typeface.SANS_SERIF, Typeface.BOLD);
+        badge.setPadding(dp(activity, 14), dp(activity, 12), dp(activity, 14), dp(activity, 8));
 
         Dialog dialog = new Dialog(activity, android.R.style.Theme_Black_NoTitleBar_Fullscreen);
+        Window window = dialog.getWindow();
+        if (window != null) {
+            window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+            window.setFlags(
+                WindowManager.LayoutParams.FLAG_FULLSCREEN,
+                WindowManager.LayoutParams.FLAG_FULLSCREEN
+            );
+        }
         dialog.setContentView(root);
         dialog.setCancelable(true);
 
@@ -117,9 +151,10 @@ final class FumioVast {
             done[0] = true;
             handler.removeCallbacksAndMessages(null);
             try {
-                video.stopPlayback();
+                web.loadUrl("about:blank");
+                web.destroy();
             } catch (Exception ignored) {
-                /* already stopped */
+                /* already gone */
             }
             try {
                 if (dialog.isShowing()) dialog.dismiss();
@@ -133,9 +168,10 @@ final class FumioVast {
             done[0] = true;
             handler.removeCallbacksAndMessages(null);
             try {
-                video.stopPlayback();
+                web.loadUrl("about:blank");
+                web.destroy();
             } catch (Exception ignored) {
-                /* already stopped */
+                /* already gone */
             }
             try {
                 if (dialog.isShowing()) dialog.dismiss();
@@ -145,11 +181,30 @@ final class FumioVast {
             if (onCancel != null) onCancel.run();
         };
 
+        web.addJavascriptInterface(
+            new Object() {
+                @JavascriptInterface
+                public void ended() {
+                    handler.post(finish);
+                }
+
+                @JavascriptInterface
+                public void failed() {
+                    handler.post(finish);
+                }
+
+                @JavascriptInterface
+                public void click() {
+                    handler.post(() -> openChrome(activity, ad.clickThrough));
+                }
+            },
+            "Fumio"
+        );
+
         dialog.setOnCancelListener((d) -> cancel.run());
         skip.setOnClickListener((v) -> {
             if (skip.isEnabled()) finish.run();
         });
-        video.setOnClickListener((v) -> openChrome(activity, ad.clickThrough));
 
         final int[] left = { skipAfter };
         Runnable tick = new Runnable() {
@@ -169,48 +224,64 @@ final class FumioVast {
             }
         };
 
-        video.setOnPreparedListener((MediaPlayer player) -> {
-            try {
-                player.setLooping(false);
-                player.start();
-            } catch (Exception ignored) {
-                finish.run();
-                return;
-            }
-            fire(ad.impressions);
-            tick.run();
-        });
-        video.setOnCompletionListener((MediaPlayer player) -> finish.run());
-        video.setOnErrorListener((mp, what, extra) -> {
-            finish.run();
-            return true;
-        });
+        root.addView(
+            web,
+            new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.MATCH_PARENT
+            )
+        );
+        root.addView(
+            badge,
+            new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                Gravity.TOP | Gravity.START
+            )
+        );
+        root.addView(skip, skipLp);
 
         try {
             dialog.show();
-            video.setVideoURI(Uri.parse(ad.mediaUrl));
+            web.loadDataWithBaseURL(REFERER, playerHtml(ad.mediaUrl), "text/html", "utf-8", null);
+            fire(ad.impressions);
+            tick.run();
         } catch (Exception ignored) {
-            if (done[0]) return;
-            done[0] = true;
-            try {
-                if (dialog.isShowing()) dialog.dismiss();
-            } catch (Exception ignored2) {
-                /* already gone */
-            }
-            then.run();
+            finish.run();
         }
+    }
+
+    private static String playerHtml(String src) {
+        return "<!doctype html><html><head><meta charset=\"utf-8\">"
+            + "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">"
+            + "<style>html,body{margin:0;background:#000;height:100%;overflow:hidden}"
+            + "video{width:100%;height:100%;object-fit:contain;background:#000}</style></head>"
+            + "<body><video id=\"v\" autoplay playsinline webkit-playsinline></video>"
+            + "<script>(function(){var v=document.getElementById('v');"
+            + "v.src="
+            + json(src)
+            + ";"
+            + "v.addEventListener('ended',function(){try{Fumio.ended()}catch(e){}});"
+            + "v.addEventListener('error',function(){try{Fumio.failed()}catch(e){}});"
+            + "v.addEventListener('click',function(){try{Fumio.click()}catch(e){}});"
+            + "var p=v.play();if(p&&p.catch)p.catch(function(){try{Fumio.failed()}catch(e){}});"
+            + "})();</script></body></html>";
+    }
+
+    private static String json(String value) {
+        if (value == null) return "\"\"";
+        return "\"" + value.replace("\\", "\\\\").replace("\"", "\\\"") + "\"";
     }
 
     private static Creative resolve(String url, int depth) {
         if (url == null || url.isEmpty() || depth > MAX_WRAPPERS) return null;
         String xml = get(url);
-        if (xml == null || xml.isEmpty()) return null;
+        if (xml == null || xml.isEmpty() || !xml.contains("VAST")) return null;
         Creative parsed = parse(xml);
-        if (parsed == null) return null;
         if (parsed.wrapperUrl != null && !parsed.wrapperUrl.isEmpty()) {
             Creative inner = resolve(parsed.wrapperUrl, depth + 1);
-            if (inner == null) return null;
-            inner.impressions.addAll(parsed.impressions);
+            if (inner == null) return parsed.mediaUrl == null ? null : parsed;
+            inner.impressions.addAll(0, parsed.impressions);
             if (inner.clickThrough == null || inner.clickThrough.isEmpty()) {
                 inner.clickThrough = parsed.clickThrough;
             }
@@ -221,67 +292,59 @@ final class FumioVast {
 
     private static Creative parse(String xml) {
         Creative out = new Creative();
-        try {
-            XmlPullParserFactory factory = XmlPullParserFactory.newInstance();
-            factory.setNamespaceAware(false);
-            XmlPullParser parser = factory.newPullParser();
-            parser.setInput(new java.io.StringReader(xml));
-            String tag = "";
-            int bestH = -1;
-            int event = parser.getEventType();
-            while (event != XmlPullParser.END_DOCUMENT) {
-                if (event == XmlPullParser.START_TAG) {
-                    tag = parser.getName() == null ? "" : parser.getName();
-                    if ("MediaFile".equalsIgnoreCase(tag)) {
-                        String type = attr(parser, "type");
-                        int height = intAttr(parser, "height");
-                        String text = parser.nextText();
-                        String src = text == null ? "" : text.trim();
-                        if (isMp4(type, src) && height >= bestH) {
-                            bestH = height;
-                            out.mediaUrl = src;
-                        }
-                    }
-                } else if (event == XmlPullParser.TEXT) {
-                    String text = parser.getText() == null ? "" : parser.getText().trim();
-                    if (!text.isEmpty()) {
-                        if ("Impression".equalsIgnoreCase(tag) && text.startsWith("http")) {
-                            out.impressions.add(text);
-                        } else if ("ClickThrough".equalsIgnoreCase(tag) && text.startsWith("http")) {
-                            out.clickThrough = text;
-                        } else if ("VASTAdTagURI".equalsIgnoreCase(tag) && text.startsWith("http")) {
-                            out.wrapperUrl = text;
-                        }
-                    }
-                } else if (event == XmlPullParser.END_TAG) {
-                    tag = "";
+        Matcher wrap = WRAPPER.matcher(xml);
+        if (wrap.find()) out.wrapperUrl = clean(wrap.group(1));
+        Matcher click = CLICK.matcher(xml);
+        if (click.find()) out.clickThrough = clean(click.group(1));
+        Matcher imp = IMPRESSION.matcher(xml);
+        while (imp.find()) {
+            String href = clean(imp.group(1));
+            if (href.startsWith("http")) out.impressions.add(href);
+        }
+        Matcher media = MEDIA_FILE.matcher(xml);
+        int best = -1;
+        while (media.find()) {
+            String attrs = media.group(1) == null ? "" : media.group(1).toLowerCase();
+            String src = clean(media.group(2));
+            if (src.isEmpty() || attrs.contains("vpaid") || attrs.contains("javascript")) continue;
+            if (!looksLikeVideo(attrs, src)) continue;
+            int height = 0;
+            Matcher h = Pattern.compile("height\\s*=\\s*\"(\\d+)\"").matcher(attrs);
+            if (h.find()) {
+                try {
+                    height = Integer.parseInt(h.group(1));
+                } catch (Exception ignored) {
+                    height = 0;
                 }
-                event = parser.next();
             }
-        } catch (Exception ignored) {
-            return out.mediaUrl == null && out.wrapperUrl == null ? null : out;
+            boolean mp4 = attrs.contains("mp4") || src.toLowerCase().contains(".mp4");
+            int score = height + (mp4 ? 10000 : 0);
+            if (score >= best) {
+                best = score;
+                out.mediaUrl = src;
+            }
         }
         return out;
     }
 
-    private static boolean isMp4(String type, String src) {
-        String t = type == null ? "" : type.toLowerCase();
+    private static boolean looksLikeVideo(String attrs, String src) {
+        String a = attrs == null ? "" : attrs;
         String s = src == null ? "" : src.toLowerCase();
-        if (t.contains("javascript") || t.contains("vpaid") || s.contains("vpaid")) return false;
-        return t.contains("mp4") || s.contains(".mp4") || t.contains("webm") || s.contains(".webm");
-    }
-
-    private static String attr(XmlPullParser parser, String name) {
-        String value = parser.getAttributeValue(null, name);
-        return value == null ? "" : value;
-    }
-
-    private static int intAttr(XmlPullParser parser, String name) {
-        try {
-            return Integer.parseInt(attr(parser, name));
-        } catch (Exception ignored) {
-            return 0;
+        if (a.contains("javascript") || a.contains("vpaid") || s.contains("vpaid")) return false;
+        if (a.contains("video/") || s.contains(".mp4") || s.contains(".webm") || s.contains(".m3u8")) {
+            return true;
         }
+        return s.startsWith("http") && !s.contains(".js");
+    }
+
+    private static String clean(String value) {
+        if (value == null) return "";
+        return value.replace("]]>", "").trim();
+    }
+
+    private static String bust(String url) {
+        if (url.contains("cb=")) return url;
+        return url + (url.contains("?") ? "&" : "?") + "cb=" + System.currentTimeMillis();
     }
 
     private static String get(String url) {
@@ -291,11 +354,10 @@ final class FumioVast {
             conn.setConnectTimeout(FETCH_MS);
             conn.setReadTimeout(FETCH_MS);
             conn.setInstanceFollowRedirects(true);
-            conn.setRequestProperty(
-                "User-Agent",
-                "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 Chrome/120.0.0.0 Mobile Safari/537.36"
-            );
-            conn.setRequestProperty("Accept", "application/xml,text/xml,*/*");
+            conn.setRequestProperty("User-Agent", UA);
+            conn.setRequestProperty("Accept", "application/xml,text/xml,application/vast+xml,*/*");
+            conn.setRequestProperty("Accept-Encoding", "identity");
+            conn.setRequestProperty("Referer", REFERER);
             int code = conn.getResponseCode();
             InputStream stream = code >= 400 ? conn.getErrorStream() : conn.getInputStream();
             if (stream == null || code >= 400) return null;
