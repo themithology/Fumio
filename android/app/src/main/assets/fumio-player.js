@@ -505,9 +505,9 @@
       cards = [
         {
           label: "Sponsored",
-          title: "1 hour ad-free",
-          subtitle: "View one ads page, then watch in peace.",
-          cta: "View ads",
+          title: "Want an hour ad-free?",
+          subtitle: "One short page, then enjoy the show.",
+          cta: "Let's go",
           reward: true,
         },
       ];

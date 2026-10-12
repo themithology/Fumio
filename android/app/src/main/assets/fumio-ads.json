@@ -1,32 +1,5 @@
 {
-  "viewSeconds": 15,
+  "viewSeconds": 6,
   "adFreeMinutes": 60,
-  "supportUrl": "https://theogpiratebot.online/support",
-  "slots": [
-    {
-      "kind": "banner",
-      "label": "320×50 banner",
-      "html": ""
-    },
-    {
-      "kind": "native",
-      "label": "Native banner",
-      "html": ""
-    },
-    {
-      "kind": "box",
-      "label": "300×250 banner",
-      "html": ""
-    },
-    {
-      "kind": "native",
-      "label": "Native banner",
-      "html": ""
-    },
-    {
-      "kind": "banner",
-      "label": "320×50 banner",
-      "html": ""
-    }
-  ]
+  "supportUrl": "https://theogpiratebot.online/support"
 }

@@ -15,10 +15,14 @@ import android.webkit.WebResourceRequest;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
+import android.webkit.CookieManager;
 import android.widget.Button;
 import android.widget.LinearLayout;
 import android.widget.TextView;
-import org.json.JSONArray;
+import java.io.BufferedReader;
+import java.io.InputStream;
+import java.io.InputStreamReader;
+import java.nio.charset.StandardCharsets;
 import org.json.JSONObject;
 
 /**
@@ -54,7 +58,7 @@ final class FumioAds {
 
     String nativeCardsJson() {
         if (isAdFree()) return "[]";
-        return "[{\"label\":\"Sponsored\",\"title\":\"1 hour ad-free\",\"subtitle\":\"View one ads page, then watch in peace.\",\"cta\":\"View ads\",\"reward\":true}]";
+        return "[{\"label\":\"Sponsored\",\"title\":\"Want an hour ad-free?\",\"subtitle\":\"One short page, then enjoy the show.\",\"cta\":\"Let's go\",\"reward\":true}]";
     }
 
     String supportUrl() {
@@ -101,7 +105,7 @@ final class FumioAds {
     private void showPack(boolean grant, Runnable onClose, Runnable onReward, Runnable onCancel) {
         dismiss();
         showing = true;
-        int total = Math.max(8, config.optInt("viewSeconds", 15));
+        int total = Math.max(3, config.optInt("viewSeconds", 6));
 
         LinearLayout root = new LinearLayout(activity);
         root.setOrientation(LinearLayout.VERTICAL);
@@ -109,11 +113,11 @@ final class FumioAds {
         int pad = dp(12);
         root.setPadding(pad, dp(10), pad, dp(8));
 
-        TextView badge = text("ADS · THEN 1 HOUR AD-FREE", 10, 0xFFB8B8B8, true);
+        TextView badge = text("Quick pause", 10, 0xFFB8B8B8, true);
         badge.setLetterSpacing(0.08f);
         root.addView(badge);
 
-        TextView msg = text("All ads on this page. Then you can watch.", 13, 0xFFFFFFFF, true);
+        TextView msg = text("Thanks for this — then enjoy an hour ad-free.", 14, 0xFFFFFFFF, true);
         LinearLayout.LayoutParams msgLp = new LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT,
             ViewGroup.LayoutParams.WRAP_CONTENT
@@ -132,6 +136,8 @@ final class FumioAds {
         settings.setSupportMultipleWindows(false);
         settings.setJavaScriptCanOpenWindowsAutomatically(false);
         settings.setMixedContentMode(WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE);
+        CookieManager.getInstance().setAcceptCookie(true);
+        CookieManager.getInstance().setAcceptThirdPartyCookies(web, true);
         web.setWebChromeClient(new WebChromeClient());
         web.setWebViewClient(new WebViewClient() {
             @Override
@@ -162,7 +168,7 @@ final class FumioAds {
         Button go = new Button(activity);
         go.setAllCaps(false);
         go.setEnabled(false);
-        go.setText("Start watching in " + total + "s");
+        go.setText("Just a second…");
         go.setTextColor(0xFFA1A1AA);
         go.setBackgroundColor(0xFF3F3F46);
         LinearLayout.LayoutParams goLp = new LinearLayout.LayoutParams(
@@ -172,7 +178,7 @@ final class FumioAds {
         goLp.topMargin = dp(6);
         root.addView(go, goLp);
 
-        TextView support = text("Support instead", 12, 0xFFA1A1AA, false);
+        TextView support = text("Or leave a tip", 12, 0xFFA1A1AA, false);
         support.setGravity(Gravity.CENTER);
         support.setPadding(0, dp(8), 0, dp(2));
         root.addView(support);
@@ -196,15 +202,15 @@ final class FumioAds {
                 if (!showing) return;
                 int remain = left[0];
                 if (remain <= 0) {
-                    timer.setText("Ready");
+                    timer.setText("You're good");
                     go.setEnabled(true);
-                    go.setText("Start watching · 1 hour ad-free");
+                    go.setText("Enjoy your ad-free hour");
                     go.setBackgroundColor(0xFFFFFFFF);
                     go.setTextColor(0xFF111111);
                     return;
                 }
-                timer.setText(remain + "s left on this page");
-                go.setText("Start watching in " + remain + "s");
+                timer.setText(remain + "s");
+                go.setText("Hang on…");
                 left[0] = remain - 1;
                 handler.postDelayed(this, 1000);
             }
@@ -238,56 +244,16 @@ final class FumioAds {
     }
 
     private String adsPageHtml() {
-        StringBuilder slots = new StringBuilder();
-        JSONArray list = config.optJSONArray("slots");
-        if (list == null || list.length() == 0) {
-            slots.append(placeholder("native", "Native banner"));
-            slots.append(placeholder("box", "300×250 banner"));
-            slots.append(placeholder("banner", "320×50 banner"));
-        } else {
-            for (int i = 0; i < list.length(); i += 1) {
-                JSONObject slot = list.optJSONObject(i);
-                if (slot == null) continue;
-                String kind = slot.optString("kind", "native");
-                String label = slot.optString("label", "Ad");
-                String html = slot.optString("html", "").trim();
-                slots.append("<div class=\"slot ").append(esc(kind)).append("\">");
-                if (html.isEmpty()) {
-                    slots.append("<div class=\"ph\"><b>")
-                        .append(esc(label))
-                        .append("</b>Paste your Adsterra code in fumio-ads.json</div>");
-                } else {
-                    slots.append(html);
-                }
-                slots.append("</div>");
-            }
+        try (InputStream stream = activity.getAssets().open("fumio-ads.html");
+             BufferedReader reader = new BufferedReader(new InputStreamReader(stream, StandardCharsets.UTF_8))) {
+            StringBuilder html = new StringBuilder();
+            String line;
+            while ((line = reader.readLine()) != null) html.append(line).append('\n');
+            if (html.length() > 0) return html.toString();
+        } catch (Exception ignored) {
+            /* fall through */
         }
-        return "<!doctype html><html><head><meta charset=\"utf-8\">"
-            + "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1,maximum-scale=1\">"
-            + "<style>"
-            + "*{box-sizing:border-box}html,body{margin:0;background:#0b0b0b;color:#fff;"
-            + "font-family:sans-serif;-webkit-text-size-adjust:100%}"
-            + ".stack{display:flex;flex-direction:column;gap:8px;padding:0 0 12px}"
-            + ".slot{width:100%;background:#161616;border:1px solid rgba(255,255,255,.08);"
-            + "border-radius:10px;overflow:auto;display:flex;justify-content:center;align-items:center}"
-            + ".slot.banner{min-height:50px}.slot.native{min-height:110px}.slot.box{min-height:250px}"
-            + ".ph{padding:14px 10px;text-align:center;color:#a1a1aa;font-size:11px;line-height:1.35}"
-            + ".ph b{display:block;color:#fff;font-size:12px;margin-bottom:4px}"
-            + "iframe,ins,img{max-width:100%}"
-            + "</style></head><body><div class=\"stack\">"
-            + slots
-            + "</div></body></html>";
-    }
-
-    private String placeholder(String kind, String label) {
-        return "<div class=\"slot " + kind + "\"><div class=\"ph\"><b>"
-            + esc(label)
-            + "</b>Paste your Adsterra code in fumio-ads.json</div></div>";
-    }
-
-    private String esc(String value) {
-        if (value == null) return "";
-        return value.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\"", "&quot;");
+        return "<!doctype html><html><body style=\"background:#0b0b0b;color:#fff;font-family:sans-serif;padding:24px\">Thanks for waiting.</body></html>";
     }
 
     private void openSupport() {
