@@ -130,10 +130,7 @@ public class MainActivity extends BridgeActivity {
         public void openBrowser(String url) {
             if (url == null) return;
             final Uri uri = Uri.parse(url);
-            String scheme = uri.getScheme();
-            if (scheme == null) return;
-            scheme = scheme.toLowerCase(Locale.US);
-            if (!scheme.equals("https") && !scheme.equals("http")) return;
+            if (!isLaunchableUri(uri)) return;
             runOnUiThread(() -> openExternal(uri));
         }
 
@@ -342,13 +339,9 @@ public class MainActivity extends BridgeActivity {
                 if (openedLive || googleRedirectActive) return false;
                 return true;
             }
-            String scheme = url.getScheme();
-            if (scheme != null) {
-                scheme = scheme.toLowerCase(Locale.US);
-                if (scheme.equals("https") || scheme.equals("http")) {
-                    openExternal(url);
-                    return true;
-                }
+            if (isLaunchableUri(url)) {
+                openExternal(url);
+                return true;
             }
             return true;
         }
@@ -460,15 +453,9 @@ public class MainActivity extends BridgeActivity {
                 }
                 // Real target=_blank links (Donate, payments). Iframe popunders
                 // have no anchor hit, so they stay blocked.
-                if (hitUrl != null && !isPlayerEmbed(hitUrl) && !isWatchPath(hitUrl)) {
-                    String scheme = hitUrl.getScheme();
-                    if (scheme != null) {
-                        scheme = scheme.toLowerCase(Locale.US);
-                        if (scheme.equals("https") || scheme.equals("http")) {
-                            openExternal(hitUrl);
-                            return false;
-                        }
-                    }
+                if (hitUrl != null && !isPlayerEmbed(hitUrl) && !isWatchPath(hitUrl) && isLaunchableUri(hitUrl)) {
+                    openExternal(hitUrl);
+                    return false;
                 }
                 return false;
             } catch (Exception ignored) {
@@ -659,8 +646,21 @@ public class MainActivity extends BridgeActivity {
         }
     }
 
+    private boolean isLaunchableUri(Uri url) {
+        if (url == null) return false;
+        String scheme = url.getScheme();
+        if (scheme == null) return false;
+        scheme = scheme.toLowerCase(Locale.US);
+        return scheme.equals("https")
+            || scheme.equals("http")
+            || scheme.equals("mailto")
+            || scheme.equals("tel")
+            || scheme.equals("sms")
+            || scheme.equals("smsto");
+    }
+
     private void openExternal(Uri url) {
-        if (url == null) return;
+        if (url == null || !isLaunchableUri(url)) return;
         try {
             Intent intent = new Intent(Intent.ACTION_VIEW, url);
             intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);

@@ -281,23 +281,45 @@
         return;
       }
       var link = event.target.closest && event.target.closest("a[href]");
+      var nested = event.target.closest && event.target.closest("button,[aria-label]");
+      if (nested && link && nested !== link && /remove|close|clear|delete|dismiss/i.test((nested.getAttribute("aria-label") || "") + " " + (nested.textContent || ""))) {
+        return;
+      }
+      if (nested && nested.tagName === "BUTTON" && link && nested !== link) return;
       if (link && isDownloadHref(link.href)) {
         event.preventDefault();
         event.stopPropagation();
         return;
       }
-      if (btn && /\bdownload\b/.test(label)) {
+      if (btn && /\bdownload\b/.test(label) && !/email|mail|donate|support/i.test(label)) {
         event.preventDefault();
         event.stopPropagation();
         return;
       }
-      if (link && native.openBrowser) {
-        var target = (link.getAttribute("target") || "").toLowerCase();
-        if (target === "_blank" || target === "_new") {
+      if (link) {
+        var href = "";
+        try {
+          href = new URL(link.href, location.origin).href;
+        } catch (e) {
+          href = link.href || "";
+        }
+        var scheme = href.split(":")[0].toLowerCase();
+        if (scheme === "mailto" || scheme === "tel" || scheme === "sms" || scheme === "smsto") {
+          event.preventDefault();
+          event.stopPropagation();
           try {
-            event.preventDefault();
-            event.stopPropagation();
-            native.openBrowser(new URL(link.href, location.origin).href);
+            if (native.openBrowser) native.openBrowser(href);
+          } catch (e) {
+            /* ignore */
+          }
+          return;
+        }
+        var target = (link.getAttribute("target") || "").toLowerCase();
+        if ((target === "_blank" || target === "_new") && native.openBrowser) {
+          event.preventDefault();
+          event.stopPropagation();
+          try {
+            native.openBrowser(href);
           } catch (e) {
             /* ignore */
           }
