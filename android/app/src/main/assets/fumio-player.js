@@ -479,6 +479,53 @@
     if (token) window.__fumioApplyGoogleToken(token);
   });
 
+  function patchContinueRail() {
+    var list = [];
+    try {
+      list = JSON.parse(localStorage.getItem("continueWatching") || "[]");
+    } catch (e) {
+      list = [];
+    }
+    if (!Array.isArray(list) || !list.length) return;
+    var byId = {};
+    list.forEach(function (item) {
+      if (item && item.id) byId[String(item.id)] = item;
+    });
+    var section = null;
+    var headings = document.querySelectorAll("h2,h3");
+    for (var i = 0; i < headings.length; i += 1) {
+      if (/continue watching/i.test(headings[i].textContent || "")) {
+        section = headings[i].closest("section") || headings[i].parentElement;
+        break;
+      }
+    }
+    var root = section || document;
+    var links = root.querySelectorAll("a[href]");
+    for (var n = 0; n < links.length; n += 1) {
+      var info = parseWatch(links[n].getAttribute("href"));
+      if (!info || info.type === "movie") continue;
+      var item = byId[String(info.id)];
+      if (!item || item.season == null || item.episode == null) continue;
+      if (String(item.season) === String(info.season) && String(item.episode) === String(info.episode)) continue;
+      try {
+        var url = new URL(links[n].getAttribute("href"), location.origin);
+        url.searchParams.set("season", String(item.season));
+        url.searchParams.set("episode", String(item.episode));
+        links[n].setAttribute("href", url.pathname + url.search);
+      } catch (err) {
+        /* keep */
+      }
+      var label = links[n].querySelector("span,p,small,em");
+      var node = label || links[n];
+      var text = node.textContent || "";
+      if (/S\d+\s*E\d+/i.test(text)) {
+        node.textContent = text.replace(/S\d+\s*E\d+/i, "S" + item.season + " E" + item.episode);
+      }
+    }
+  }
+
+  function syncAdsChrome() {}
+
   function bannerFrame(key, width, height) {
     var frame = document.createElement("iframe");
     frame.setAttribute("scrolling", "no");
@@ -544,11 +591,14 @@
 
   syncAdsChrome();
   injectSponsored();
+  patchContinueRail();
   window.addEventListener("fumio-ads-updated", function () {
     syncAdsChrome();
     hideAppOnlyChrome();
     injectSponsored();
   });
+  window.addEventListener("history-updated", patchContinueRail);
+  window.addEventListener("fumio-cw-updated", patchContinueRail);
   try {
     new MutationObserver(injectSponsored).observe(document.documentElement, { childList: true, subtree: true });
   } catch (e) {

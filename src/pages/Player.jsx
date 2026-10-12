@@ -161,6 +161,16 @@ export default function Player() {
     const nextEpisode = override.episode ?? episode;
     const nextUiSeason = override.uiSeason ?? uiSeason;
     const nextUiEpisode = override.uiEpisode ?? uiEpisode;
+    try {
+      window.FumioNative?.trackWatch?.(
+        type,
+        String(id),
+        String(type === "tv" ? nextSeason : 1),
+        String(type === "tv" ? nextEpisode : 1),
+      );
+    } catch {
+      /* web */
+    }
     saveContinueWatching({
       id: Number(id),
       type,
@@ -273,11 +283,27 @@ export default function Player() {
       if (document.visibilityState === "hidden") saveProgress();
     };
 
+    const readIframeEpisode = () => {
+      if (type !== "tv") return;
+      document.querySelectorAll("iframe").forEach((frame) => {
+        const src = frame.getAttribute("src") || "";
+        const match = src.match(/\/(?:embed\/)?tv\/(\d+)\/(\d+)\/(\d+)/i);
+        if (!match || String(match[1]) !== String(id)) return;
+        const nextSeason = Number(match[2]);
+        const nextEpisode = Number(match[3]);
+        if (!nextSeason || !nextEpisode) return;
+        if (nextSeason === season && nextEpisode === episode) return;
+        followPlayerEpisode({ season: nextSeason, episode: nextEpisode });
+      });
+    };
+
     window.addEventListener("message", onMessage);
     document.addEventListener("visibilitychange", onHide);
     window.addEventListener("pagehide", saveProgress);
+    const iframeTimer = window.setInterval(readIframeEpisode, 2000);
     return () => {
       saveProgress();
+      window.clearInterval(iframeTimer);
       window.removeEventListener("message", onMessage);
       document.removeEventListener("visibilitychange", onHide);
       window.removeEventListener("pagehide", saveProgress);

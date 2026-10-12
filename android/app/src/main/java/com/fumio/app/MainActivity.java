@@ -820,7 +820,17 @@ public class MainActivity extends BridgeActivity {
         if (bridge == null || bridge.getWebView() == null) return;
         String quoted = JSONObject.quote(json);
         bridge.getWebView().evaluateJavascript(
-            "(function(c){try{if(!c)return;localStorage.setItem('continueWatching',c);window.dispatchEvent(new Event('history-updated'));}catch(e){}})("
+            "(function(c){try{if(!c)return;var incoming=JSON.parse(c);if(!Array.isArray(incoming))return;"
+                + "var cur=[];try{cur=JSON.parse(localStorage.getItem('continueWatching')||'[]');}catch(e){}"
+                + "if(!Array.isArray(cur))cur=[];var by={};function key(it){return (it.type||it.media_type||'movie')+'-'+it.id;}"
+                + "cur.concat(incoming).forEach(function(it){if(!it||!it.id)return;var k=key(it);var prev=by[k];"
+                + "if(!prev||Number(it.lastUpdated||0)>=Number(prev.lastUpdated||0))by[k]=it;});"
+                + "var next=Object.keys(by).map(function(k){return by[k];});"
+                + "next.sort(function(a,b){return Number(b.lastUpdated||0)-Number(a.lastUpdated||0);});"
+                + "localStorage.setItem('continueWatching',JSON.stringify(next.slice(0,10)));"
+                + "window.dispatchEvent(new Event('history-updated'));"
+                + "window.dispatchEvent(new Event('history-progress'));"
+                + "window.dispatchEvent(new Event('fumio-cw-updated'));}catch(e){}})("
                 + quoted
                 + ")",
             null

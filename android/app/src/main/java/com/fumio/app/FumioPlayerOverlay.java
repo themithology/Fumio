@@ -22,6 +22,7 @@ import android.webkit.WebViewClient;
 import android.widget.FrameLayout;
 import androidx.webkit.WebViewAssetLoader;
 import java.io.InputStream;
+import org.json.JSONArray;
 import org.json.JSONObject;
 import org.json.JSONTokener;
 
@@ -45,6 +46,10 @@ final class FumioPlayerOverlay {
     private String pendingSeed;
     private boolean closing;
     private boolean closedOut;
+    private volatile String lastType = "tv";
+    private volatile String lastId = "";
+    private volatile String lastSeason = "1";
+    private volatile String lastEpisode = "1";
 
     FumioPlayerOverlay(Activity activity, Host host) {
         this.activity = activity;
@@ -65,6 +70,10 @@ final class FumioPlayerOverlay {
         closedOut = false;
         pendingSeed = seed;
         String media = "movie".equalsIgnoreCase(type) ? "movie" : "tv";
+        lastType = media;
+        lastId = id;
+        lastSeason = empty(season) ? "1" : season;
+        lastEpisode = empty(episode) ? "1" : episode;
         StringBuilder path = new StringBuilder("/watch/").append(media).append("/").append(id);
         if (!"movie".equals(media)) {
             path.append("?season=").append(empty(season) ? "1" : season);
@@ -115,11 +124,11 @@ final class FumioPlayerOverlay {
         if (view != null) {
             view.evaluateJavascript(
                 "(function(){try{return localStorage.getItem('continueWatching')||'[]';}catch(e){return '[]';}})()",
-                (value) -> finishClose(jsString(value))
+                (value) -> finishClose(mergeTrail(jsString(value)))
             );
             view.postDelayed(() -> {
-                if (!closedOut) finishClose(null);
-            }, 600);
+                if (!closedOut) finishClose(mergeTrail(null));
+            }, 1200);
             return;
         }
         finishClose(null);
@@ -233,10 +242,11 @@ final class FumioPlayerOverlay {
                 @Override
                 public void onPageFinished(WebView v, String url) {
                     v.evaluateJavascript(
-                        "(function(){try{window.open=function(){return null;};}catch(e){}})()",
+                        "(function(){try{window.open=function(){return null;}}catch(e){}})()",
                         null
                     );
                     applySeed();
+                    injectTrail(v);
                 }
             }
         );
@@ -277,11 +287,78 @@ final class FumioPlayerOverlay {
         webView.evaluateJavascript(
             "(function(s){try{var d=JSON.parse(s);if(d.a)localStorage.setItem('"
                 + AUTH_KEY
-                + "',d.a);if(d.c)localStorage.setItem('continueWatching',d.c);}catch(e){}})("
+                + "',d.a);if(!d.c)return;var incoming=JSON.parse(d.c);if(!Array.isArray(incoming))return;"
+                + "var cur=[];try{cur=JSON.parse(localStorage.getItem('continueWatching')||'[]');}catch(e){}"
+                + "if(!Array.isArray(cur))cur=[];var by={};function key(it){return (it.type||it.media_type||'movie')+'-'+it.id;}"
+                + "cur.concat(incoming).forEach(function(it){if(!it||!it.id)return;var k=key(it);var prev=by[k];"
+                + "if(!prev||Number(it.lastUpdated||0)>=Number(prev.lastUpdated||0))by[k]=it;});"
+                + "var next=Object.keys(by).map(function(k){return by[k];});"
+                + "next.sort(function(a,b){return Number(b.lastUpdated||0)-Number(a.lastUpdated||0);});"
+                + "localStorage.setItem('continueWatching',JSON.stringify(next.slice(0,10)));}catch(e){}})("
                 + quoted
                 + ")",
             null
         );
+    }
+
+    private void injectTrail(WebView view) {
+        if (view == null) return;
+        view.evaluateJavascript(
+            "(function(){if(window.__fumioTrail)return;window.__fumioTrail=true;"
+                + "window.addEventListener('message',function(ev){try{"
+                + "var d=ev.data;if(typeof d==='string'){if(d.charAt(0)!=='{'&&d.charAt(0)!=='[')return;d=JSON.parse(d);}"
+                + "if(!d||typeof d!=='object')return;var inner=d.data&&typeof d.data==='object'?d.data:d;"
+                + "var info=inner.player_info&&typeof inner.player_info==='object'?inner.player_info:inner;"
+                + "var s=info.season||info.season_number||info.seasonNumber;"
+                + "var e=info.episode||info.episode_number||info.episodeNumber;"
+                + "if(s==null||e==null)return;var m=(location.pathname||'').match(/\\/watch\\/(movie|tv)\\/(\\d+)/);"
+                + "if(!m||m[1]==='movie')return;if(window.FumioNative&&FumioNative.trackWatch)"
+                + "FumioNative.trackWatch(m[1],m[2],String(s),String(e));"
+                + "}catch(err){}},true);})()",
+            null
+        );
+    }
+
+    private String mergeTrail(String json) {
+        if (lastId == null || lastId.isEmpty()) return json;
+        try {
+            JSONArray list;
+            try {
+                list = json == null || json.isEmpty() || json.equals("[]")
+                    ? new JSONArray()
+                    : new JSONArray(json);
+            } catch (Exception ignored) {
+                list = new JSONArray();
+            }
+            JSONObject found = null;
+            int foundAt = -1;
+            for (int i = 0; i < list.length(); i += 1) {
+                JSONObject item = list.optJSONObject(i);
+                if (item == null) continue;
+                if (!lastId.equals(String.valueOf(item.opt("id")))) continue;
+                found = item;
+                foundAt = i;
+                break;
+            }
+            if (found == null) return json == null ? "[]" : json;
+            if (!"movie".equals(lastType)) {
+                found.put("season", Integer.parseInt(lastSeason));
+                found.put("episode", Integer.parseInt(lastEpisode));
+                found.put("uiSeason", Integer.parseInt(lastSeason));
+                found.put("uiEpisode", Integer.parseInt(lastEpisode));
+            }
+            found.put("lastUpdated", System.currentTimeMillis());
+            if (foundAt > 0) {
+                list.remove(foundAt);
+                JSONArray next = new JSONArray();
+                next.put(found);
+                for (int i = 0; i < list.length(); i += 1) next.put(list.get(i));
+                list = next;
+            }
+            return list.toString();
+        } catch (Exception ignored) {
+            return json == null ? "[]" : json;
+        }
     }
 
     private void showCustomView(View video, WebChromeClient.CustomViewCallback callback) {
@@ -399,6 +476,15 @@ final class FumioPlayerOverlay {
     }
 
     private class Bridge {
+        @JavascriptInterface
+        public void trackWatch(String type, String id, String season, String episode) {
+            if (id == null || id.isEmpty()) return;
+            lastType = "movie".equalsIgnoreCase(type) ? "movie" : "tv";
+            lastId = id;
+            if (season != null && !season.isEmpty()) lastSeason = season;
+            if (episode != null && !episode.isEmpty()) lastEpisode = episode;
+        }
+
         @JavascriptInterface
         public void closePlayer() {
             activity.runOnUiThread(() -> close());
