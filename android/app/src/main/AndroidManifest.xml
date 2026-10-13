@@ -48,6 +48,11 @@
 
     <queries>
         <package android:name="com.android.chrome" />
+        <package android:name="com.chrome.beta" />
+        <package android:name="com.chrome.dev" />
+        <package android:name="com.google.android.apps.chrome" />
+        <package android:name="com.sec.android.app.sbrowser" />
+        <package android:name="org.mozilla.firefox" />
         <intent>
             <action android:name="android.intent.action.VIEW" />
             <data android:scheme="https" />

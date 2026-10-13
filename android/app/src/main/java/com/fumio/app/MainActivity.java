@@ -361,6 +361,10 @@ public class MainActivity extends BridgeActivity {
                 return false;
             }
             if (isOwnOrigin(url)) {
+                if (mainFrame && isWatchPath(url)) {
+                    openAppPlayerFromWatch(url);
+                    return true;
+                }
                 if (googleRedirectActive && mainFrame) stayOnApp();
                 return null;
             }
@@ -1132,18 +1136,11 @@ public class MainActivity extends BridgeActivity {
         }
         if (verifyBusy) return;
         verifyBusy = true;
-        showVerifyMessage("Checking…");
         new Thread(
             () -> {
                 VerifyClient.Result result;
                 try {
-                    if (verifyClient.isLocallyUnlocked()) {
-                        result = new VerifyClient.Result();
-                        result.unlocked = true;
-                    } else {
-                        result = verifyClient.entitlement();
-                        if (!result.unlocked) result = verifyClient.start();
-                    }
+                    result = verifyClient.start();
                 } catch (Exception error) {
                     result = new VerifyClient.Result();
                     result.message = "Can't reach the server. Try again.";
@@ -1160,7 +1157,9 @@ public class MainActivity extends BridgeActivity {
                     String url = done.verifyUrl;
                     if (url == null) url = verifyClient.pendingVerifyUrl();
                     if (url != null) {
-                        showGateDialog(url, onUnlocked);
+                        codeDialogWanted = true;
+                        openVerifyInChrome(url);
+                        showCodeDialog(onUnlocked);
                         return;
                     }
                     showVerifyError(done.message, () -> ensureUnlocked(onUnlocked));
@@ -1168,36 +1167,6 @@ public class MainActivity extends BridgeActivity {
             },
             "ogpb-verify"
         ).start();
-    }
-
-    private void showGateDialog(String verifyUrl, Runnable onUnlocked) {
-        dismissVerifyUi();
-        AlertDialog dialog = new AlertDialog.Builder(this)
-            .setTitle("Verify to watch")
-            .setMessage(
-                "A Chrome page will open. Tap Continue three times, then come back and paste the code."
-            )
-            .setPositiveButton("Open Chrome", (d, w) -> {
-                openVerifyInChrome(verifyUrl);
-                codeDialogWanted = true;
-                showCodeDialog(onUnlocked);
-            })
-            .setNeutralButton("I have a code", (d, w) -> {
-                codeDialogWanted = true;
-                showCodeDialog(onUnlocked);
-            })
-            .setNegativeButton("Cancel", (d, w) -> {
-                pendingPlay = false;
-                codeDialogWanted = false;
-            })
-            .setCancelable(true)
-            .create();
-        verifyUi = dialog;
-        dialog.setOnCancelListener(d -> {
-            pendingPlay = false;
-            codeDialogWanted = false;
-        });
-        dialog.show();
     }
 
     private void showCodeDialog() {
@@ -1282,16 +1251,6 @@ public class MainActivity extends BridgeActivity {
         input.requestFocus();
     }
 
-    private void showVerifyMessage(String text) {
-        dismissVerifyUi();
-        AlertDialog dialog = new AlertDialog.Builder(this)
-            .setMessage(text)
-            .setCancelable(false)
-            .create();
-        verifyUi = dialog;
-        dialog.show();
-    }
-
     private void showVerifyError(String message, Runnable retry) {
         dismissVerifyUi();
         AlertDialog dialog = new AlertDialog.Builder(this)
@@ -1323,16 +1282,37 @@ public class MainActivity extends BridgeActivity {
         if (url == null || url.isEmpty()) return;
         Uri uri = Uri.parse(url);
         if (!isLaunchableUri(uri)) return;
-        Intent chrome = new Intent(Intent.ACTION_VIEW, uri);
-        chrome.setPackage("com.android.chrome");
-        chrome.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-        try {
-            startActivity(chrome);
-            return;
-        } catch (Exception ignored) {
-            // Fall through to any browser — still not the WebView.
+        String[] browsers = {
+            "com.android.chrome",
+            "com.chrome.beta",
+            "com.chrome.dev",
+            "com.google.android.apps.chrome",
+            "com.sec.android.app.sbrowser",
+            "org.mozilla.firefox"
+        };
+        for (String pkg : browsers) {
+            Intent chrome = new Intent(Intent.ACTION_VIEW, uri);
+            chrome.addCategory(Intent.CATEGORY_BROWSABLE);
+            chrome.setPackage(pkg);
+            chrome.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            chrome.putExtra(android.provider.Browser.EXTRA_APPLICATION_ID, pkg);
+            chrome.putExtra(android.provider.Browser.EXTRA_CREATE_NEW_TAB, true);
+            try {
+                startActivity(chrome);
+                return;
+            } catch (Exception ignored) {
+                // Try the next browser.
+            }
         }
-        openExternal(uri);
+        try {
+            Intent any = new Intent(Intent.ACTION_VIEW, uri);
+            any.addCategory(Intent.CATEGORY_BROWSABLE);
+            any.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            any.setSelector(new Intent(Intent.ACTION_VIEW, Uri.parse("https://")));
+            startActivity(any);
+        } catch (Exception ignored) {
+            openExternal(uri);
+        }
     }
 
     @Override

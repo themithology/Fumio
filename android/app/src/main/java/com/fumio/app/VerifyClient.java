@@ -190,10 +190,11 @@ public final class VerifyClient {
                 out.untilIso = emptyToNull(data.optString("until", ""));
             }
             boolean flagUnlocked = data.optBoolean("unlocked", false);
+            // Only an explicit unlock from the server. A 200 start session is
+            // not an unlock — that must open Chrome.
             out.unlocked =
-                flagUnlocked ||
-                out.alreadyUnlocked ||
-                (out.ok && out.untilIso != null && out.error == null);
+                (flagUnlocked && out.untilIso != null) ||
+                (out.alreadyUnlocked && out.untilIso != null);
             if (out.status == 409 && "already_used".equals(out.error) && out.untilIso != null) {
                 out.unlocked = true;
             }
