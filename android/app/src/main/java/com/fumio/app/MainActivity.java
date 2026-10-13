@@ -1,14 +1,21 @@
 package com.fumio.app;
 
+import android.app.AlertDialog;
 import android.app.Dialog;
 import android.content.Intent;
 import android.content.pm.ActivityInfo;
+import android.graphics.Color;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Message;
+import android.text.InputType;
+import android.util.TypedValue;
 import android.view.View;
 import android.view.ViewGroup;
+import android.widget.EditText;
+import android.widget.LinearLayout;
+import android.widget.TextView;
 import android.webkit.ConsoleMessage;
 import android.webkit.JavascriptInterface;
 import android.webkit.CookieManager;
@@ -59,6 +66,15 @@ public class MainActivity extends BridgeActivity {
     private volatile boolean googleRedirectActive;
     private final InAppGoogleAuth inAppGoogleAuth = new InAppGoogleAuth();
     private FumioPlayerOverlay playerOverlay;
+    private VerifyClient verifyClient;
+    private volatile boolean verifyBusy;
+    private AlertDialog verifyUi;
+    private boolean pendingPlay;
+    private boolean codeDialogWanted;
+    private String pendingPlayType;
+    private String pendingPlayId;
+    private String pendingPlaySeason;
+    private String pendingPlayEpisode;
     private static final Pattern EMBED_TITLE = Pattern.compile(
         "(?i)/(movie|tv|anime)/(\\d+)(?:/(\\d+)(?:/(\\d+))?)?"
     );
@@ -84,6 +100,17 @@ public class MainActivity extends BridgeActivity {
             if (webView == null) return;
             playerScript = readAsset("fumio-player.js");
             playerOverlay = new FumioPlayerOverlay(this, this::onOverlayClosed);
+            verifyClient = new VerifyClient(this);
+            new Thread(
+                () -> {
+                    try {
+                        verifyClient.entitlement();
+                    } catch (Exception ignored) {
+                        // Prefetch only — Play will retry.
+                    }
+                },
+                "ogpb-verify"
+            ).start();
             installClients(webView, bridge);
             installBackHandler();
             handleAuthIntent(getIntent());
@@ -97,6 +124,12 @@ public class MainActivity extends BridgeActivity {
         super.onNewIntent(intent);
         setIntent(intent);
         handleAuthIntent(intent);
+    }
+
+    @Override
+    public void onResume() {
+        super.onResume();
+        if (codeDialogWanted) showCodeDialog();
     }
 
     private void installClients(WebView webView, Bridge bridge) {
@@ -315,6 +348,10 @@ public class MainActivity extends BridgeActivity {
                 return true;
             }
             if (isLiveSite(url)) {
+                if (isVerifyPath(url)) {
+                    openVerifyInChrome(url.toString());
+                    return true;
+                }
                 if (mainFrame && isWatchPath(url)) {
                     openAppPlayerFromWatch(url);
                     return true;
@@ -756,6 +793,23 @@ public class MainActivity extends BridgeActivity {
     private void openAppPlayer(String type, String id, String season, String episode) {
         if (id == null || id.isEmpty()) return;
         if (playerActive) return;
+        pendingPlayType = type;
+        pendingPlayId = id;
+        pendingPlaySeason = season;
+        pendingPlayEpisode = episode;
+        pendingPlay = true;
+        ensureUnlocked(this::openPendingPlayer);
+    }
+
+    private void openPendingPlayer() {
+        if (!pendingPlay) return;
+        String type = pendingPlayType;
+        String id = pendingPlayId;
+        String season = pendingPlaySeason;
+        String episode = pendingPlayEpisode;
+        pendingPlay = false;
+        if (id == null || id.isEmpty()) return;
+        if (playerActive) return;
         playerActive = true;
         lastPlayerOpenAt = System.currentTimeMillis();
         freezeLiveWebView(true);
@@ -1065,6 +1119,222 @@ public class MainActivity extends BridgeActivity {
         getWindow().getDecorView().setSystemUiVisibility(View.SYSTEM_UI_FLAG_VISIBLE);
     }
 
+    private boolean isVerifyPath(Uri url) {
+        if (url == null) return false;
+        String path = url.getPath();
+        return path != null && path.toLowerCase(Locale.US).startsWith("/verify");
+    }
+
+    private void ensureUnlocked(Runnable onUnlocked) {
+        if (verifyClient != null && verifyClient.isLocallyUnlocked()) {
+            onUnlocked.run();
+            return;
+        }
+        if (verifyBusy) return;
+        verifyBusy = true;
+        showVerifyMessage("Checking…");
+        new Thread(
+            () -> {
+                VerifyClient.Result result;
+                try {
+                    if (verifyClient.isLocallyUnlocked()) {
+                        result = new VerifyClient.Result();
+                        result.unlocked = true;
+                    } else {
+                        result = verifyClient.entitlement();
+                        if (!result.unlocked) result = verifyClient.start();
+                    }
+                } catch (Exception error) {
+                    result = new VerifyClient.Result();
+                    result.message = "Can't reach the server. Try again.";
+                }
+                final VerifyClient.Result done = result;
+                runOnUiThread(() -> {
+                    verifyBusy = false;
+                    if (isFinishing() || isDestroyed()) return;
+                    if (done.unlocked) {
+                        dismissVerifyUi();
+                        onUnlocked.run();
+                        return;
+                    }
+                    String url = done.verifyUrl;
+                    if (url == null) url = verifyClient.pendingVerifyUrl();
+                    if (url != null) {
+                        showGateDialog(url, onUnlocked);
+                        return;
+                    }
+                    showVerifyError(done.message, () -> ensureUnlocked(onUnlocked));
+                });
+            },
+            "ogpb-verify"
+        ).start();
+    }
+
+    private void showGateDialog(String verifyUrl, Runnable onUnlocked) {
+        dismissVerifyUi();
+        AlertDialog dialog = new AlertDialog.Builder(this)
+            .setTitle("Verify to watch")
+            .setMessage(
+                "A Chrome page will open. Tap Continue three times, then come back and paste the code."
+            )
+            .setPositiveButton("Open Chrome", (d, w) -> {
+                openVerifyInChrome(verifyUrl);
+                codeDialogWanted = true;
+                showCodeDialog(onUnlocked);
+            })
+            .setNeutralButton("I have a code", (d, w) -> {
+                codeDialogWanted = true;
+                showCodeDialog(onUnlocked);
+            })
+            .setNegativeButton("Cancel", (d, w) -> {
+                pendingPlay = false;
+                codeDialogWanted = false;
+            })
+            .setCancelable(true)
+            .create();
+        verifyUi = dialog;
+        dialog.setOnCancelListener(d -> {
+            pendingPlay = false;
+            codeDialogWanted = false;
+        });
+        dialog.show();
+    }
+
+    private void showCodeDialog() {
+        if (!pendingPlay) {
+            codeDialogWanted = false;
+            return;
+        }
+        showCodeDialog(this::openPendingPlayer);
+    }
+
+    private void showCodeDialog(Runnable onUnlocked) {
+        dismissVerifyUi();
+        codeDialogWanted = true;
+        float density = getResources().getDisplayMetrics().density;
+        int pad = Math.round(24 * density);
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        box.setPadding(pad, pad / 2, pad, 0);
+        TextView hint = new TextView(this);
+        hint.setText("Paste the code from Chrome");
+        hint.setTextColor(Color.LTGRAY);
+        hint.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14);
+        EditText input = new EditText(this);
+        input.setHint("XXXX-XXXX");
+        input.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_CAP_CHARACTERS);
+        input.setSingleLine(true);
+        box.addView(hint);
+        box.addView(input);
+        AlertDialog dialog = new AlertDialog.Builder(this)
+            .setTitle("Enter code")
+            .setView(box)
+            .setPositiveButton("Unlock", null)
+            .setNeutralButton("Open Chrome", (d, w) -> {
+                String url = verifyClient.pendingVerifyUrl();
+                if (url != null) openVerifyInChrome(url);
+                else ensureUnlocked(onUnlocked);
+            })
+            .setNegativeButton("Cancel", (d, w) -> {
+                pendingPlay = false;
+                codeDialogWanted = false;
+            })
+            .setCancelable(true)
+            .create();
+        verifyUi = dialog;
+        dialog.setOnCancelListener(d -> {
+            pendingPlay = false;
+            codeDialogWanted = false;
+        });
+        dialog.setOnShowListener(d -> {
+            dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v -> {
+                String code = input.getText() == null ? "" : input.getText().toString().trim();
+                if (code.isEmpty()) {
+                    input.setError("Paste the code");
+                    return;
+                }
+                dialog.getButton(AlertDialog.BUTTON_POSITIVE).setEnabled(false);
+                new Thread(
+                    () -> {
+                        VerifyClient.Result result = verifyClient.redeem(code);
+                        runOnUiThread(() -> {
+                            if (isFinishing() || isDestroyed()) return;
+                            if (result.unlocked) {
+                                codeDialogWanted = false;
+                                dismissVerifyUi();
+                                onUnlocked.run();
+                                return;
+                            }
+                            dialog.getButton(AlertDialog.BUTTON_POSITIVE).setEnabled(true);
+                            input.setError(result.message);
+                            if ("expired".equals(result.error)) {
+                                codeDialogWanted = false;
+                                dismissVerifyUi();
+                                ensureUnlocked(onUnlocked);
+                            }
+                        });
+                    },
+                    "ogpb-verify"
+                ).start();
+            });
+        });
+        dialog.show();
+        input.requestFocus();
+    }
+
+    private void showVerifyMessage(String text) {
+        dismissVerifyUi();
+        AlertDialog dialog = new AlertDialog.Builder(this)
+            .setMessage(text)
+            .setCancelable(false)
+            .create();
+        verifyUi = dialog;
+        dialog.show();
+    }
+
+    private void showVerifyError(String message, Runnable retry) {
+        dismissVerifyUi();
+        AlertDialog dialog = new AlertDialog.Builder(this)
+            .setTitle("Couldn't verify")
+            .setMessage(message == null ? "Try again." : message)
+            .setPositiveButton("Retry", (d, w) -> retry.run())
+            .setNegativeButton("Cancel", (d, w) -> {
+                pendingPlay = false;
+                codeDialogWanted = false;
+            })
+            .create();
+        verifyUi = dialog;
+        dialog.show();
+    }
+
+    private void dismissVerifyUi() {
+        AlertDialog dialog = verifyUi;
+        verifyUi = null;
+        if (dialog != null && dialog.isShowing()) {
+            try {
+                dialog.dismiss();
+            } catch (Exception ignored) {
+                // Already gone with the activity.
+            }
+        }
+    }
+
+    private void openVerifyInChrome(String url) {
+        if (url == null || url.isEmpty()) return;
+        Uri uri = Uri.parse(url);
+        if (!isLaunchableUri(uri)) return;
+        Intent chrome = new Intent(Intent.ACTION_VIEW, uri);
+        chrome.setPackage("com.android.chrome");
+        chrome.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+        try {
+            startActivity(chrome);
+            return;
+        } catch (Exception ignored) {
+            // Fall through to any browser — still not the WebView.
+        }
+        openExternal(uri);
+    }
+
     @Override
     public void onDestroy() {
         try {
@@ -1073,6 +1343,7 @@ public class MainActivity extends BridgeActivity {
             if (playerOverlay != null && playerOverlay.isShowing()) playerOverlay.close();
             inAppGoogleAuth.dismiss();
             dismissPopup();
+            dismissVerifyUi();
         } catch (Exception ignored) {
             // Activity is already going away.
         }
