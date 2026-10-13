@@ -197,7 +197,7 @@ public class MainActivity extends BridgeActivity {
                     JSONObject result = NativeHttp.execute(method, url, headersJson, body);
                     runOnUiThread(() -> deliverHttpResult(id, result));
                 },
-                "fumio-http"
+                "ogpb-http"
             ).start();
         }
     }

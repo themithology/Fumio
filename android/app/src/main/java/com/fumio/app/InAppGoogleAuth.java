@@ -70,7 +70,7 @@ final class InAppGoogleAuth {
                     );
                 }
             },
-            "fumio-google-oauth"
+            "ogpb-google-oauth"
         ).start();
     }
 

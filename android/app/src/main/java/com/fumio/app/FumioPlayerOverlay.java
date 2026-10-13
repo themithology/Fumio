@@ -26,7 +26,7 @@ import org.json.JSONArray;
 import org.json.JSONObject;
 import org.json.JSONTokener;
 
-/** Fullscreen copy of the bundled Fumio player — the live site WebView stays put. */
+/** Fullscreen copy of the bundled TheOGPirateBot player — the live site WebView stays put. */
 final class FumioPlayerOverlay {
 
     interface Host {
@@ -496,7 +496,7 @@ final class FumioPlayerOverlay {
                     JSONObject result = NativeHttp.execute(method, url, headersJson, body);
                     activity.runOnUiThread(() -> deliverHttpResult(id, result));
                 },
-                "fumio-player-http"
+                "ogpb-player-http"
             ).start();
         }
     }
