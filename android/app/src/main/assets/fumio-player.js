@@ -140,6 +140,17 @@
       var el = nodes[i].closest("a,button,li") || nodes[i];
       el.style.display = "none";
     }
+    var chrome = document.querySelectorAll("a,button,[role='button']");
+    for (var n = 0; n < chrome.length; n += 1) {
+      var label = (
+        (chrome[n].getAttribute("aria-label") || "") +
+        " " +
+        (chrome[n].textContent || "")
+      ).toLowerCase();
+      if (!/\bdownload\b/.test(label)) continue;
+      if (/email|mail|donate|support/.test(label)) continue;
+      chrome[n].style.display = "none";
+    }
   }
   hideAppOnlyChrome();
   if (/^\/download\b/i.test(location.pathname || "")) {

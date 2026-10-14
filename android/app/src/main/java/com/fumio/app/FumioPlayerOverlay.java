@@ -1,16 +1,11 @@
 package com.fumio.app;
 
 import android.app.Activity;
-import android.app.Dialog;
 import android.content.pm.ActivityInfo;
 import android.content.res.AssetManager;
 import android.net.Uri;
-import android.os.Build;
-import android.view.KeyEvent;
 import android.view.View;
 import android.view.ViewGroup;
-import android.view.Window;
-import android.view.WindowManager;
 import android.webkit.CookieManager;
 import android.webkit.JavascriptInterface;
 import android.webkit.WebChromeClient;
@@ -37,7 +32,6 @@ final class FumioPlayerOverlay {
 
     private final Activity activity;
     private final Host host;
-    private Dialog dialog;
     private FrameLayout root;
     private WebView webView;
     private View customView;
@@ -57,7 +51,7 @@ final class FumioPlayerOverlay {
     }
 
     boolean isShowing() {
-        return dialog != null && dialog.isShowing();
+        return root != null && root.getParent() != null && root.getVisibility() == View.VISIBLE;
     }
 
     void open(String type, String id, String season, String episode) {
@@ -82,24 +76,29 @@ final class FumioPlayerOverlay {
         previousOrientation = activity.getRequestedOrientation();
         activity.setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE);
         if (webView == null) webView = buildPlayerView();
-        if (dialog == null) {
-            dialog = new Dialog(activity, android.R.style.Theme_Black_NoTitleBar_Fullscreen);
-            Window window = dialog.getWindow();
-            if (window != null) {
-                SystemBars.hide(window);
-            }
-            dialog.setContentView(root);
-            dialog.setOnCancelListener((d) -> close());
-            dialog.setOnKeyListener((d, keyCode, event) -> {
-                if (keyCode != KeyEvent.KEYCODE_BACK || event.getAction() != KeyEvent.ACTION_UP) return false;
-                if (hideFullscreen()) return true;
-                close();
-                return true;
-            });
-        }
-        if (!dialog.isShowing()) dialog.show();
+        attachToActivity();
+        root.setVisibility(View.VISIBLE);
+        root.bringToFront();
         hideSystemUi();
         webView.loadUrl("https://localhost" + path);
+    }
+
+    private void attachToActivity() {
+        if (root == null) return;
+        ViewGroup host = activity.findViewById(android.R.id.content);
+        if (host == null) return;
+        if (root.getParent() == host) return;
+        if (root.getParent() instanceof ViewGroup) {
+            ((ViewGroup) root.getParent()).removeView(root);
+        }
+        root.setClickable(true);
+        host.addView(
+            root,
+            new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.MATCH_PARENT
+            )
+        );
     }
 
     boolean hideFullscreen() {
@@ -129,12 +128,7 @@ final class FumioPlayerOverlay {
     private void finishClose(String continueWatching) {
         if (closedOut) return;
         closedOut = true;
-        try {
-            if (dialog != null && dialog.isShowing()) dialog.dismiss();
-        } catch (Exception ignored) {
-            /* already gone */
-        }
-        dialog = null;
+        if (root != null) root.setVisibility(View.GONE);
         destroyView();
         try {
             activity.setRequestedOrientation(previousOrientation);
@@ -147,10 +141,18 @@ final class FumioPlayerOverlay {
 
     private void destroyView() {
         WebView view = webView;
+        FrameLayout holder = root;
         webView = null;
         root = null;
         customView = null;
         customCallback = null;
+        try {
+            if (holder != null && holder.getParent() instanceof ViewGroup) {
+                ((ViewGroup) holder.getParent()).removeView(holder);
+            }
+        } catch (Exception ignored) {
+            /* overlay already torn down */
+        }
         if (view == null) return;
         try {
             if (view.getParent() instanceof ViewGroup) {
@@ -362,9 +364,8 @@ final class FumioPlayerOverlay {
         customView = video;
         customCallback = callback;
         video.setBackgroundColor(0xFF000000);
-        ViewGroup target = dialog != null && dialog.getWindow() != null
-            ? (ViewGroup) dialog.getWindow().getDecorView()
-            : root;
+        ViewGroup target = root != null ? root : (ViewGroup) activity.findViewById(android.R.id.content);
+        if (target == null) return;
         target.addView(
             video,
             new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
@@ -396,7 +397,6 @@ final class FumioPlayerOverlay {
     }
 
     private void hideSystemUi() {
-        if (dialog != null) SystemBars.hide(dialog.getWindow());
         SystemBars.hide(activity.getWindow());
     }
 

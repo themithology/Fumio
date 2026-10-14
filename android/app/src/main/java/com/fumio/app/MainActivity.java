@@ -1,12 +1,15 @@
 package com.fumio.app;
 
 import android.app.Dialog;
+import android.app.PictureInPictureParams;
 import android.content.Intent;
 import android.content.pm.ActivityInfo;
+import android.content.res.Configuration;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Message;
+import android.util.Rational;
 import android.view.View;
 import android.view.ViewGroup;
 import android.webkit.ConsoleMessage;
@@ -78,6 +81,7 @@ public class MainActivity extends BridgeActivity {
     private boolean liveHistoryCleared;
     private boolean liveFailed;
     private volatile boolean playerActive;
+    private boolean pipOpen;
     private volatile boolean suppressEmbedOpen = true;
     private long lastPlayerOpenAt;
     private View fullscreenView;
@@ -124,11 +128,31 @@ public class MainActivity extends BridgeActivity {
     @Override
     public void onResume() {
         super.onResume();
+        if (pipOpen) return;
         if (!playerActive) {
             Bridge bridge = getBridge();
             SystemBars.browse(getWindow(), bridge != null ? bridge.getWebView() : null);
         }
         if (waitingOnChrome || verifyWall.isShowing()) refreshUnlock(false);
+    }
+
+    @Override
+    public void onUserLeaveHint() {
+        super.onUserLeaveHint();
+        if (playerActive) enterPip();
+    }
+
+    @Override
+    public void onPictureInPictureModeChanged(boolean inPip, Configuration config) {
+        super.onPictureInPictureModeChanged(inPip, config);
+        pipOpen = inPip;
+        if (inPip) {
+            SystemBars.hide(getWindow());
+            return;
+        }
+        if (playerActive) {
+            SystemBars.hide(getWindow(), liveWebView());
+        }
     }
 
     private void installClients(WebView webView, Bridge bridge) {
@@ -820,9 +844,9 @@ public class MainActivity extends BridgeActivity {
         if (playerActive) return;
         playerActive = true;
         lastPlayerOpenAt = System.currentTimeMillis();
-        freezeLiveWebView(true);
-        Bridge live = getBridge();
-        SystemBars.hide(getWindow(), live != null ? live.getWebView() : null);
+        freezeLiveWebView(true, true);
+        SystemBars.hide(getWindow(), liveWebView());
+        setPipAutoEnter(true);
         if (playerOverlay == null) {
             playerOverlay = new FumioPlayerOverlay(this, this::onOverlayClosed);
         }
@@ -842,20 +866,83 @@ public class MainActivity extends BridgeActivity {
 
     private void onOverlayClosed(String continueWatching) {
         playerActive = false;
-        freezeLiveWebView(false);
-        Bridge live = getBridge();
-        SystemBars.browse(getWindow(), live != null ? live.getWebView() : null);
+        pipOpen = false;
+        setPipAutoEnter(false);
+        freezeLiveWebView(false, true);
+        SystemBars.browse(getWindow(), liveWebView());
         applyContinueWatchingToLiveSite(continueWatching);
     }
 
-    private void freezeLiveWebView(boolean freeze) {
+    private WebView liveWebView() {
         Bridge bridge = getBridge();
-        if (bridge == null || bridge.getWebView() == null) return;
+        return bridge != null ? bridge.getWebView() : null;
+    }
+
+    private void freezeLiveWebView(boolean freeze) {
+        freezeLiveWebView(freeze, false);
+    }
+
+    private void freezeLiveWebView(boolean freeze, boolean hide) {
+        WebView live = liveWebView();
+        if (live == null) return;
         try {
-            if (freeze) bridge.getWebView().onPause();
-            else bridge.getWebView().onResume();
+            if (freeze) {
+                live.evaluateJavascript(PAUSE_TRAILERS, null);
+                if (hide) live.setVisibility(View.INVISIBLE);
+            } else {
+                live.setVisibility(View.VISIBLE);
+                live.evaluateJavascript(RESTORE_TRAILERS, null);
+            }
         } catch (Exception ignored) {
             /* webview already gone */
+        }
+    }
+
+    private static final String PAUSE_TRAILERS =
+        "(function(){try{"
+            + "document.querySelectorAll('video').forEach(function(v){try{v.pause();v.muted=true;}catch(e){}});"
+            + "document.querySelectorAll('iframe').forEach(function(f){"
+            + "var s=f.getAttribute('src')||'';"
+            + "if(!/youtube|youtu\\.be/i.test(s))return;"
+            + "if(!f.getAttribute('data-fumio-yt'))f.setAttribute('data-fumio-yt',s);"
+            + "f.setAttribute('src','about:blank');"
+            + "});"
+            + "}catch(e){}})()";
+
+    private static final String RESTORE_TRAILERS =
+        "(function(){try{"
+            + "document.querySelectorAll('iframe[data-fumio-yt]').forEach(function(f){"
+            + "var s=f.getAttribute('data-fumio-yt')||'';"
+            + "s=s.replace(/autoplay=1/gi,'autoplay=0').replace(/autoplay=true/gi,'autoplay=0');"
+            + "f.removeAttribute('data-fumio-yt');"
+            + "f.setAttribute('src',s);"
+            + "});"
+            + "}catch(e){}})()";
+
+    private void enterPip() {
+        if (Build.VERSION.SDK_INT < 26) return;
+        if (!playerActive || pipOpen) return;
+        try {
+            enterPictureInPictureMode(
+                new PictureInPictureParams.Builder().setAspectRatio(new Rational(16, 9)).build()
+            );
+        } catch (Exception ignored) {
+            /* device declined PiP */
+        }
+    }
+
+    private void setPipAutoEnter(boolean enable) {
+        if (Build.VERSION.SDK_INT < 31) return;
+        try {
+            setPictureInPictureParams(
+                new PictureInPictureParams.Builder()
+                    .setAspectRatio(new Rational(16, 9))
+                    .setAutoEnterEnabled(enable)
+                    .setSeamlessResizeEnabled(true)
+                    .build()
+            );
+        } catch (Exception ignored) {
+            /* older webview / no PiP */
         }
     }
 
