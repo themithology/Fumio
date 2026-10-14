@@ -6,20 +6,26 @@ import android.view.Window;
 import android.view.WindowInsets;
 import android.view.WindowInsetsController;
 import android.view.WindowManager;
+import androidx.core.view.WindowCompat;
 
-/** Hide or restore the clock/battery bar on an activity or dialog window. */
+/**
+ * Browse: keep the clock/battery bar and stay out of the notch.
+ * Playback: hide bars and allow the player into the cutout.
+ */
 final class SystemBars {
 
     private SystemBars() {}
+
+    static void rest(Window window) {
+        show(window);
+    }
 
     static void hide(Window window) {
         if (window == null) return;
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
         window.addFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN);
-        if (Build.VERSION.SDK_INT >= 28) {
-            window.getAttributes().layoutInDisplayCutoutMode =
-                WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES;
-        }
+        setCutout(window, true);
+        WindowCompat.setDecorFitsSystemWindows(window, false);
         View decor = window.getDecorView();
         decor.setSystemUiVisibility(
             View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
@@ -44,6 +50,8 @@ final class SystemBars {
         if (window == null) return;
         window.clearFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN);
         window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+        setCutout(window, false);
+        WindowCompat.setDecorFitsSystemWindows(window, true);
         View decor = window.getDecorView();
         decor.setSystemUiVisibility(View.SYSTEM_UI_FLAG_VISIBLE);
         if (Build.VERSION.SDK_INT >= 30) {
@@ -52,5 +60,15 @@ final class SystemBars {
                 controller.show(WindowInsets.Type.statusBars() | WindowInsets.Type.navigationBars());
             }
         }
+    }
+
+    private static void setCutout(Window window, boolean intoCutout) {
+        if (Build.VERSION.SDK_INT < 28) return;
+        WindowManager.LayoutParams params = window.getAttributes();
+        params.layoutInDisplayCutoutMode =
+            intoCutout
+                ? WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
+                : WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_NEVER;
+        window.setAttributes(params);
     }
 }

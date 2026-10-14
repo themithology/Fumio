@@ -86,6 +86,7 @@ public class MainActivity extends BridgeActivity {
     @Override
     public void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        SystemBars.rest(getWindow());
         try {
             Bridge bridge = getBridge();
             if (bridge == null) return;
@@ -1345,5 +1346,8 @@ public class MainActivity extends BridgeActivity {
             // Activity is already going away.
         }
         super.onDestroy();
+    }
+}
+Destroy();
     }
 }
