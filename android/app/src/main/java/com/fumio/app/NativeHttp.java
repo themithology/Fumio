@@ -35,8 +35,9 @@ public final class NativeHttp {
             String verb = method == null || method.isEmpty() ? "GET" : method.toUpperCase();
             HttpURLConnection conn = (HttpURLConnection) new URL(url).openConnection();
             conn.setInstanceFollowRedirects(true);
+            boolean slow = url.contains("/api/toon-stream");
             conn.setConnectTimeout(15000);
-            conn.setReadTimeout(15000);
+            conn.setReadTimeout(slow ? 25000 : 15000);
             conn.setRequestMethod(verb);
             conn.setRequestProperty("Accept", "application/json");
             if (headersJson != null && !headersJson.isEmpty()) {

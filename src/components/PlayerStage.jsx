@@ -30,6 +30,8 @@ export default function PlayerStage({
   season,
   episode,
   animeSources = [],
+  toonStreamSource = null,
+  toonStreamLoading = false,
   preferredServerKey = null,
 }) {
   const [useFumioPlayer, setUseFumioPlayer] = useState(false);
@@ -39,8 +41,8 @@ export default function PlayerStage({
   const tgLoadedRef = useRef(false);
 
   const slots = useMemo(
-    () => buildPlayerServerSlots({ animeSources }),
-    [animeSources],
+    () => buildPlayerServerSlots({ animeSources, toonStreamSource, toonStreamLoading }),
+    [animeSources, toonStreamSource, toonStreamLoading],
   );
   const { fallbackSources, pickerSources } = slots;
 
@@ -92,6 +94,7 @@ export default function PlayerStage({
   }, [phase, src, useFumioPlayer]);
 
   const chooseServer = (server) => {
+    if (!server || server.pending) return;
     clearTimeout(timeoutRef.current);
     if (server.id === TG_VID_SOURCE.id) {
       rememberServer(server.id, tmdbId);

@@ -5,6 +5,7 @@ import PlayerStage from "../components/PlayerStage.jsx";
 import { saveContinueWatching, saveContinueWatchingProgress } from "../utils/watchHistory.js";
 import { fetchIrisSeasonData } from "../lib/irisEpisodes.js";
 import { buildAnimeSources, resolveAnimeEmbeds } from "../providers/animeEmbeds.js";
+import { resolveToonStream, toonStreamSource } from "../providers/toonStream.js";
 import { FUMIO_SOURCES } from "../providers/sources.js";
 import { lockPlayerLandscape, unlockPlayerOrientation } from "../utils/playerOrientation.js";
 import {
@@ -93,6 +94,8 @@ export default function Player() {
 
   const [details, setDetails] = useState(null);
   const [animeSources, setAnimeSources] = useState([]);
+  const [toonStream, setToonStream] = useState(null);
+  const [toonStreamLoading, setToonStreamLoading] = useState(false);
   const [switchNotice, setSwitchNotice] = useState("");
 
   const episodeNavRef = useRef(null);
@@ -115,6 +118,8 @@ export default function Player() {
   useEffect(() => {
     if (!details || !isAnimeTitle(details)) {
       setAnimeSources([]);
+      setToonStream(null);
+      setToonStreamLoading(false);
       return undefined;
     }
 
@@ -149,6 +154,41 @@ export default function Player() {
         }
       });
 
+    return () => {
+      cancelled = true;
+    };
+  }, [details, id, type, uiEpisode, uiSeason]);
+
+  useEffect(() => {
+    if (!details || !isAnimeTitle(details)) {
+      setToonStream(null);
+      setToonStreamLoading(false);
+      return undefined;
+    }
+    let cancelled = false;
+    setToonStream(null);
+    setToonStreamLoading(true);
+    const tmdbSeasonCount = (details.seasons || []).filter(
+      (item) => Number(item.season_number) > 0 && Number(item.episode_count) > 0,
+    ).length;
+    resolveToonStream({
+      type,
+      title: details.name || details.title,
+      id,
+      season: uiSeason,
+      episode: uiEpisode,
+      global: tmdbSeasonCount <= 1,
+    })
+      .then((resolved) => {
+        if (cancelled) return;
+        setToonStream(resolved?.url ? toonStreamSource(resolved.url) : null);
+      })
+      .catch(() => {
+        if (!cancelled) setToonStream(null);
+      })
+      .finally(() => {
+        if (!cancelled) setToonStreamLoading(false);
+      });
     return () => {
       cancelled = true;
     };
@@ -332,6 +372,8 @@ export default function Player() {
         season={season}
         episode={episode}
         animeSources={animeSources}
+        toonStreamSource={toonStream}
+        toonStreamLoading={toonStreamLoading}
         preferredServerKey={preferredServerKey}
       />
       <button

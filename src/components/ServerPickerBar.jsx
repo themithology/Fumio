@@ -15,12 +15,13 @@ export default function ServerPickerBar({ sources = [], activeId, onSelect, disa
           <div className="flex min-w-max gap-1.5">
             {sources.map((source) => {
               const active = source.id === activeId;
+              const pending = Boolean(source.pending);
               return (
                 <button
                   key={source.id}
                   type="button"
-                  disabled={disabled}
-                  onClick={() => onSelect(source)}
+                  disabled={disabled || pending}
+                  onClick={() => !pending && onSelect(source)}
                   title={source.quality || source.name}
                   className={`inline-flex min-h-9 shrink-0 items-center gap-1.5 rounded-full border px-3 text-[10px] font-bold transition active:scale-95 sm:text-[11px] ${
                     active

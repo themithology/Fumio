@@ -14,6 +14,7 @@ const NORMAL_LABELS = {
 
 const ANIME_LABELS = {
   tgvid: "Server 1 (Hindi•English•Multi Ad Free)",
+  toonstream: "Hindi • English • Japanese",
   sub: "HD-1 Sub",
   dub: "HD-1 Dub",
   sub2: "HD-2 Sub",
@@ -38,16 +39,27 @@ const byId = new Map(FUMIO_SOURCES.map((source) => [source.id, source]));
  * Build the current normal/anime picker order without duplicating source keys.
  * The actual URLs still come from the existing Fumio source definitions.
  */
-export function buildPlayerServerSlots({ animeSources = [] } = {}) {
+export function buildPlayerServerSlots({
+  animeSources = [],
+  toonStreamSource = null,
+  toonStreamLoading = false,
+} = {}) {
   const resolvedAnime = [];
   const seen = new Set();
   for (const source of animeSources || []) {
-    if (!source?.id || seen.has(source.id)) continue;
+    if (!source?.id || seen.has(source.id) || source.id === "toonstream") continue;
     seen.add(source.id);
     resolvedAnime.push(withLabel(source, ANIME_LABELS));
   }
 
-  const isAnime = resolvedAnime.length > 0;
+  const toonReady = toonStreamSource?.id === "toonstream" && typeof toonStreamSource.url === "function";
+  const toonSlot = toonReady
+    ? [withLabel({ ...toonStreamSource, noProbe: true }, ANIME_LABELS)]
+    : toonStreamLoading
+      ? [{ id: "toonstream", name: "Resolving Anime Server...", pending: true, noProbe: true, url: () => null }]
+      : [];
+
+  const isAnime = resolvedAnime.length > 0 || toonSlot.length > 0;
   const normalOrder = ["vidstuck", "bingr", "roxy", "vidfast", "nxsha"];
   const normalSources = normalOrder
     .map((id) => byId.get(id))
@@ -61,14 +73,15 @@ export function buildPlayerServerSlots({ animeSources = [] } = {}) {
     };
   }
 
-  // Anime keeps all three HD Sub/Dub pairs prominent, then keeps Fumio's
-  // original normal fallback providers available instead of removing them.
+  // Anime: TG Vid, then resolver-gated ToonStream (hidden if the probe
+  // returns nothing), then HD Sub/Dub pairs, then Fumio's other hosts.
   const animeExtras = ["roxy", "vidfast", "vidstuck", "bingr", "nxsha"]
     .map((id) => byId.get(id))
     .filter(Boolean)
     .map((source) => withLabel(source, ANIME_LABELS));
-  const animeFallbacks = [...resolvedAnime, ...animeExtras];
-  const animePicker = [withLabel(TG_VID_SOURCE, ANIME_LABELS), ...animeFallbacks];
+  const playableToon = toonSlot.filter((source) => !source.pending);
+  const animeFallbacks = [...playableToon, ...resolvedAnime, ...animeExtras];
+  const animePicker = [withLabel(TG_VID_SOURCE, ANIME_LABELS), ...toonSlot, ...resolvedAnime, ...animeExtras];
 
   return {
     isAnime: true,

@@ -60,6 +60,11 @@ export default function FumioPlayerStage({
     }
     let cancelled = false;
     setPhase("checking");
+    if (source.noProbe) {
+      return () => {
+        cancelled = true;
+      };
+    }
     checkStreamAlive(src).then((alive) => {
       if (!cancelled && !loadedRef.current && !alive) setPhase("error");
     });
