@@ -6,7 +6,6 @@ import android.view.Window;
 import android.view.WindowInsets;
 import android.view.WindowInsetsController;
 import android.view.WindowManager;
-import androidx.core.view.WindowCompat;
 
 /**
  * Browse: keep the clock/battery bar and stay out of the notch.
@@ -25,7 +24,6 @@ final class SystemBars {
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
         window.addFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN);
         setCutout(window, true);
-        WindowCompat.setDecorFitsSystemWindows(window, false);
         View decor = window.getDecorView();
         decor.setSystemUiVisibility(
             View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
@@ -51,7 +49,6 @@ final class SystemBars {
         window.clearFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN);
         window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
         setCutout(window, false);
-        WindowCompat.setDecorFitsSystemWindows(window, true);
         View decor = window.getDecorView();
         decor.setSystemUiVisibility(View.SYSTEM_UI_FLAG_VISIBLE);
         if (Build.VERSION.SDK_INT >= 30) {

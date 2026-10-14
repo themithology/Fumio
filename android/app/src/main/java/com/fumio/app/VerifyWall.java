@@ -1,14 +1,13 @@
 package com.fumio.app;
 
 import android.app.Activity;
+import android.os.Build;
 import android.util.TypedValue;
 import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
+import android.view.WindowInsets;
 import android.widget.TextView;
-import androidx.core.graphics.Insets;
-import androidx.core.view.ViewCompat;
-import androidx.core.view.WindowInsetsCompat;
 
 /** Full-screen support wall. Ads themselves never run here — Chrome does. */
 final class VerifyWall {
@@ -41,22 +40,29 @@ final class VerifyWall {
         cta.setOnClickListener(v -> callbacks.onClickHere());
         root.findViewById(R.id.verify_reload).setOnClickListener(v -> callbacks.onReload());
         root.findViewById(R.id.verify_close).setOnClickListener(v -> callbacks.onDismiss());
-        ViewCompat.setOnApplyWindowInsetsListener(
-            root,
+        root.setOnApplyWindowInsetsListener(
             (v, insets) -> {
-                Insets bars =
-                    insets.getInsets(
-                        WindowInsetsCompat.Type.systemBars() | WindowInsetsCompat.Type.displayCutout()
-                    );
-                if (content != null) {
-                    content.setPadding(
-                        bars.left + padX,
-                        bars.top + padY,
-                        bars.right + padX,
-                        bars.bottom + padY
-                    );
+                int left;
+                int top;
+                int right;
+                int bottom;
+                if (Build.VERSION.SDK_INT >= 30) {
+                    android.graphics.Insets bars =
+                        insets.getInsets(WindowInsets.Type.systemBars() | WindowInsets.Type.displayCutout());
+                    left = bars.left;
+                    top = bars.top;
+                    right = bars.right;
+                    bottom = bars.bottom;
+                } else {
+                    left = insets.getSystemWindowInsetLeft();
+                    top = insets.getSystemWindowInsetTop();
+                    right = insets.getSystemWindowInsetRight();
+                    bottom = insets.getSystemWindowInsetBottom();
                 }
-                return WindowInsetsCompat.CONSUMED;
+                if (content != null) {
+                    content.setPadding(left + padX, top + padY, right + padX, bottom + padY);
+                }
+                return insets;
             }
         );
         host.addView(
@@ -66,7 +72,7 @@ final class VerifyWall {
                 ViewGroup.LayoutParams.MATCH_PARENT
             )
         );
-        ViewCompat.requestApplyInsets(root);
+        root.requestApplyInsets();
     }
 
     boolean isShowing() {
@@ -76,7 +82,7 @@ final class VerifyWall {
     void show() {
         if (root != null) {
             root.setVisibility(View.VISIBLE);
-            ViewCompat.requestApplyInsets(root);
+            root.requestApplyInsets();
         }
     }
 
