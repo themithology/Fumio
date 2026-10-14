@@ -9,6 +9,9 @@
       "*.theogpiratebot.online"
     ]
   },
+  "android": {
+    "adjustMarginsForEdgeToEdge": "auto"
+  },
   "plugins": {
     "CapacitorHttp": {
       "enabled": false

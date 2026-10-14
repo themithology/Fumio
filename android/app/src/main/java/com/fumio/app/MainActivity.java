@@ -106,6 +106,7 @@ public class MainActivity extends BridgeActivity {
             ).start();
             installClients(webView, bridge);
             SystemBars.browse(getWindow(), webView);
+            webView.post(() -> SystemBars.browse(getWindow(), webView));
             installBackHandler();
             handleAuthIntent(getIntent());
         } catch (Exception ignored) {

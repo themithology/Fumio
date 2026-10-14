@@ -3,28 +3,29 @@ package com.fumio.app;
 import android.graphics.Color;
 import android.os.Build;
 import android.view.View;
+import android.view.ViewGroup;
 import android.view.Window;
 import android.view.WindowInsets;
 import android.view.WindowInsetsController;
 import android.view.WindowManager;
 
 /**
- * Browse: the activity starts below the Android status bar (clock / battery /
- * notch stay outside the app). Playback: hide those bars.
+ * Browse: keep the system status bar and push the WebView below it (layout
+ * margins). Playback: hide bars and let the player fill the screen.
  */
 final class SystemBars {
 
     private SystemBars() {}
 
-    static void browse(Window window, View content) {
+    static void browse(Window window, View webView) {
         if (window == null) return;
         window.clearFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN);
         window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
         window.addFlags(WindowManager.LayoutParams.FLAG_DRAWS_SYSTEM_BAR_BACKGROUNDS);
         window.setStatusBarColor(Color.BLACK);
         if (Build.VERSION.SDK_INT >= 21) window.setNavigationBarColor(Color.BLACK);
-        setCutout(window, false);
-        if (Build.VERSION.SDK_INT >= 30) window.setDecorFitsSystemWindows(true);
+        if (Build.VERSION.SDK_INT >= 30) window.setDecorFitsSystemWindows(false);
+        setCutout(window, true);
         View decor = window.getDecorView();
         decor.setSystemUiVisibility(View.SYSTEM_UI_FLAG_VISIBLE);
         if (Build.VERSION.SDK_INT >= 30) {
@@ -33,18 +34,11 @@ final class SystemBars {
                 controller.show(WindowInsets.Type.statusBars() | WindowInsets.Type.navigationBars());
             }
         }
-        if (content != null) {
-            content.setFitsSystemWindows(true);
-            content.setPadding(0, 0, 0, 0);
-            content.requestApplyInsets();
-        }
+        insetWebView(webView, true);
     }
 
-    static void hide(Window window, View content) {
-        if (content != null) {
-            content.setFitsSystemWindows(false);
-            content.setPadding(0, 0, 0, 0);
-        }
+    static void hide(Window window, View webView) {
+        insetWebView(webView, false);
         hide(window);
     }
 
@@ -78,13 +72,61 @@ final class SystemBars {
         browse(window, null);
     }
 
+    private static void insetWebView(View webView, boolean inset) {
+        if (webView == null) return;
+        webView.setFitsSystemWindows(false);
+        webView.setOnApplyWindowInsetsListener(
+            (v, insets) -> {
+                int left = 0;
+                int top = 0;
+                int right = 0;
+                int bottom = 0;
+                if (inset) {
+                    if (Build.VERSION.SDK_INT >= 30) {
+                        android.graphics.Insets bars =
+                            insets.getInsets(
+                                WindowInsets.Type.systemBars() | WindowInsets.Type.displayCutout()
+                            );
+                        left = bars.left;
+                        top = bars.top;
+                        right = bars.right;
+                        bottom = bars.bottom;
+                    } else {
+                        left = insets.getSystemWindowInsetLeft();
+                        top = insets.getSystemWindowInsetTop();
+                        right = insets.getSystemWindowInsetRight();
+                        bottom = insets.getSystemWindowInsetBottom();
+                    }
+                }
+                applyMargins(v, left, top, right, bottom);
+                return insets;
+            }
+        );
+        webView.requestApplyInsets();
+        if (!inset) applyMargins(webView, 0, 0, 0, 0);
+    }
+
+    private static void applyMargins(View view, int left, int top, int right, int bottom) {
+        ViewGroup.LayoutParams params = view.getLayoutParams();
+        if (!(params instanceof ViewGroup.MarginLayoutParams)) return;
+        ViewGroup.MarginLayoutParams margins = (ViewGroup.MarginLayoutParams) params;
+        if (
+            margins.leftMargin == left &&
+            margins.topMargin == top &&
+            margins.rightMargin == right &&
+            margins.bottomMargin == bottom
+        ) {
+            return;
+        }
+        margins.setMargins(left, top, right, bottom);
+        view.setLayoutParams(margins);
+    }
+
     private static void setCutout(Window window, boolean intoCutout) {
         if (Build.VERSION.SDK_INT < 28) return;
         WindowManager.LayoutParams params = window.getAttributes();
         params.layoutInDisplayCutoutMode =
-            intoCutout
-                ? WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
-                : WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_DEFAULT;
+            WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES;
         window.setAttributes(params);
     }
 }
