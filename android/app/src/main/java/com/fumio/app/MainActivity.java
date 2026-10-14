@@ -1167,9 +1167,10 @@ public class MainActivity extends BridgeActivity {
                 }
             }
         );
-        verifyWall.setStatus("One ad wall every 12 hours. Then the app is yours.");
+        verifyWall.setStatus("One ad wall in Chrome every 12 hours.");
         verifyWall.setBusy(false);
         verifyWall.show();
+        freezeLiveWebView(true);
     }
 
     private void hideVerifyWall() {
@@ -1177,6 +1178,7 @@ public class MainActivity extends BridgeActivity {
         pendingPlay = false;
         verifyWall.hide();
         verifyWall.setBusy(false);
+        if (!playerActive) freezeLiveWebView(false);
     }
 
     private void launchVerifyChrome() {
@@ -1188,7 +1190,7 @@ public class MainActivity extends BridgeActivity {
         String existing = verifyClient != null ? verifyClient.pendingVerifyUrl() : null;
         if (existing != null) {
             waitingOnChrome = true;
-            verifyWall.setStatus("Finish the 3 Continues in Chrome, then come back. Unlock is automatic.");
+            verifyWall.setStatus("Finish in Chrome, then come back and tap Reload.");
             openVerifyInChrome(existing);
             return;
         }
@@ -1217,9 +1219,7 @@ public class MainActivity extends BridgeActivity {
                     if (url == null && verifyClient != null) url = verifyClient.pendingVerifyUrl();
                     if (url != null) {
                         waitingOnChrome = true;
-                        verifyWall.setStatus(
-                            "Finish the 3 Continues in Chrome, then come back. Unlock is automatic."
-                        );
+                        verifyWall.setStatus("Finish in Chrome, then come back and tap Reload.");
                         openVerifyInChrome(url);
                         return;
                     }
@@ -1242,7 +1242,7 @@ public class MainActivity extends BridgeActivity {
         if (!pendingPlay && !verifyWall.isShowing()) return;
         if (verifyBusy) return;
         verifyBusy = true;
-        if (fromReload) verifyWall.setStatus("Checking unlock…");
+        if (fromReload) verifyWall.setStatus("One moment…");
         new Thread(
             () -> {
                 VerifyClient.Result result;
@@ -1263,8 +1263,8 @@ public class MainActivity extends BridgeActivity {
                     if (verifyWall.isShowing()) {
                         verifyWall.setStatus(
                             waitingOnChrome
-                                ? "Not unlocked yet. Finish the 3 Continues in Chrome, then tap Reload."
-                                : "Tap Click Here to open the ad wall in Chrome."
+                                ? "Still locked. Finish in Chrome, then tap Reload."
+                                : "Tap Click Here to continue."
                         );
                     }
                 });
@@ -1301,6 +1301,7 @@ public class MainActivity extends BridgeActivity {
         verifyWall.hide();
         verifyWall.setBusy(false);
         if (pendingPlay) openPendingPlayer();
+        else if (!playerActive) freezeLiveWebView(false);
     }
 
     private void openVerifyInChrome(String url) {

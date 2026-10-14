@@ -61,6 +61,54 @@
   }
   killSmartlink();
 
+  function killDiscordPrompt() {
+    try {
+      var style = document.createElement("style");
+      style.textContent =
+        'header a[href*="discord"],nav a[href*="discord"],a[aria-label*="Join our Discord"],a[aria-label*="Join Discord"]{display:none!important}' +
+        'iframe[src*="widgetbot"],iframe[src*="e.widgetbot.io"],iframe[src*="discord.com/widget"]{display:none!important}';
+      (document.head || document.documentElement).appendChild(style);
+    } catch (e) {
+      /* ignore */
+    }
+    function isJoinOverlay(el) {
+      if (!el || el === document.body || el === document.documentElement) return false;
+      if (el.closest && el.closest("header,nav,footer")) return false;
+      var text = (el.innerText || el.textContent || "").toLowerCase();
+      if (text.indexOf("discord") < 0) return false;
+      if (text.indexOf("join") < 0 && text.indexOf("community") < 0) return false;
+      var pos = "";
+      try {
+        pos = window.getComputedStyle(el).position || "";
+      } catch (err) {
+        pos = "";
+      }
+      if (pos === "fixed" || pos === "absolute" || pos === "sticky") return true;
+      var role = (el.getAttribute && el.getAttribute("role")) || "";
+      return role === "dialog" || role === "alertdialog";
+    }
+    function sweep() {
+      var nodes = document.querySelectorAll(
+        '[role="dialog"],[role="alertdialog"],.fixed.inset-0,[class*="modal"],[class*="Modal"],[class*="popup"],[class*="Popup"],body > .fixed,body > [class*="fixed"]'
+      );
+      for (var i = 0; i < nodes.length; i += 1) {
+        if (!isJoinOverlay(nodes[i])) continue;
+        try {
+          nodes[i].remove();
+        } catch (err) {
+          nodes[i].style.display = "none";
+        }
+      }
+    }
+    sweep();
+    try {
+      new MutationObserver(sweep).observe(document.documentElement, { childList: true, subtree: true });
+    } catch (e) {
+      /* optional */
+    }
+  }
+  killDiscordPrompt();
+
   if (!native || !native.openWatch) return;
 
   var style = document.createElement("style");
