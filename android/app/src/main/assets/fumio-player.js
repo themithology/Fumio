@@ -66,7 +66,7 @@
   var style = document.createElement("style");
   style.textContent =
     "html,body{overflow-x:hidden!important;max-width:100vw!important}" +
-    "img,video,canvas{max-width:100%;height:auto}" +
+    "img,video,canvas{max-width:100%}" +
     'html:not([data-fumio-download]) iframe[src*="vidsrc"]:not([src*="vidsrc.party"]),iframe[src*="videasy"],iframe[src*="vidfast"],iframe[src*="vidstuck"],iframe[src*="bingr"],iframe[src*="zxcstream"],iframe[src*="2embed"],iframe[src*="multiembed"],iframe[src*="autoembed"],iframe[src*="smashy"],iframe[src*="vidlink"],iframe[src*="embed.su"],iframe[src*="tgvid.lovable"],iframe[src*="megaplay"],iframe[src*="zoko"],iframe[src*="4animo"]{display:none!important}' +
     'a[href*="watch-party"],a[href*="watchparty"],[data-nav="watch-party"]{display:none!important}' +
     'a[href*="/download"],a[href*="download?"]{display:none!important}' +

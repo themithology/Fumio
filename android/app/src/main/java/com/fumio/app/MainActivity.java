@@ -86,7 +86,6 @@ public class MainActivity extends BridgeActivity {
     @Override
     public void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-        SystemBars.rest(getWindow());
         try {
             Bridge bridge = getBridge();
             if (bridge == null) return;
@@ -106,6 +105,7 @@ public class MainActivity extends BridgeActivity {
                 "ogpb-verify"
             ).start();
             installClients(webView, bridge);
+            SystemBars.browse(getWindow(), webView);
             installBackHandler();
             handleAuthIntent(getIntent());
         } catch (Exception ignored) {
@@ -123,7 +123,10 @@ public class MainActivity extends BridgeActivity {
     @Override
     public void onResume() {
         super.onResume();
-        if (!playerActive) SystemBars.rest(getWindow());
+        if (!playerActive) {
+            Bridge bridge = getBridge();
+            SystemBars.browse(getWindow(), bridge != null ? bridge.getWebView() : null);
+        }
         if (waitingOnChrome || verifyWall.isShowing()) refreshUnlock(false);
     }
 
@@ -817,7 +820,8 @@ public class MainActivity extends BridgeActivity {
         playerActive = true;
         lastPlayerOpenAt = System.currentTimeMillis();
         freezeLiveWebView(true);
-        SystemBars.hide(getWindow());
+        Bridge live = getBridge();
+        SystemBars.hide(getWindow(), live != null ? live.getWebView() : null);
         if (playerOverlay == null) {
             playerOverlay = new FumioPlayerOverlay(this, this::onOverlayClosed);
         }
@@ -838,7 +842,8 @@ public class MainActivity extends BridgeActivity {
     private void onOverlayClosed(String continueWatching) {
         playerActive = false;
         freezeLiveWebView(false);
-        SystemBars.show(getWindow());
+        Bridge live = getBridge();
+        SystemBars.browse(getWindow(), live != null ? live.getWebView() : null);
         applyContinueWatchingToLiveSite(continueWatching);
     }
 
