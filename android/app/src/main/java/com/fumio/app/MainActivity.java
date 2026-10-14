@@ -123,6 +123,7 @@ public class MainActivity extends BridgeActivity {
     @Override
     public void onResume() {
         super.onResume();
+        if (!playerActive) SystemBars.rest(getWindow());
         if (waitingOnChrome || verifyWall.isShowing()) refreshUnlock(false);
     }
 
@@ -1346,8 +1347,5 @@ public class MainActivity extends BridgeActivity {
             // Activity is already going away.
         }
         super.onDestroy();
-    }
-}
-Destroy();
     }
 }
