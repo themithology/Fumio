@@ -5,6 +5,7 @@ import {
   defaultAudio,
 } from "../providers/sources.js";
 import { buildPlayerServerSlots } from "../providers/serverSlots.js";
+import { subscribeLiveHosts } from "../providers/liveHosts.js";
 import { checkStreamAlive } from "../lib/streamCheck.js";
 import ServerPickerBar from "./ServerPickerBar.jsx";
 import FumioPlayerStage from "./FumioPlayerStage.jsx";
@@ -37,6 +38,7 @@ export default function PlayerStage({
   const [useFumioPlayer, setUseFumioPlayer] = useState(false);
   const [phase, setPhase] = useState("checking"); // checking | playing | error
   const [fallbackSourceId, setFallbackSourceId] = useState(null);
+  const [hostsTick, setHostsTick] = useState(0);
   const timeoutRef = useRef(null);
   const tgLoadedRef = useRef(false);
 
@@ -52,6 +54,8 @@ export default function PlayerStage({
     setFallbackSourceId(null);
     tgLoadedRef.current = false;
   }, [tmdbId, mediaType, season, episode]);
+
+  useEffect(() => subscribeLiveHosts(() => setHostsTick((tick) => tick + 1)), []);
 
   // A deliberately chosen/persisted stable key is still honored, but only a
   // viewer choice can move to a fallback after this player has opened.
@@ -144,7 +148,7 @@ export default function PlayerStage({
           </div>
         )}
         <iframe
-          key={src}
+          key={`${src}-${hostsTick}`}
           src={src}
           onLoad={() => {
             tgLoadedRef.current = true;

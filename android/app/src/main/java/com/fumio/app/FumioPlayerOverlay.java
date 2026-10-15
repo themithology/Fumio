@@ -140,6 +140,7 @@ final class FumioPlayerOverlay {
     }
 
     private void destroyView() {
+        LiveServers.bindPlayer(null);
         WebView view = webView;
         FrameLayout holder = root;
         webView = null;
@@ -239,6 +240,7 @@ final class FumioPlayerOverlay {
                         "(function(){try{window.open=function(){return null;}}catch(e){}})()",
                         null
                     );
+                    LiveServers.bindPlayer(v);
                     applySeed();
                     injectTrail(v);
                 }

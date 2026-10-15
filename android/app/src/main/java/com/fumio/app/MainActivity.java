@@ -109,6 +109,8 @@ public class MainActivity extends BridgeActivity {
                 "ogpb-verify"
             ).start();
             installClients(webView, bridge);
+            LiveServers.load(this);
+            LiveServers.refresh(this, webView);
             SystemBars.browse(getWindow(), webView);
             webView.post(() -> SystemBars.browse(getWindow(), webView));
             installBackHandler();
@@ -1060,14 +1062,23 @@ public class MainActivity extends BridgeActivity {
         String host = url.getHost();
         if (host == null) return false;
         host = host.toLowerCase(Locale.US);
-        if (host.contains("vidsrc") || host.contains("videasy") || host.contains("vidfast") || host.contains("vidlink")) {
+        if (
+            host.contains("vidsrc") ||
+            host.contains("videasy") ||
+            host.contains("vidfast") ||
+            host.contains("vidlink") ||
+            host.contains("vidstuck") ||
+            host.contains("zxcstream")
+        ) {
             return true;
         }
         return hostMatches(
             url,
             "vidstuck.xyz",
+            "vidstuck.cc",
             "bingr.one",
             "zxcstream.xyz",
+            "zxcstream.cc",
             "2embed.cc",
             "2embed.skin",
             "multiembed.mov",
