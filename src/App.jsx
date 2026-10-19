@@ -12,6 +12,7 @@ import Anime from "./pages/Anime.jsx";
 import MediaHub from "./pages/MediaHub.jsx";
 import Schedule from "./pages/Schedule.jsx";
 import Account from "./pages/Account.jsx";
+import Profile from "./pages/Profile.jsx";
 import MyList from "./pages/MyList.jsx";
 import { useAccountSync } from "./components/auth/useAccount.js";
 
@@ -38,6 +39,7 @@ export default function App() {
         <Route path="/series" element={<MediaHub mediaType="tv" />} />
         <Route path="/schedule" element={<Schedule />} />
         <Route path="/account" element={<Account />} />
+        <Route path="/u/:handle" element={<Profile />} />
         <Route path="/my-list" element={<MyList />} />
         <Route path="/live-tv" element={<LiveTv />} />
         <Route path="/live-tv/watch/:id" element={<LiveTvWatch />} />

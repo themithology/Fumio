@@ -825,3 +825,229 @@ export async function anilistEpisodeCollection(
     return { status: 502, body: { success: false, error: `AniList episodes failed: ${String(e)}` } };
   }
 }
+//
+// Powers the /schedule page. The browser NEVER talks to graphql.anilist.co
+// directly (Indian ISPs DNS-block upstreams — LESSONS-LEARNED #12); this route
+// fans the week out server-side and returns a trimmed, cacheable payload.
+// Zero TMDB quota is spent: cards render from AniList ids/covers only.
+//
+// Query: start=<unix seconds> end=<unix seconds> — the client passes the
+// visitor's LOCAL week (Mon 00:00 → next Mon 00:00). Defaults (current UTC
+// week) are computed only when a bound is missing/invalid. The window is
+// clamped to 14 days so a hostile query can't page through months.
+// Mirror of api/index.py `get_anime_schedule` — keep 1:1.
+
+const SCHEDULE_FORMATS = new Set(["TV", "TV_SHORT", "ONA", "MOVIE"]);
+const SCHEDULE_MAX_PAGES = 4;
+const SCHEDULE_PER_PAGE = 50;
+const SCHEDULE_MAX_WINDOW_S = 14 * 86400;
+const SCHEDULE_QUERY = `
+query ($page: Int, $perPage: Int, $start: Int, $end: Int) {
+  Page(page: $page, perPage: $perPage) {
+    pageInfo { hasNextPage }
+    airingSchedules(airingAt_greater: $start, airingAt_lesser: $end, sort: TIME) {
+      id
+      airingAt
+      episode
+      media {
+        id
+        title { english romaji }
+        coverImage { large }
+        bannerImage
+        format
+        isAdult
+        startDate { year }
+      }
+    }
+  }
+}
+`;
+
+/** Current UTC week: Monday 00:00 UTC → next Monday 00:00 UTC. */
+export function scheduleDefaultWindow(nowS: number): [number, number] {
+  const dayStart = nowS - (nowS % 86400);
+  // 1970-01-01 was a Thursday → weekday index with Monday = 0.
+  const weekday = (Math.floor(dayStart / 86400) + 3) % 7;
+  const start = dayStart - weekday * 86400;
+  return [start, start + 7 * 86400];
+}
+
+export function scheduleWindow(
+  startRaw: number | null,
+  endRaw: number | null,
+  nowS: number,
+): [number, number] {
+  const startOk = Number.isInteger(startRaw) && (startRaw as number) > 0;
+  const endOk = Number.isInteger(endRaw) && (endRaw as number) > 0;
+  let start: number;
+  let end: number;
+  if (startOk && endOk && (endRaw as number) > (startRaw as number)) {
+    start = startRaw as number;
+    end = endRaw as number;
+  } else {
+    const [dStart] = scheduleDefaultWindow(nowS);
+    start = startOk ? (startRaw as number) : dStart;
+    end = endOk && (endRaw as number) > start ? (endRaw as number) : start + 7 * 86400;
+  }
+  if (end - start > SCHEDULE_MAX_WINDOW_S) end = start + SCHEDULE_MAX_WINDOW_S;
+  return [start, end];
+}
+
+/** Trim one AniList airingSchedule node; null when it must be dropped. */
+export function scheduleTrim(entry: any): any | null {
+  const media = entry?.media ?? {};
+  if (media.isAdult) return null;
+  if (!SCHEDULE_FORMATS.has(media.format)) return null;
+  if (!media.id || !entry?.airingAt) return null;
+  const title = media.title ?? {};
+  // Trimmed deliberately — mirror of `_schedule_trim` in api/index.py: the
+  // client reads id, airingAt, episode and media{id, title, cover, banner,
+  // format, startDate} only. idMal + the AniList episode total are dead
+  // weight on up to 200 rows.
+  return {
+    id: entry.id ?? null,
+    airingAt: entry.airingAt,
+    episode: entry.episode ?? null,
+    media: {
+      id: media.id,
+      title: { english: title.english ?? null, romaji: title.romaji ?? null },
+      coverImage: { large: media.coverImage?.large ?? null },
+      bannerImage: media.bannerImage ?? null,
+      format: media.format ?? null,
+      startDate: { year: media.startDate?.year ?? null },
+    },
+  };
+}
+
+/** Flatten + trim + dedupe (by schedule id) + sort the paged responses. */
+export function scheduleCollect(pages: any[][]): any[] {
+  const seen = new Set<number>();
+  const items: any[] = [];
+  for (const page of pages) {
+    for (const entry of page ?? []) {
+      const trimmed = scheduleTrim(entry);
+      if (trimmed === null || seen.has(trimmed.id)) continue;
+      seen.add(trimmed.id);
+      items.push(trimmed);
+    }
+  }
+  items.sort((a, b) => a.airingAt - b.airingAt || (a.id ?? 0) - (b.id ?? 0));
+  return items;
+}
+/**
+ * Pages AniList (max SCHEDULE_MAX_PAGES) for the window. `fetchImpl` is
+ * injectable so the node-level harness can mock graphql.anilist.co.
+ */
+export async function fetchAnimeSchedule(
+  startS: number,
+  endS: number,
+  fetchImpl: typeof fetch = fetch,
+): Promise<{ success: true; start: number; end: number; items: any[] } | { success: false; error: string }> {
+  const headers = {
+    "Content-Type": "application/json",
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
+  };
+  const pages: any[][] = [];
+  try {
+    for (let pageNo = 1; pageNo <= SCHEDULE_MAX_PAGES; pageNo++) {
+      const r = await fetchImpl("https://graphql.anilist.co", {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          query: SCHEDULE_QUERY,
+          variables: {
+            page: pageNo,
+            perPage: SCHEDULE_PER_PAGE,
+            // AniList's *_greater / *_lesser are strict; widen by 1s so an
+            // episode airing exactly at Mon 00:00 is kept.
+            start: startS - 1,
+            end: endS,
+          },
+        }),
+        signal: AbortSignal.timeout(12000),
+      });
+      if (r.status !== 200) {
+        if (pages.length) break; // keep what we have — partial week beats an error
+        return { success: false, error: `AniList schedule failed: ${r.status}` };
+      }
+      const page = (await r.json())?.data?.Page ?? {};
+      pages.push(page.airingSchedules ?? []);
+      if (!page.pageInfo?.hasNextPage) break;
+    }
+  } catch (e) {
+    if (!pages.length) return { success: false, error: String(e) };
+  }
+  return { success: true, start: startS, end: endS, items: scheduleCollect(pages) };
+}
+// ─────────────────────────────────────────────────────────────────────────────
+// /api/anime-trending — Top 10 Anime This Week (AniList trending)
+//
+// The Anime hub's "Top 10 Anime This Week" row is sourced from AniList's own
+// TRENDING_DESC ranking, NOT from TMDB popularity. Mirror of the FastAPI
+// route (api/index.py). Same rule as every AniList route: the browser never
+// touches graphql.anilist.co; non-200 / transport failure → 502 so the
+// frontend ladder fails over. Cards render from AniList covers; the TMDB id
+// is resolved client-side on click (al2tmdb memo — zero TMDB quota on render).
+// ─────────────────────────────────────────────────────────────────────────────
+const TRENDING_QUERY = `query ($page: Int, $perPage: Int) {
+  Page(page: $page, perPage: $perPage) {
+    media(type: ANIME, isAdult: false, sort: [TRENDING_DESC]) {
+      id
+      title { english romaji native }
+      coverImage { extraLarge large }
+      bannerImage
+      averageScore
+      popularity
+      format
+      episodes
+      startDate { year month day }
+      nextAiringEpisode { airingAt episode }
+    }
+  }
+}`;
+const TRENDING_PER_PAGE = 12;
+
+export function trendingTrim(media: any): Record<string, unknown> | null {
+  // Trim one AniList trending media node; null when it must be dropped.
+  if (!media || typeof media !== "object") return null;
+  if (media.isAdult) return null;
+  if (!media.id) return null;
+  const title = media.title ?? {};
+  const cover = media.coverImage ?? {};
+  const start = media.startDate ?? {};
+  const nga = media.nextAiringEpisode ?? {};
+  // Trimmed deliberately — mirror of `_trending_trim` in api/index.py:
+  // idMal / seasonYear / status / genres are never read by the anime hub.
+  return {
+    id: media.id,
+    title: { english: title.english ?? null, romaji: title.romaji ?? null, native: title.native ?? null },
+    coverImage: { extraLarge: cover.extraLarge ?? null, large: cover.large ?? null },
+    bannerImage: media.bannerImage ?? null,
+    averageScore: media.averageScore ?? null,
+    popularity: media.popularity ?? null,
+    format: media.format ?? null,
+    episodes: media.episodes ?? null,
+    startDate: { year: start.year ?? null, month: start.month ?? null, day: start.day ?? null },
+    nextAiringEpisode: { airingAt: nga.airingAt ?? null, episode: nga.episode ?? null },
+  };
+}
+
+/** Injectable so the node-level harness can mock graphql.anilist.co. */
+export async function fetchAnimeTrending(
+  fetchImpl: typeof fetch = fetch,
+): Promise<{ success: true; source: "anilist"; items: any[] } | { success: false; error: string }> {
+  try {
+    const r = await fetchImpl("https://graphql.anilist.co", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)" },
+      body: JSON.stringify({ query: TRENDING_QUERY, variables: { page: 1, perPage: TRENDING_PER_PAGE } }),
+      signal: AbortSignal.timeout(12000),
+    });
+    if (r.status !== 200) return { success: false, error: `AniList trending failed: ${r.status}` };
+    const page = (await r.json())?.data?.Page ?? {};
+    const items = (page.media ?? []).map(trendingTrim).filter(Boolean);
+    return { success: true, source: "anilist", items };
+  } catch (e) {
+    return { success: false, error: String(e) };
+  }
+}

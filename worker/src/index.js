@@ -116,9 +116,11 @@ async function proxyTmdb(path, url, env) {
 const STREAM_CHECK_HOSTS = new Set([
   "tgvid.lovable.app",
   "vidstuck.xyz",
+  "vidstuck.cc",
   "bingr.one",
   "vidfast.vc",
   "zxcstream.xyz",
+  "zxcstream.cc",
   "nxsha.space",
 ]);
 

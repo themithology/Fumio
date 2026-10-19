@@ -3,7 +3,7 @@ import { FUMIO_SOURCES, buildStreamUrl, defaultAudio } from "../providers/source
 import { checkStreamAlive } from "../lib/streamCheck.js";
 import ServerPickerBar from "./ServerPickerBar.jsx";
 
-// Fumio's original fallback lane. Sources never switch themselves: the
+// TheOGPirateBot fallback lane. Sources never switch themselves: the
 // viewer owns the choice from the server bar below the video. Anime Sub/Dub
 // slots can be appended without removing the original providers.
 const LOAD_TIMEOUT_MS = 12000;
@@ -60,6 +60,11 @@ export default function FumioPlayerStage({
     }
     let cancelled = false;
     setPhase("checking");
+    if (source.noProbe) {
+      return () => {
+        cancelled = true;
+      };
+    }
     checkStreamAlive(src).then((alive) => {
       if (!cancelled && !loadedRef.current && !alive) setPhase("error");
     });
@@ -120,7 +125,7 @@ export default function FumioPlayerStage({
   }
 
   return (
-    <div className="flex h-full w-full flex-col bg-black" data-player="fumio">
+    <div className="flex h-full w-full flex-col bg-black" data-player="theogpiratebot">
       <div className="relative min-h-0 flex-1 bg-black">
         {phase === "checking" && (
           <div className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-3 bg-black">
@@ -138,8 +143,10 @@ export default function FumioPlayerStage({
             onLoad={handleLoad}
             onError={() => setPhase("error")}
             className="absolute inset-0 h-full w-full"
-            allow="autoplay; encrypted-media; fullscreen"
+            allow="autoplay; encrypted-media; fullscreen; picture-in-picture"
             allowFullScreen
+            webkitallowfullscreen="true"
+            mozallowfullscreen="true"
             frameBorder="0"
             title={`${source.name} player`}
           />

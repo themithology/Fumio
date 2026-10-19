@@ -13,6 +13,7 @@ import Footer from "../components/Footer.jsx";
 import axios from "../lib/irisAxios.js";
 import { readMyList, removeFromMyList } from "../utils/myList.js";
 import { readContinueWatching, removeContinueWatching, writeContinueWatching } from "../utils/watchHistory.js";
+import { subscribeAuth } from "../utils/auth.js";
 
 const SectionHeader = ({ title, viewMorePath, children }) => (
   <div className="flex flex-wrap items-end justify-between gap-x-4 gap-y-2 px-4 pb-1 pt-12 sm:px-8 md:px-12 lg:px-16 xl:px-20">
@@ -310,11 +311,15 @@ export default function Home() {
     reload();
     window.addEventListener("storage", reload);
     window.addEventListener("history-updated", reload);
+    window.addEventListener("history-progress", reload);
     window.addEventListener("mylist-updated", reload);
+    const stopAuth = subscribeAuth(reload);
     return () => {
       window.removeEventListener("storage", reload);
       window.removeEventListener("history-updated", reload);
+      window.removeEventListener("history-progress", reload);
       window.removeEventListener("mylist-updated", reload);
+      stopAuth();
     };
   }, []);
 

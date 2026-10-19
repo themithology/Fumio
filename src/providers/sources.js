@@ -4,6 +4,8 @@
 // control to FumioPlayerStage, which keeps the original Fumio source list and
 // lets the viewer choose a source manually.
 
+import { applyLiveHost } from "./liveHosts.js";
+
 function buildSource({ id, name, quality, audioOptions, movieUrl, tvUrl, primary = false }) {
   return {
     id,
@@ -51,9 +53,9 @@ export const FUMIO_SOURCES = [
       { value: "en", label: "English" },
     ],
     movieUrl: (id, audio) =>
-      `https://vidstuck.xyz/embed/movie/${id}?branding=TheOGPirateBot&server=centaurus&overlay=true&color=ffffff&dubLang=${audio}&subtitle=english&loading=2`,
+      `https://vidstuck.cc/embed/movie/${id}?branding=TheOGPirateBot&server=centaurus&overlay=true&color=ffffff&dubLang=${audio}&subtitle=english&loading=2`,
     tvUrl: (id, season, episode, audio) =>
-      `https://vidstuck.xyz/embed/tv/${id}/${season}/${episode}?branding=TheOGPirateBot&server=centaurus&overlay=true&color=ffffff&dubLang=${audio}&subtitle=english&loading=2`,
+      `https://vidstuck.cc/embed/tv/${id}/${season}/${episode}?branding=TheOGPirateBot&server=centaurus&overlay=true&color=ffffff&dubLang=${audio}&subtitle=english&loading=2`,
   }),
   buildSource({
     id: "vidfast",
@@ -73,9 +75,9 @@ export const FUMIO_SOURCES = [
     id: "roxy",
     name: "Roxy",
     quality: "HD",
-    movieUrl: (id) => `https://zxcstream.xyz/player/movie/${id}?dubLang=en&server=0`,
+    movieUrl: (id) => `https://zxcstream.cc/player/movie/${id}?dubLang=en&server=0`,
     tvUrl: (id, season, episode) =>
-      `https://zxcstream.xyz/player/tv/${id}/${season}/${episode}?dubLang=en&server=0`,
+      `https://zxcstream.cc/player/tv/${id}/${season}/${episode}?dubLang=en&server=0`,
   }),
   buildSource({
     id: "nxsha",
@@ -96,5 +98,5 @@ export function defaultAudio(source) {
 }
 
 export function buildStreamUrl(source, tmdbId, mediaType, season, episode, audio) {
-  return source.url(tmdbId, mediaType, season, episode, audio ?? defaultAudio(source));
+  return applyLiveHost(source.url(tmdbId, mediaType, season, episode, audio ?? defaultAudio(source)));
 }

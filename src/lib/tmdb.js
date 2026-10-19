@@ -68,7 +68,10 @@ export async function tmdbGet(path, params = {}) {
 
   const qs = new URLSearchParams(params).toString();
   let lastError = null;
-  for (const base of PROXY_BASES) {
+  const bases = PROXY_BASES.filter(
+    (base) => base || (typeof location !== "undefined" && location.hostname !== "localhost"),
+  );
+  for (const base of bases) {
     const url = `${base}/tmdb/${path.replace(/^\/+/, "")}${qs ? `?${qs}` : ""}`;
     try {
       const res = await timedFetch(url, FAILOVER_TIMEOUT_MS);

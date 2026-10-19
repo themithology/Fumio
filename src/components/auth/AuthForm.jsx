@@ -1,12 +1,23 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import {
   authErrorMessage,
+  consumeGoogleIdToken,
+  ensureAuthInit,
   resetPassword,
   signInWithEmail,
   signInWithGoogle,
   signUpWithEmail,
 } from "../../utils/auth.js";
+import { isNativeApp } from "../../utils/externalLinks.js";
+
+const inEmbeddedFrame = () => {
+  try {
+    return window.self !== window.top;
+  } catch {
+    return true;
+  }
+};
 
 export default function AuthForm({ initialMode = "signin" }) {
   const navigate = useNavigate();
@@ -16,6 +27,32 @@ export default function AuthForm({ initialMode = "signin" }) {
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
+  const [embedded, setEmbedded] = useState(false);
+
+  const nativeHandoff = typeof window !== "undefined" && new URLSearchParams(window.location.search).get("fumioNative") === "1";
+
+  useEffect(() => {
+    setEmbedded(inEmbeddedFrame());
+    // Warm Auth so Continue with Google can open the popup in this click.
+    ensureAuthInit().catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    const onError = (event) => {
+      setBusy(false);
+      setError(event?.detail?.message || "Google sign-in failed.");
+    };
+    const onDone = () => {
+      setBusy(false);
+      navigate("/account", { replace: true });
+    };
+    window.addEventListener("fumio-native-auth-error", onError);
+    window.addEventListener("fumio-native-auth-done", onDone);
+    return () => {
+      window.removeEventListener("fumio-native-auth-error", onError);
+      window.removeEventListener("fumio-native-auth-done", onDone);
+    };
+  }, [navigate]);
 
   const switchMode = (next) => {
     setMode(next);
@@ -39,18 +76,38 @@ export default function AuthForm({ initialMode = "signin" }) {
     }
   };
 
-  const google = async () => {
-    setBusy(true);
+  const finishGoogle = (user) => {
+    if (!user) return;
+    if (nativeHandoff) {
+      const params = new URLSearchParams(window.location.search);
+      const redirect = params.get("redirect") || "com.fumio.app://auth";
+      const googleToken = consumeGoogleIdToken();
+      if (googleToken) {
+        window.location.assign(`${redirect}?idToken=${encodeURIComponent(googleToken)}`);
+        return;
+      }
+    }
+    navigate("/account", { replace: true });
+  };
+
+  const google = () => {
     setError("");
     setMessage("");
-    try {
-      const user = await signInWithGoogle();
-      if (user) navigate("/account", { replace: true });
-    } catch (authError) {
-      setError(authErrorMessage(authError));
-    } finally {
-      setBusy(false);
+    if (isNativeApp() && window.FumioNative?.signInWithGoogle) {
+      setBusy(true);
+      window.FumioNative.signInWithGoogle();
+      return;
     }
+    const pending = signInWithGoogle();
+    setBusy(true);
+    pending
+      .then(finishGoogle)
+      .catch((authError) => {
+        setError(authErrorMessage(authError));
+      })
+      .finally(() => {
+        setBusy(false);
+      });
   };
 
   const forgot = async () => {
@@ -87,11 +144,25 @@ export default function AuthForm({ initialMode = "signin" }) {
         type="button"
         onClick={google}
         disabled={busy}
-        className="flex min-h-11 w-full items-center justify-center gap-2 rounded-xl border border-white/15 bg-white text-sm font-bold text-black transition hover:bg-zinc-200 disabled:cursor-wait disabled:opacity-60"
+        className="relative z-10 flex min-h-11 w-full items-center justify-center gap-2 rounded-xl border border-white/15 bg-white text-sm font-bold text-black transition hover:bg-zinc-200 disabled:cursor-wait disabled:opacity-60"
       >
         <span className="grid h-5 w-5 place-items-center rounded-full bg-white text-sm font-black" aria-hidden="true">G</span>
         Continue with Google
       </button>
+      {nativeHandoff && (
+        <p className="mt-3 text-center text-xs leading-5 text-zinc-400">
+          Sign in with Google here, then we send you back to the app.
+        </p>
+      )}
+      {embedded && (
+        <p className="mt-3 text-center text-xs leading-5 text-zinc-500">
+          Google needs a real browser window.{" "}
+          <a href={typeof window === "undefined" ? "/account" : window.location.href} target="_blank" rel="noopener noreferrer" className="font-semibold text-white underline-offset-4 hover:underline">
+            Open sign-in in a new tab
+          </a>
+          , then try Google again.
+        </p>
+      )}
 
       <div className="my-5 flex items-center gap-3 text-[10px] font-bold uppercase tracking-[0.2em] text-zinc-600">
         <span className="h-px flex-1 bg-white/10" />

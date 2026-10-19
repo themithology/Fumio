@@ -5,6 +5,8 @@ import {
   fetchIrisEpisodes,
   fetchIrisSeasonData,
   mapIrisEpisodeToTmdb,
+  tmdbEnrichAnilistEpisodes,
+  tmdbSeasonEpisodes,
 } from "../lib/irisEpisodes.js";
 import Loading from "../components/Loading.jsx";
 import FetchError from "../components/FetchError.jsx";
@@ -12,7 +14,9 @@ import Footer from "../components/Footer.jsx";
 import Topnav from "../components/partials/Topnav.jsx";
 import SeasonEpisodeBrowser from "../components/partials/SeasonEpisodeBrowser.jsx";
 import { isInMyList, toggleMyList } from "../utils/myList.js";
+import { saveContinueWatching } from "../utils/watchHistory.js";
 import { lockPlayerLandscape } from "../utils/playerOrientation.js";
+import { isTmdbEpisodeDisplay, isTmdbSeasonDisplay } from "../utils/animeMapping.js";
 
 const firstTrailer = (videos) =>
   (videos?.results || []).find(
@@ -138,7 +142,7 @@ export default function Details() {
         if (cancelled) return;
         setIrisMeta(metadata);
         setNextAiring(metadata?.nextAiring || null);
-        if (metadata?.seasons?.length) {
+        if (metadata?.seasons?.length && !isTmdbSeasonDisplay(Number(id))) {
           setSelectedSeason((current) =>
             metadata.seasons.some((season) => season.season_number === current)
               ? current
@@ -156,7 +160,7 @@ export default function Details() {
     return () => {
       cancelled = true;
     };
-  }, [details, type, tmdbSeasons]);
+  }, [details, id, type, tmdbSeasons]);
 
   // AniList's nextAiringEpisode is a Unix timestamp. Tick every second while
   // the title is airing so the hero never displays a stale countdown.
@@ -167,12 +171,16 @@ export default function Details() {
     return () => clearInterval(timer);
   }, [nextAiring]);
 
-  const waitingForIris = type === "tv" && isAnimeTitle(details) && irisLoading && !irisMeta;
-  const seasons = irisMeta?.seasons?.length
-    ? irisMeta.seasons
-    : waitingForIris
-      ? []
-      : tmdbSeasons;
+  const tmdbDisplay = type === "tv" && isTmdbSeasonDisplay(id);
+  const tmdbEpisodeDisplay = type === "tv" && isTmdbEpisodeDisplay(id);
+  const waitingForIris = type === "tv" && isAnimeTitle(details) && irisLoading && !irisMeta && !tmdbDisplay;
+  const seasons = tmdbDisplay
+    ? tmdbSeasons
+    : irisMeta?.seasons?.length
+      ? irisMeta.seasons
+      : waitingForIris
+        ? []
+        : tmdbSeasons;
   const activeSeason = seasons.find((season) => season.season_number === selectedSeason) || seasons[0] || null;
 
   useEffect(() => {
@@ -208,59 +216,89 @@ export default function Details() {
       }
     };
 
+    const toPlayerItems = (list, source) =>
+      list.map((episode) => {
+        const number = episode.episode_number || episode.number;
+        const pair =
+          source === "iris"
+            ? mapIrisEpisodeToTmdb(selectedSeason, number, irisMeta?.seasonsMap, tmdbSeasons)
+            : { season: selectedSeason, episode: number };
+        const thumbnail = episode.thumbnail;
+        const stillPath =
+          episode.still_path ||
+          (typeof thumbnail === "string" ? thumbnail : thumbnail?.large || thumbnail?.medium || null);
+        return {
+          ...episode,
+          id: `${source}-${selectedSeason}-${number}`,
+          episode_number: number,
+          name: episode.name || episode.title || `Episode ${number}`,
+          overview: episode.overview || "",
+          still_path: stillPath,
+          air_date: episode.air_date || "",
+          playerSeason: pair.season,
+          playerEpisode: pair.episode,
+        };
+      });
+
     const loadEpisodes = async () => {
-      // Iris-native season: real episode names, thumbnails and counts.
+      // Iris TvDetails: Demon Slayer / Naruto show TMDB's own seasons and
+      // episode lists (AniList chain skips Mugen Train). Mushoku keeps AniList
+      // seasons but TMDB's broadcast episode count.
+      if (tmdbDisplay || tmdbEpisodeDisplay) {
+        const tmdbEpisodes = await tmdbSeasonEpisodes(id, selectedSeason);
+        setFirstEpisode(toPlayerItems(tmdbEpisodes, "tmdb"), "tmdb");
+        return;
+      }
+
+      // Same ladder as Iris TvDetails: site/AniList collection first, then a
+      // mapped TMDB grid, then a full TMDB season list. Never leave the page empty.
       if (irisMeta && activeSeason.anilist_id) {
         const irisData = await fetchIrisEpisodes(activeSeason.anilist_id);
         if (irisData?.episodes?.length) {
-          const items = irisData.episodes.map((episode) => {
-            const thumbnail = episode.thumbnail;
-            const stillPath =
-              typeof thumbnail === "string"
-                ? thumbnail
-                : thumbnail?.large || thumbnail?.medium || null;
-            const pair = mapIrisEpisodeToTmdb(
-              selectedSeason,
-              episode.number,
-              irisMeta.seasonsMap,
-              tmdbSeasons,
-            );
-            return {
-              id: `iris-${activeSeason.anilist_id}-${episode.number}`,
-              episode_number: episode.number,
-              name: episode.title || `Episode ${episode.number}`,
-              overview: "",
-              still_path: stillPath,
-              air_date: episode.airingAt
-                ? new Date(episode.airingAt * 1000).toISOString().slice(0, 10)
-                : "",
-              playerSeason: pair.season,
-              playerEpisode: pair.episode,
-            };
+          const enriched = await tmdbEnrichAnilistEpisodes({
+            id,
+            season: selectedSeason,
+            episodes: irisData.episodes,
+            irisSeasonsMap: irisMeta.seasonsMap,
+            tmdbSeasons,
           });
-          setFirstEpisode(items, "iris");
+          setFirstEpisode(toPlayerItems(enriched, "iris"), "iris");
+          return;
+        }
+
+        const rawCount = irisMeta.rawCounts?.[selectedSeason] ?? irisMeta.rawCounts?.[String(selectedSeason)];
+        if (rawCount == null) {
+          // One Piece-style placeholder count: drop the 12-episode AniList
+          // shell and show TMDB's real seasons, exactly as Iris does.
+          setIrisMeta(null);
+          return;
+        }
+
+        const first = mapIrisEpisodeToTmdb(selectedSeason, 1, irisMeta.seasonsMap, tmdbSeasons);
+        const tmdbEpisodes = await tmdbSeasonEpisodes(id, first.season);
+        const count = Number(irisMeta.seasonsMap?.[selectedSeason]) || tmdbEpisodes.length || 0;
+        const mapped = [];
+        for (let number = 1; number <= count; number += 1) {
+          const pair = mapIrisEpisodeToTmdb(selectedSeason, number, irisMeta.seasonsMap, tmdbSeasons);
+          const tmdb = tmdbEpisodes.find((item) => item.episode_number === pair.episode);
+          mapped.push({
+            episode_number: number,
+            name: tmdb?.name || `Episode ${number}`,
+            overview: tmdb?.overview || "",
+            still_path: tmdb?.still_path || null,
+            air_date: tmdb?.air_date || "",
+            playerSeason: pair.season,
+            playerEpisode: pair.episode,
+          });
+        }
+        if (mapped.length) {
+          setFirstEpisode(toPlayerItems(mapped, "iris"), "iris");
           return;
         }
       }
 
-      // An Iris-resolved title is authoritative: an empty/error episode
-      // collection must stay visible as an Iris empty state, never silently
-      // repaint with a different TMDB season list. TMDB is only used when
-      // Iris did not resolve metadata for this title at all.
-      if (irisMeta) {
-        setEpisodes([]);
-        setEpisodeSource("iris");
-        return;
-      }
-
-      const seasonData = await tmdbGet(`tv/${id}/season/${selectedSeason}`).catch(() => null);
-      const items = (seasonData?.episodes || []).map((episode) => ({
-        ...episode,
-        id: `tmdb-${selectedSeason}-${episode.episode_number}`,
-        playerSeason: selectedSeason,
-        playerEpisode: episode.episode_number,
-      }));
-      setFirstEpisode(items, "tmdb");
+      const tmdbEpisodes = await tmdbSeasonEpisodes(id, selectedSeason);
+      setFirstEpisode(toPlayerItems(tmdbEpisodes, "tmdb"), "tmdb");
     };
 
     loadEpisodes()
@@ -277,7 +315,7 @@ export default function Details() {
     return () => {
       cancelled = true;
     };
-  }, [activeSeason, details, episodeRetry, id, irisMeta, selectedSeason, tmdbSeasons, type, waitingForIris]);
+  }, [activeSeason, details, episodeRetry, id, irisMeta, selectedSeason, tmdbDisplay, tmdbEpisodeDisplay, tmdbSeasons, type, waitingForIris]);
 
   useEffect(() => {
     const refreshListState = () => setInMyList(isInMyList({ id: Number(id), type }));
@@ -354,6 +392,7 @@ export default function Details() {
     }
     await lockPlayerLandscape();
     if (type === "movie") {
+      saveContinueWatching({ ...libraryItem, type: "movie", media_type: "movie" });
       navigate(`/watch/movie/${id}`);
       return;
     }
@@ -371,6 +410,17 @@ export default function Details() {
       watchParams.set("uiSeason", String(selectedSeason));
       watchParams.set("uiEpisode", String(episodeItem?.episode_number || selectedEpisode || 1));
     }
+    saveContinueWatching({
+      ...libraryItem,
+      type: "tv",
+      media_type: "tv",
+      season: pair.season,
+      episode: pair.episode,
+      uiSeason: animeDetails ? selectedSeason : undefined,
+      uiEpisode: animeDetails ? (episodeItem?.episode_number || selectedEpisode || 1) : undefined,
+      episodeName: episodeItem?.name || "",
+      episodeStill: episodeItem?.still_path || "",
+    });
     navigate(`/watch/tv/${id}?${watchParams.toString()}`);
   };
 
@@ -541,9 +591,9 @@ export default function Details() {
             <div>
               <p className="section-rule font-display text-lg font-bold text-white">Choose your episode</p>
               <p className="mt-2 text-xs text-zinc-500">
-                {irisLoading
+                {irisLoading && !tmdbDisplay
                   ? "Loading seasons from the anime service…"
-                  : episodeSource === "iris"
+                  : tmdbDisplay || episodeSource === "iris"
                     ? "Season and episode data from the anime service"
                     : "Using the TMDB fallback for a title without anime metadata"}
               </p>
@@ -575,7 +625,7 @@ export default function Details() {
               startsPlayback
               onEpisodeClick={handleEpisodeClick}
               stillFallback={img(details.backdrop_path || details.poster_path, "w500")}
-              emptyMessage={episodeSource === "iris" ? "The anime service resolved this season, but did not return any episode records. Try again later instead of showing unrelated TMDB data." : "No episodes are available for this season yet."}
+              emptyMessage="No episodes are available for this season yet."
               emptyAction={episodeSource === "iris" ? (
                 <button
                   type="button"

@@ -3,9 +3,9 @@ import { Link } from "react-router-dom";
 import ScrollRow from "./ScrollRow.jsx";
 import MediaImage from "./MediaImage.jsx";
 import TitleHint from "./TitleHint.jsx";
+import { DISCORD_INVITE_URL } from "../../utils/externalLinks.js";
 
-const DISCORD_URL = "https://discord.gg/t6tjszp5eb";
-const API_BASE = String(import.meta.env.VITE_ACCOUNT_API_BASE || "").replace(/\/$/, "");
+const API_BASE = String(import.meta.env.VITE_ACCOUNT_API_BASE || "https://theogpiratebot.online").replace(/\/$/, "");
 
 // Optional Iris server feature. The row disappears quietly when Fumio is
 // served without Iris's Node recommendation endpoint or when the community
@@ -69,7 +69,12 @@ export default function RecommendationsRow() {
           </h2>
           <p className="mt-1 text-xs text-zinc-400">This week · Ranked by member recommendations</p>
         </div>
-        <a href={DISCORD_URL} target="_blank" rel="noopener noreferrer" className="inline-flex min-h-11 items-center gap-2 text-sm text-zinc-300 hover:text-white">
+        <a
+          href={DISCORD_INVITE_URL}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="inline-flex min-h-11 items-center gap-2 text-sm text-zinc-300 hover:text-white"
+        >
           <i className="ri-discord-fill" aria-hidden="true" /> Add your recommendation
         </a>
       </div>

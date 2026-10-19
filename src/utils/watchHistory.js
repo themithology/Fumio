@@ -1,3 +1,5 @@
+import { coerceLibraryItem } from "./libraryItem.js";
+
 const HISTORY_KEY = "continueWatching";
 export const HISTORY_UPDATED_EVENT = "history-updated";
 export const HISTORY_PROGRESS_EVENT = "history-progress";
@@ -14,7 +16,7 @@ const getStorage = () => {
 const parse = (raw) => {
   try {
     const value = JSON.parse(raw || "[]");
-    return Array.isArray(value) ? value.filter((item) => item && item.id) : [];
+    return Array.isArray(value) ? value.map(coerceLibraryItem).filter(Boolean) : [];
   } catch {
     return [];
   }
@@ -30,7 +32,8 @@ export const readContinueWatching = () => parse(getStorage()?.getItem(HISTORY_KE
 export const writeContinueWatching = (list, { progress = false } = {}) => {
   const seen = new Set();
   const clean = (Array.isArray(list) ? list : [])
-    .filter((item) => item && item.id)
+    .map(coerceLibraryItem)
+    .filter(Boolean)
     .map((item) => ({ ...item, type: item.type || item.media_type || "movie" }))
     .filter((item) => {
       const key = keyOf(item);
@@ -87,13 +90,24 @@ export const saveContinueWatchingProgress = (item, currentTime, duration) => {
   const position = Number(currentTime);
   if (!Number.isFinite(total) || total <= 0 || !Number.isFinite(position)) return false;
   const key = keyOf(item);
-  const existing = readContinueWatching().find((entry) => keyOf(entry) === key);
+  let existing = readContinueWatching().find((entry) => keyOf(entry) === key);
   const samePlayback = Boolean(
     existing &&
       ((item.type || item.media_type) !== "tv" ||
         (existing.season === item.season && existing.episode === item.episode)),
   );
-  if (!samePlayback) return false;
+  if (!samePlayback) {
+    // The iframe moved to another episode before the URL caught up. Record
+    // that identity now so Continue Watching does not keep the stale pair.
+    saveContinueWatching({
+      ...(existing || {}),
+      ...item,
+      type: item.type || item.media_type || existing?.type || "tv",
+      media_type: item.media_type || item.type || existing?.media_type || "tv",
+    });
+    existing = readContinueWatching().find((entry) => keyOf(entry) === key);
+    if (!existing) return false;
+  }
   const safeDuration = Math.round(Math.min(total, 6 * 60 * 60));
   const safePosition = Math.max(0, Math.min(Math.round(position), safeDuration));
   const next = readContinueWatching().filter((entry) => keyOf(entry) !== key);

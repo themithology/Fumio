@@ -6,7 +6,8 @@ import { PROXY_BASES } from "./proxyTiers.js";
 // block real playback. Only a definitive non-2xx status from the real host
 // counts as "dead".
 export async function checkStreamAlive(url) {
-  for (const base of PROXY_BASES) {
+  const bases = PROXY_BASES.filter((base) => base || (typeof location !== "undefined" && location.hostname !== "localhost"));
+  for (const base of bases) {
     try {
       const res = await fetch(`${base}/api/stream-check?url=${encodeURIComponent(url)}`, {
         signal: AbortSignal.timeout(7000),

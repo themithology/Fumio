@@ -1,15 +1,25 @@
-import React from "react";
+import React, { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { useAuth } from "../auth/useAccount.js";
 import { displayInitial, isRealUser } from "../../utils/auth.js";
+import { DISCORD_INVITE_URL } from "../../utils/externalLinks.js";
+import { LOOK_EVENT, LOOK_SYNCED_EVENT, readLook } from "../../utils/profileLook.js";
 
-// A slim, shared top bar — ported from Iris's Topnav.jsx, trimmed down to
-// just the brand mark and the optional Account entry: Search lives in the
-// bottom dock (FloatingNav), while the account surface follows Iris's
-// Firebase/Auth + Node/SQLite data-layer split.
 const Topnav = () => {
   const { user } = useAuth();
   const signedIn = isRealUser(user);
+  const [look, setLook] = useState(readLook);
+  const picture = look.avatar || user?.photoURL || "";
+
+  useEffect(() => {
+    const reload = () => setLook(readLook());
+    window.addEventListener(LOOK_EVENT, reload);
+    window.addEventListener(LOOK_SYNCED_EVENT, reload);
+    return () => {
+      window.removeEventListener(LOOK_EVENT, reload);
+      window.removeEventListener(LOOK_SYNCED_EVENT, reload);
+    };
+  }, []);
 
   return (
     <header className="sticky top-0 z-[100] w-full border-b border-white/[0.06] bg-black/85 backdrop-blur-md select-none">
@@ -35,21 +45,37 @@ const Topnav = () => {
             <span className="hidden sm:inline">Schedule</span>
           </Link>
           <a
-            href="https://discord.gg/t6tjszp5eb"
+            href={DISCORD_INVITE_URL}
+            target="_blank"
+            rel="noopener noreferrer"
             aria-label="Join our Discord community"
-            className="inline-flex h-9 shrink-0 items-center gap-1.5 rounded-full border border-indigo-300/20 bg-indigo-400/10 px-3 text-xs font-bold text-indigo-100 transition hover:border-indigo-200/40 hover:bg-indigo-300/20 hover:text-white"
+            className="relative z-10 pointer-events-auto inline-flex h-9 shrink-0 items-center gap-1.5 rounded-full border border-indigo-300/20 bg-indigo-400/10 px-3 text-xs font-bold text-indigo-100 transition hover:border-indigo-200/40 hover:bg-indigo-300/20 hover:text-white"
           >
             <i className="ri-discord-fill" aria-hidden="true" />
             <span>Join Discord</span>
           </a>
-          <Link
-            to="/account"
-            aria-label={signedIn ? "Open account" : "Sign in"}
-            className={`inline-flex h-9 shrink-0 items-center gap-1.5 rounded-full border px-3 text-xs font-bold transition ${signedIn ? "border-white/20 bg-white text-black hover:bg-zinc-200" : "border-white/10 bg-white/5 text-zinc-300 hover:bg-white/10 hover:text-white"}`}
-          >
-            <i className={signedIn ? "ri-user-smile-fill" : "ri-user-line"} aria-hidden="true" />
-            <span className="hidden sm:inline">{signedIn ? displayInitial(user) : "Sign in"}</span>
-          </Link>
+          {signedIn ? (
+            <Link
+              to="/account"
+              aria-label="Open account"
+              className="inline-flex h-9 w-9 shrink-0 overflow-hidden rounded-full border border-white/20 bg-white p-0 text-black transition hover:opacity-90"
+            >
+              {picture ? (
+                <img src={picture} alt="" className="h-full w-full object-cover" referrerPolicy="no-referrer" />
+              ) : (
+                <span className="grid h-full w-full place-items-center text-xs font-black">{displayInitial(user)}</span>
+              )}
+            </Link>
+          ) : (
+            <Link
+              to="/account"
+              aria-label="Sign in"
+              className="inline-flex h-9 shrink-0 items-center gap-1.5 rounded-full border border-white/10 bg-white/5 px-3 text-xs font-bold text-zinc-300 transition hover:bg-white/10 hover:text-white"
+            >
+              <i className="ri-user-line" aria-hidden="true" />
+              <span className="hidden sm:inline">Sign in</span>
+            </Link>
+          )}
         </div>
       </div>
     </header>
