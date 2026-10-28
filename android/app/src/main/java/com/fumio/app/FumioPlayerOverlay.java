@@ -73,8 +73,10 @@ final class FumioPlayerOverlay {
     private volatile String lastSeason = "1";
     private volatile String lastEpisode = "1";
 
-    /** /watch/… path currently on screen, so the fallback can replay it. */
+    /** Bundled-build route (/watch/…) — what the offline fallback replays. */
     private String playerPath = "";
+    /** Site route (/player?…) — what the live player is opened with. */
+    private String livePath = "";
     private final Handler handler = new Handler(Looper.getMainLooper());
     private Runnable liveWatchdog;
     private volatile boolean livePainted;
@@ -104,11 +106,18 @@ final class FumioPlayerOverlay {
         lastId = id;
         lastSeason = empty(season) ? "1" : season;
         lastEpisode = empty(episode) ? "1" : episode;
+        // TWO routes, deliberately:
+        //   · LIVE  — the site's own player route: /player?type=…&id=…  (this is
+        //     what the website itself links to; /watch/… 404s there)
+        //   · LOCAL — the bundled build's router: /watch/{type}/{id}?…
+        // They are not interchangeable, which is exactly why the live player
+        // answered with the site's 404 page on the first try.
         StringBuilder path = new StringBuilder("/watch/").append(media).append("/").append(id);
         if (!"movie".equals(media)) {
             path.append("?season=").append(empty(season) ? "1" : season);
             path.append("&episode=").append(empty(episode) ? "1" : episode);
         }
+        livePath = livePathFor(media, id, season, episode);
         previousOrientation = activity.getRequestedOrientation();
         activity.setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE);
         if (webView == null) webView = buildPlayerView();
@@ -117,7 +126,24 @@ final class FumioPlayerOverlay {
         root.bringToFront();
         hideSystemUi();
         playerPath = path.toString();
-        loadLive(playerPath);
+        loadLive(livePath);
+    }
+
+    /**
+     * The website's player URL. Verified against production: /player is the
+     * route, `id` + `type` are the parameters, `season`/`episode` only matter
+     * for TV. Anything else (/watch/movie/1) is the site's 404 page.
+     */
+    private static String livePathFor(String media, String id, String season, String episode) {
+        StringBuilder live = new StringBuilder("/player?type=")
+            .append("movie".equals(media) ? "movie" : "tv")
+            .append("&id=")
+            .append(Uri.encode(id));
+        if (!"movie".equals(media)) {
+            live.append("&season=").append(empty(season) ? "1" : season);
+            live.append("&episode=").append(empty(episode) ? "1" : episode);
+        }
+        return live.toString();
     }
 
     /** The site's own player — the default, and the reason updates need no APK. */
@@ -146,7 +172,7 @@ final class FumioPlayerOverlay {
         cancelWatchdog();
         final String target = path;
         liveWatchdog = () -> {
-            if (!livePainted && webView != null) loadLocal(target);
+            if (!livePainted && webView != null) loadLocal(playerPath);
         };
         handler.postDelayed(liveWatchdog, LIVE_TIMEOUT_MS);
     }
@@ -321,6 +347,20 @@ final class FumioPlayerOverlay {
                         livePainted = true;
                         usingFallback = false;
                         cancelWatchdog();
+                        // …unless what it answered with is its own 404 page
+                        // (which paints perfectly and would otherwise be
+                        // accepted as a working player).
+                        v.evaluateJavascript(
+                            "document.title",
+                            value -> {
+                                String title = String.valueOf(value == null ? "" : value).toLowerCase(Locale.US);
+                                if (usingFallback) return;
+                                if (title.contains("not found") || title.contains("404")) {
+                                    livePainted = false;
+                                    loadLocal(playerPath);
+                                }
+                            }
+                        );
                     } else if (isLocalUrl(url)) {
                         // Offline copy (or a failed live load): never race it
                         // back to the network mid-playback.
@@ -424,9 +464,10 @@ final class FumioPlayerOverlay {
                 + "var info=inner.player_info&&typeof inner.player_info==='object'?inner.player_info:inner;"
                 + "var s=info.season||info.season_number||info.seasonNumber;"
                 + "var e=info.episode||info.episode_number||info.episodeNumber;"
-                + "if(s==null||e==null)return;var m=(location.pathname||'').match(/\\/watch\\/(movie|tv)\\/(\\d+)/);"
-                + "if(!m||m[1]==='movie')return;if(window.FumioNative&&FumioNative.trackWatch)"
-                + "FumioNative.trackWatch(m[1],m[2],String(s),String(e));"
+                + "if(s==null||e==null)return;var t='',i='';var m=(location.pathname||'').match(/\\/watch\\/(movie|tv)\\/(\\d+)/);"
+                + "if(m){t=m[1];i=m[2];}else{try{var q=new URLSearchParams(location.search||'');i=q.get('id')||'';t=(q.get('type')||'movie').toLowerCase();}catch(e2){}}"
+                + "if(!i||t==='movie')return;if(window.FumioNative&&FumioNative.trackWatch)"
+                + "FumioNative.trackWatch(t,i,String(s),String(e));"
                 + "}catch(err){}},true);})()",
             null
         );
