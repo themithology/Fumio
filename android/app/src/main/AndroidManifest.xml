@@ -55,6 +55,16 @@
 
     <uses-permission android:name="android.permission.INTERNET" />
 
+    <!-- Downloads (site /download window → DownloadManager). The notification
+         permission only controls the completion notice on Android 13+; the
+         download itself runs either way. WRITE_EXTERNAL_STORAGE is asked for
+         nothing on Android 10+ — it is here so Android 9 and older can save
+         into the public Downloads folder. -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission
+        android:name="android.permission.WRITE_EXTERNAL_STORAGE"
+        android:maxSdkVersion="28" />
+
     <queries>
         <package android:name="com.android.chrome" />
         <package android:name="com.chrome.beta" />

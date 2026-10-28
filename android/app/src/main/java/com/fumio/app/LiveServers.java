@@ -21,17 +21,27 @@ import org.json.JSONObject;
 /**
  * Pull current embed hosts from the live site so a TLD change
  * (vidstuck.xyz → vidstuck.cc) does not need a new APK.
+ *
+ * Since 2026-10-28 the player itself loads the live site
+ * (FumioPlayerOverlay.LIVE_ORIGIN), so this is no longer the only update
+ * path — it keeps the BUNDLED / OFFLINE player pointing at living hosts, and
+ * it is the one thing that still works when the site cannot be reached at
+ * player-open time but was reachable earlier.
  */
 final class LiveServers {
 
     private static final String SITE = "https://theogpiratebot.online/";
     private static final String PREFS = "ogpb_live_hosts";
+    // Every host family the player can name. The live player is the default
+    // now (FumioPlayerOverlay), so this scrape only feeds the OFFLINE copy —
+    // but that copy is what a plane or a site outage falls back to, so a TLD
+    // move must still reach it without a new APK.
     private static final Pattern HOST_IN_URL = Pattern.compile(
-        "https?://(?:www\\.)?(vidstuck|zxcstream|vidfast|bingr|nxsha|tgvid)\\.[A-Za-z0-9.-]+",
+        "https?://(?:www\\.)?(vidstuck|zxcstream|vidfast|bingr|nxsha|tgvid|tgfrost|toonstream|megaplay|zokoanime|vidsrc|videasy|vidlink)\\.[A-Za-z0-9.-]+",
         Pattern.CASE_INSENSITIVE
     );
     private static final Pattern HOST_IN_QUOTES = Pattern.compile(
-        "[\"'`]((?:www\\.)?(vidstuck|zxcstream|vidfast|bingr|nxsha|tgvid)\\.[A-Za-z0-9.-]+)[\"'`]",
+        "[\"'`]((?:www\\.)?(vidstuck|zxcstream|vidfast|bingr|nxsha|tgvid|tgfrost|toonstream|megaplay|zokoanime|vidsrc|videasy|vidlink)\\.[A-Za-z0-9.-]+)[\"'`]",
         Pattern.CASE_INSENSITIVE
     );
     private static final Pattern SCRIPT_SRC = Pattern.compile(

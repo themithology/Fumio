@@ -149,6 +149,62 @@ npm run worker:dev     # http://127.0.0.1:8787, via workerd
 npm run dev            # Vite proxies /tmdb and /api to it
 ```
 
+### Where the player actually comes from (2026-10-28)
+
+The Android app has two WebViews, and until 2026-10-28 only one of them was
+live:
+
+| Surface | Loaded | Freshness |
+| --- | --- | --- |
+| Browsing (Home, Details, Search, Live TV, /download…) | `https://theogpiratebot.online` | always the newest deploy |
+| Player | `https://localhost/watch/…` — the build frozen in the APK's `assets/public` | froze at release time |
+
+That is why renaming a server or moving an embed host on the website changed
+nothing inside the app: the player was running a months-old copy of
+`src/providers/*`. A regex scraper (`LiveServers.java`) could only rewrite a
+hostname from six known families, and could never change a slot order, a label,
+an embed parameter, or add/remove a server.
+
+Now (`FumioPlayerOverlay`):
+
+1. The player loads **`https://theogpiratebot.online/watch/…`** first, so every
+   server list, label, slot order, embed parameter, ad unit and mobile layout
+   change on the site is live in the app the instant it deploys — **no APK
+   release for a server change, ever**.
+2. The bundled build stays mounted at `https://localhost` as the **fallback**:
+   used when the live page fails at the network level or has not painted within
+   `LIVE_TIMEOUT_MS` (14 s). Offline playback and outages still work, and a bad
+   deploy cannot leave the player on a black screen.
+3. `LiveServers.java` still scrapes host families and injects
+   `window.__fumioLiveHosts` — it now only keeps that *offline* copy pointing at
+   living hosts.
+
+Side effect worth knowing: browsing and the player share one origin again, so
+Continue Watching / the auth token live in a single `localStorage` instead of
+two (`applySeed()` seeds the live origin on player open).
+
+The `src/providers/*` files in this repo are now strictly the **offline
+fallback** lane. Editing them no longer changes what a phone plays, so keep
+server work in the website repo and only touch these when the fallback itself
+needs to move.
+
+### Downloads
+
+`Downloader.java` replaces the old no-op `setDownloadListener` (the single
+reason "download" never worked on mobile). Every file link — from the site's
+`/download` window, from a popup portal, or a direct `.mkv`/`.mp4`/`.apk` hop —
+goes to Android's `DownloadManager`:
+
+- forwards the site's cookies, UA and referer so gated pools hand over the file;
+- saves into the public `Downloads/` collection (API 29+, no permission) or the
+  app folder on older devices;
+- survives the WebView being destroyed, and its completion notification opens
+  the file with whatever the phone has.
+
+The site's `/download` page itself is no longer intercepted by
+`MainActivity.handleExternalUrl`, and download portals opened with
+`window.open()` now render in-app instead of being dismissed.
+
 ### Stream sources + manual fallback
 
 `src/providers/sources.js` keeps the two player lanes separate:

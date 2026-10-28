@@ -175,9 +175,9 @@ public class MainActivity extends BridgeActivity {
         settings.setJavaScriptEnabled(true);
         settings.setDomStorageEnabled(true);
         settings.setMediaPlaybackRequiresUserGesture(false);
-        webView.setDownloadListener((url, userAgent, contentDisposition, mimeType, contentLength) -> {
-            /* Downloads are disabled in the Android app. */
-        });
+        webView.setDownloadListener((url, userAgent, contentDisposition, mimeType, contentLength) ->
+            Downloader.start(this, webView, url, userAgent, contentDisposition, mimeType)
+        );
         String ua = settings.getUserAgentString();
         if (ua != null) {
             settings.setUserAgentString(ua.replace("; wv", "").replace("Version/4.0 ", ""));
@@ -372,7 +372,29 @@ public class MainActivity extends BridgeActivity {
             if (!mainFrame && (playerActive || isOwnOrigin(currentUri()) || isLiveTvPage(currentUri()))) {
                 return false;
             }
-            if (isDownloadPath(url)) return true;
+            if (isDownloadPath(url)) {
+                // The site's /download window is a real page (TG + vidsrc
+                // pools). It used to be swallowed here, which is exactly why
+                // the download button did nothing in the app; the file links
+                // inside it now reach DownloadManager through the listener
+                // installed in installClients().
+                return !(isLiveSite(url) || isOwnOrigin(url));
+            }
+            if (mainFrame && Downloader.looksLikeFile(url.toString())) {
+                // A direct file link (the download pools' final hop). Hand it
+                // to DownloadManager instead of letting the WebView try to
+                // render an .mkv.
+                Bridge bridge = getBridge();
+                Downloader.start(
+                    this,
+                    bridge == null ? null : bridge.getWebView(),
+                    url.toString(),
+                    null,
+                    null,
+                    null
+                );
+                return true;
+            }
             if (isPlayerEmbed(url)) {
                 openAppPlayerFromEmbed(url);
                 return true;
@@ -623,6 +645,9 @@ public class MainActivity extends BridgeActivity {
             settings.setUserAgentString(ua.replace("; wv", "").replace("Version/4.0 ", ""));
         }
         CookieManager.getInstance().setAcceptThirdPartyCookies(popup, true);
+        popup.setDownloadListener((url, userAgent, contentDisposition, mimeType, contentLength) ->
+            Downloader.start(this, popup, url, userAgent, contentDisposition, mimeType)
+        );
         popup.setWebChromeClient(
             new WebChromeClient() {
                 @Override
@@ -660,9 +685,11 @@ public class MainActivity extends BridgeActivity {
         if (url == null) return true;
         // Google sign-in on the live site uses window.open(). Keep that popup
         // in-app: accounts.google.com, Firebase handler, then back to the site.
-        if (isDownloadPath(url)) {
-            dismissPopup();
-            return true;
+        if (isDownloadPath(url) || isDownloadHost(url)) {
+            // A download portal (TG / vidsrc pools, file hosts) is a real
+            // page. Keep it inside the app: its own file links are handed to
+            // DownloadManager by the popup's listener.
+            return false;
         }
         if (isBenignPopupUrl(url) || isAuthProvider(url) || isLiveSite(url)) return false;
         if (isDiscord(url)) {

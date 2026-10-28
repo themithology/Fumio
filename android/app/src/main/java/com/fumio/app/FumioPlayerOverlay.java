@@ -4,11 +4,14 @@ import android.app.Activity;
 import android.content.pm.ActivityInfo;
 import android.content.res.AssetManager;
 import android.net.Uri;
+import android.os.Handler;
+import android.os.Looper;
 import android.view.View;
 import android.view.ViewGroup;
 import android.webkit.CookieManager;
 import android.webkit.JavascriptInterface;
 import android.webkit.WebChromeClient;
+import android.webkit.WebResourceError;
 import android.webkit.WebResourceRequest;
 import android.webkit.WebResourceResponse;
 import android.webkit.WebSettings;
@@ -17,11 +20,30 @@ import android.webkit.WebViewClient;
 import android.widget.FrameLayout;
 import androidx.webkit.WebViewAssetLoader;
 import java.io.InputStream;
+import java.util.Locale;
 import org.json.JSONArray;
 import org.json.JSONObject;
 import org.json.JSONTokener;
 
-/** Fullscreen copy of the bundled TheOGPirateBot player — the live site WebView stays put. */
+/**
+ * Fullscreen player surface.
+ *
+ * ─── 2026-10-28: the player now comes FROM THE SITE, not from the APK ───────
+ * Until today this overlay always loaded {@code https://localhost/watch/…} —
+ * the build frozen inside the APK's assets. That is why renaming a server or
+ * moving a host on the site changed nothing in the app: the app was playing a
+ * months-old copy of players.js / sources.js / serverRegistry.
+ *
+ * Now the overlay loads {@code https://theogpiratebot.online/watch/…} FIRST, so
+ * every server list, label, order, embed parameter, ad unit and mobile layout
+ * change on the site is live in the app the moment it deploys — no APK release.
+ *
+ * The bundled build stays mounted under {@code https://localhost} as the
+ * FALLBACK: it is used only when the live page does not paint in
+ * LIVE_TIMEOUT_MS or fails at the network level (offline, site down, bad
+ * deploy). Playback therefore still works on a plane and during an outage, and
+ * a broken deploy can never turn the player into a black screen.
+ */
 final class FumioPlayerOverlay {
 
     interface Host {
@@ -29,6 +51,12 @@ final class FumioPlayerOverlay {
     }
 
     private static final String AUTH_KEY = "firebase:authUser:AIzaSyDapNgnKdO8l_t7BJPCO8IsbL73aILA1cI:[DEFAULT]";
+
+    /** Where the live player lives. The bundled asset copy is the fallback. */
+    private static final String LIVE_ORIGIN = "https://theogpiratebot.online";
+    private static final String LOCAL_ORIGIN = "https://localhost";
+    /** How long the live player gets before the offline copy takes over. */
+    private static final long LIVE_TIMEOUT_MS = 14000;
 
     private final Activity activity;
     private final Host host;
@@ -44,6 +72,14 @@ final class FumioPlayerOverlay {
     private volatile String lastId = "";
     private volatile String lastSeason = "1";
     private volatile String lastEpisode = "1";
+
+    /** /watch/… path currently on screen, so the fallback can replay it. */
+    private String playerPath = "";
+    private final Handler handler = new Handler(Looper.getMainLooper());
+    private Runnable liveWatchdog;
+    private volatile boolean livePainted;
+    /** True once the bundled copy owns the screen; a burst of errors must not reload it. */
+    private boolean usingFallback;
 
     FumioPlayerOverlay(Activity activity, Host host) {
         this.activity = activity;
@@ -80,7 +116,46 @@ final class FumioPlayerOverlay {
         root.setVisibility(View.VISIBLE);
         root.bringToFront();
         hideSystemUi();
-        webView.loadUrl("https://localhost" + path);
+        playerPath = path.toString();
+        loadLive(playerPath);
+    }
+
+    /** The site's own player — the default, and the reason updates need no APK. */
+    private void loadLive(String path) {
+        if (webView == null) return;
+        livePainted = false;
+        usingFallback = false;
+        armWatchdog(path);
+        webView.loadUrl(LIVE_ORIGIN + path);
+    }
+
+    /** The build frozen in the APK — offline, or the site did not answer. */
+    private void loadLocal(String path) {
+        if (webView == null) return;
+        if (usingFallback) return;
+        usingFallback = true;
+        cancelWatchdog();
+        webView.loadUrl(LOCAL_ORIGIN + path);
+    }
+
+    /**
+     * A live page that never paints must not leave the viewer on a black
+     * screen: the bundled build takes over after LIVE_TIMEOUT_MS.
+     */
+    private void armWatchdog(String path) {
+        cancelWatchdog();
+        final String target = path;
+        liveWatchdog = () -> {
+            if (!livePainted && webView != null) loadLocal(target);
+        };
+        handler.postDelayed(liveWatchdog, LIVE_TIMEOUT_MS);
+    }
+
+    private void cancelWatchdog() {
+        if (liveWatchdog != null) {
+            handler.removeCallbacks(liveWatchdog);
+            liveWatchdog = null;
+        }
     }
 
     private void attachToActivity() {
@@ -140,6 +215,7 @@ final class FumioPlayerOverlay {
     }
 
     private void destroyView() {
+        cancelWatchdog();
         LiveServers.bindPlayer(null);
         WebView view = webView;
         FrameLayout holder = root;
@@ -236,6 +312,18 @@ final class FumioPlayerOverlay {
 
                 @Override
                 public void onPageFinished(WebView v, String url) {
+                    if (isLiveUrl(url)) {
+                        // The site answered — this player IS the site now, so
+                        // nothing about it can drift from the deploy again.
+                        livePainted = true;
+                        usingFallback = false;
+                        cancelWatchdog();
+                    } else if (isLocalUrl(url)) {
+                        // Offline copy (or a failed live load): never race it
+                        // back to the network mid-playback.
+                        cancelWatchdog();
+                        usingFallback = true;
+                    }
                     v.evaluateJavascript(
                         "(function(){try{window.open=function(){return null;}}catch(e){}})()",
                         null
@@ -243,6 +331,28 @@ final class FumioPlayerOverlay {
                     LiveServers.bindPlayer(v);
                     applySeed();
                     injectTrail(v);
+                }
+
+                @Override
+                public void onReceivedError(WebView v, WebResourceRequest request, WebResourceError error) {
+                    // A dead network / dead site falls back ONCE to the
+                    // bundled build; an offline copy that fails has nothing
+                    // left to try.
+                    if (usingFallback) return;
+                    if (request != null && request.isForMainFrame()
+                        && isLiveUrl(String.valueOf(request.getUrl()))) {
+                        livePainted = false;
+                        loadLocal(playerPath);
+                    }
+                }
+
+                @Override
+                @SuppressWarnings("deprecation")
+                public void onReceivedError(WebView v, int errorCode, String description, String failingUrl) {
+                    if (!usingFallback && isLiveUrl(failingUrl)) {
+                        livePainted = false;
+                        loadLocal(playerPath);
+                    }
                 }
             }
         );
@@ -269,6 +379,10 @@ final class FumioPlayerOverlay {
                     hideCustomView();
                 }
             }
+        );
+        view.setDownloadListener(
+            (url, userAgent, contentDisposition, mimeType, contentLength) ->
+                Downloader.start(activity, view, url, userAgent, contentDisposition, mimeType)
         );
         view.addJavascriptInterface(new Bridge(), "FumioNative");
         root.addView(view);
@@ -420,11 +534,28 @@ final class FumioPlayerOverlay {
         }
     }
 
+    /**
+     * Popunders stay blocked, but the player now lives on the real site, so
+     * its own origin is allowed to own the main frame. Anything else in the
+     * top frame is still an ad.
+     */
     private static boolean blockPlayerPopunder(Uri url, boolean mainFrame) {
         if (url == null) return true;
         if (!mainFrame) return false;
         String host = url.getHost();
-        return host == null || !"localhost".equalsIgnoreCase(host);
+        if (host == null) return true;
+        String clean = host.toLowerCase(Locale.US);
+        return !(clean.equals("localhost")
+            || clean.equals("theogpiratebot.online")
+            || clean.endsWith(".theogpiratebot.online"));
+    }
+
+    private static boolean isLiveUrl(String url) {
+        return url != null && url.startsWith(LIVE_ORIGIN);
+    }
+
+    private static boolean isLocalUrl(String url) {
+        return url != null && url.startsWith(LOCAL_ORIGIN);
     }
 
     private static boolean isSpaRoute(String path) {
