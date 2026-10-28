@@ -44,7 +44,17 @@ jobs:
         working-directory: android
         run: |
           chmod +x ./gradlew
-          ./gradlew assembleDebug --no-daemon
+          set -o pipefail
+          ./gradlew assembleDebug --no-daemon 2>&1 | tee /tmp/gradle.log || {
+            echo "### Gradle failure" >> "$GITHUB_STEP_SUMMARY"
+            grep -nE "error:|e: file|FAILURE:|What went wrong|Caused by|> Task .* FAILED" /tmp/gradle.log \
+              | head -25 \
+              | while IFS= read -r line; do
+                  echo "::error::$line"
+                  echo "- $line" >> "$GITHUB_STEP_SUMMARY"
+                done
+            exit 1
+          }
 
       - uses: actions/upload-artifact@v4
         with:

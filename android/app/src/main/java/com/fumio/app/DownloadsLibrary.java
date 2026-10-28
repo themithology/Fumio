@@ -91,7 +91,7 @@ final class DownloadsLibrary {
             if (manager != null && item.status == 0) continue;
             out.add(item);
         }
-        out.sort((a, b) -> Long.compare(b.addedAt, a.addedAt));
+        java.util.Collections.sort(out, (a, b) -> Long.compare(b.addedAt, a.addedAt));
         return out;
     }
 
