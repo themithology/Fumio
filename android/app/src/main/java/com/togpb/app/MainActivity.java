@@ -1,4 +1,4 @@
-package com.fumio.app;
+package com.togpb.app;
 
 import android.app.Dialog;
 import android.app.PictureInPictureParams;
@@ -315,7 +315,7 @@ public class MainActivity extends BridgeActivity {
     private void handleAuthIntent(Intent intent) {
         if (intent == null || intent.getData() == null) return;
         Uri data = intent.getData();
-        if (data.getScheme() == null || !data.getScheme().equalsIgnoreCase("com.fumio.app")) return;
+        if (data.getScheme() == null || !data.getScheme().equalsIgnoreCase("com.togpb.app")) return;
         String host = data.getHost();
         if (host != null && host.equalsIgnoreCase("verify")) {
             onVerifyReturn(data.getQueryParameter("code"));

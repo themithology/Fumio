@@ -28,14 +28,14 @@
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />
                 <category android:name="android.intent.category.BROWSABLE" />
-                <data android:scheme="com.fumio.app" android:host="auth" />
+                <data android:scheme="com.togpb.app" android:host="auth" />
             </intent-filter>
 
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />
                 <category android:name="android.intent.category.BROWSABLE" />
-                <data android:scheme="com.fumio.app" android:host="verify" />
+                <data android:scheme="com.togpb.app" android:host="verify" />
             </intent-filter>
 
         </activity>

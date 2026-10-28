@@ -1,4 +1,4 @@
-package com.fumio.app;
+package com.togpb.app;
 
 import android.content.Context;
 import android.content.SharedPreferences;

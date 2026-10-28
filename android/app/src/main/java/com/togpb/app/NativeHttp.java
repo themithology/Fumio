@@ -1,4 +1,4 @@
-package com.fumio.app;
+package com.togpb.app;
 
 import android.net.Uri;
 import java.io.BufferedReader;
