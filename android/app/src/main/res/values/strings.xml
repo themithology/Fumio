@@ -2,6 +2,6 @@
 <resources>
     <string name="app_name">TheOGPirateBot</string>
     <string name="title_activity_main">TheOGPirateBot</string>
-    <string name="package_name">com.togpb.app</string>
-    <string name="custom_url_scheme">com.togpb.app</string>
+    <string name="package_name">com.fumio.app</string>
+    <string name="custom_url_scheme">com.fumio.app</string>
 </resources>

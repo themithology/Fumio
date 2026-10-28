@@ -1,4 +1,4 @@
-package com.togpb.app;
+package com.fumio.app;
 
 import android.app.Activity;
 import android.content.Context;

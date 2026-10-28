@@ -80,7 +80,7 @@ export default function AuthForm({ initialMode = "signin" }) {
     if (!user) return;
     if (nativeHandoff) {
       const params = new URLSearchParams(window.location.search);
-      const redirect = params.get("redirect") || "com.togpb.app://auth";
+      const redirect = params.get("redirect") || "com.fumio.app://auth";
       const googleToken = consumeGoogleIdToken();
       if (googleToken) {
         window.location.assign(`${redirect}?idToken=${encodeURIComponent(googleToken)}`);
