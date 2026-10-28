@@ -419,7 +419,7 @@ public class MainActivity extends BridgeActivity {
                 // render an .mkv.
                 Bridge bridge = getBridge();
                 Downloader.start(
-                    this,
+                    MainActivity.this,
                     bridge == null ? null : bridge.getWebView(),
                     url.toString(),
                     null,
