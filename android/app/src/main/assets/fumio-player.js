@@ -159,6 +159,9 @@
         id: String(playerId),
         season: String(Number(url.searchParams.get("season") || url.searchParams.get("s") || 1) || 1),
         episode: String(Number(url.searchParams.get("episode") || url.searchParams.get("e") || 1) || 1),
+        // The site's own ?server= (slot index or stable key) — the viewer's
+        // choice, carried into the in-app player instead of being dropped.
+        server: url.searchParams.get("server") || "",
       };
     }
     var match = path.match(/\/watch\/(movie|tv|anime)\/(\d+)(?:\/(\d+)(?:\/(\d+))?)?/i);
@@ -256,8 +259,15 @@
   function openWatch(info) {
     if (!info || !info.id) return false;
     saveContinue(info);
+    var type = info.type || "tv";
+    var season = info.season || "1";
+    var episode = info.episode || "1";
     try {
-      native.openWatch(info.type || "tv", info.id, info.season || "1", info.episode || "1");
+      if (info.server && native.openWatchServer) {
+        native.openWatchServer(type, info.id, season, episode, String(info.server));
+        return true;
+      }
+      native.openWatch(type, info.id, season, episode);
       return true;
     } catch (e) {
       return false;

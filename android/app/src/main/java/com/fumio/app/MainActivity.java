@@ -71,6 +71,7 @@ public class MainActivity extends BridgeActivity {
     private String pendingPlayId;
     private String pendingPlaySeason;
     private String pendingPlayEpisode;
+    private String pendingPlayServer;
     private static final Pattern EMBED_TITLE = Pattern.compile(
         "(?i)/(movie|tv|anime)/(\\d+)(?:/(\\d+)(?:/(\\d+))?)?"
     );
@@ -273,6 +274,11 @@ public class MainActivity extends BridgeActivity {
         @JavascriptInterface
         public void openWatch(String type, String id, String season, String episode) {
             runOnUiThread(() -> openAppPlayer(type, id, season, episode));
+        }
+
+        @JavascriptInterface
+        public void openWatchServer(String type, String id, String season, String episode, String server) {
+            runOnUiThread(() -> openAppPlayer(type, id, season, episode, server));
         }
 
         @JavascriptInterface
@@ -867,12 +873,17 @@ public class MainActivity extends BridgeActivity {
     private void openAppPlayerFromWatch(Uri url) {
         if (url == null) return;
         String path = url.getPath() == null ? "" : url.getPath();
+        // The site's player is /player?id=…&type=…&season=…&episode=…&server=…
+        // `server` (slot index or stable key) is the viewer's choice and must
+        // survive the hand-off to the in-app player.
+        String server = firstQuery(url, "server", null);
         if (path.toLowerCase(Locale.US).startsWith("/player")) {
             openAppPlayer(
                 firstQuery(url, "type", "movie"),
                 firstQuery(url, "id", null),
                 firstQuery(url, "season", "1"),
-                firstQuery(url, "episode", "1")
+                firstQuery(url, "episode", "1"),
+                server
             );
             return;
         }
@@ -882,7 +893,8 @@ public class MainActivity extends BridgeActivity {
             match.group(1),
             match.group(2),
             firstQuery(url, "season", match.group(3)),
-            firstQuery(url, "episode", match.group(4))
+            firstQuery(url, "episode", match.group(4)),
+            server
         );
     }
 
@@ -901,12 +913,17 @@ public class MainActivity extends BridgeActivity {
     }
 
     private void openAppPlayer(String type, String id, String season, String episode) {
+        openAppPlayer(type, id, season, episode, null);
+    }
+
+    private void openAppPlayer(String type, String id, String season, String episode, String server) {
         if (id == null || id.isEmpty()) return;
         if (playerActive) return;
         pendingPlayType = type;
         pendingPlayId = id;
         pendingPlaySeason = season;
         pendingPlayEpisode = episode;
+        pendingPlayServer = server;
         pendingPlay = true;
         ensureUnlocked(this::openPendingPlayer);
     }
@@ -917,6 +934,8 @@ public class MainActivity extends BridgeActivity {
         String id = pendingPlayId;
         String season = pendingPlaySeason;
         String episode = pendingPlayEpisode;
+        String server = pendingPlayServer;
+        pendingPlayServer = null;
         pendingPlay = false;
         if (id == null || id.isEmpty()) return;
         if (playerActive) return;
@@ -933,7 +952,7 @@ public class MainActivity extends BridgeActivity {
                 onOverlayClosed(null);
                 return;
             }
-            playerOverlay.open(type, id, season, episode, seed);
+            playerOverlay.open(type, id, season, episode, seed, server);
         });
     }
 

@@ -66,6 +66,7 @@ final class FumioPlayerOverlay {
     private WebChromeClient.CustomViewCallback customCallback;
     private int previousOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED;
     private String pendingSeed;
+    private String pendingServer;
     private boolean closing;
     private boolean closedOut;
     private volatile String lastType = "tv";
@@ -97,10 +98,20 @@ final class FumioPlayerOverlay {
     }
 
     void open(String type, String id, String season, String episode, String seed) {
+        open(type, id, season, episode, seed, null);
+    }
+
+    /**
+     * @param server the site's `?server=` value (slot index or stable key) when
+     *               the player was reached from a link that carried one — the
+     *               website honours it, so the app must not strip it.
+     */
+    void open(String type, String id, String season, String episode, String seed, String server) {
         if (id == null || id.isEmpty()) return;
         closing = false;
         closedOut = false;
         pendingSeed = seed;
+        pendingServer = empty(server) ? null : server;
         String media = "movie".equalsIgnoreCase(type) ? "movie" : "tv";
         lastType = media;
         lastId = id;
@@ -112,11 +123,7 @@ final class FumioPlayerOverlay {
         //   · LOCAL — the bundled build's router: /watch/{type}/{id}?…
         // They are not interchangeable, which is exactly why the live player
         // answered with the site's 404 page on the first try.
-        StringBuilder path = new StringBuilder("/watch/").append(media).append("/").append(id);
-        if (!"movie".equals(media)) {
-            path.append("?season=").append(empty(season) ? "1" : season);
-            path.append("&episode=").append(empty(episode) ? "1" : episode);
-        }
+        playerPath = localPathFor(media, id, season, episode);
         livePath = livePathFor(media, id, season, episode);
         previousOrientation = activity.getRequestedOrientation();
         activity.setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE);
@@ -125,25 +132,44 @@ final class FumioPlayerOverlay {
         root.setVisibility(View.VISIBLE);
         root.bringToFront();
         hideSystemUi();
-        playerPath = path.toString();
         loadLive(livePath);
     }
 
     /**
-     * The website's player URL. Verified against production: /player is the
-     * route, `id` + `type` are the parameters, `season`/`episode` only matter
-     * for TV. Anything else (/watch/movie/1) is the site's 404 page.
+     * The website's player URL, exactly the shape the site links to itself:
+     *   /player?id=312359&type=tv&season=1&episode=1&server=0
+     * `server` is the site's own slot index / stable key, so a deep link that
+     * names a server keeps naming it. Anything else (/watch/movie/1) is the
+     * site's 404 page.
      */
-    private static String livePathFor(String media, String id, String season, String episode) {
-        StringBuilder live = new StringBuilder("/player?type=")
-            .append("movie".equals(media) ? "movie" : "tv")
-            .append("&id=")
-            .append(Uri.encode(id));
+    private String livePathFor(String media, String id, String season, String episode) {
+        StringBuilder live = new StringBuilder("/player?id=").append(Uri.encode(id));
+        live.append("&type=").append("movie".equals(media) ? "movie" : "tv");
         if (!"movie".equals(media)) {
             live.append("&season=").append(empty(season) ? "1" : season);
             live.append("&episode=").append(empty(episode) ? "1" : episode);
         }
+        if (!empty(pendingServer)) live.append("&server=").append(Uri.encode(pendingServer));
         return live.toString();
+    }
+
+    /**
+     * The BUNDLED build's route (/watch/{type}/{id}), used by the offline copy.
+     * A numeric `server=` means a different slot in the two lanes, so only a
+     * stable key is carried across; the offline player then falls back to its
+     * own default rather than opening the wrong host.
+     */
+    private String localPathFor(String media, String id, String season, String episode) {
+        StringBuilder local = new StringBuilder("/watch/").append(media).append("/").append(id);
+        if (!"movie".equals(media)) {
+            local.append("?season=").append(empty(season) ? "1" : season);
+            local.append("&episode=").append(empty(episode) ? "1" : episode);
+        }
+        if (!empty(pendingServer) && !pendingServer.matches("\\d+")) {
+            local.append(local.indexOf("?") >= 0 ? "&" : "?");
+            local.append("server=").append(Uri.encode(pendingServer));
+        }
+        return local.toString();
     }
 
     /** The site's own player — the default, and the reason updates need no APK. */
@@ -650,6 +676,13 @@ final class FumioPlayerOverlay {
     }
 
     private class Bridge {
+        @JavascriptInterface
+        public void openWatchServer(String type, String id, String season, String episode, String server) {
+            activity.runOnUiThread(
+                () -> open(type, id, season, episode, null, server)
+            );
+        }
+
         @JavascriptInterface
         public void openDownloads() {
             activity.runOnUiThread(() -> openOfflineLibrary(Uri.parse(LOCAL_ORIGIN + "/my-downloads")));
