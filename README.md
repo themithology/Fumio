@@ -203,7 +203,30 @@ goes to Android's `DownloadManager`:
 
 The site's `/download` page itself is no longer intercepted by
 `MainActivity.handleExternalUrl`, and download portals opened with
-`window.open()` now render in-app instead of being dismissed.
+`window.open()` now render in-app instead of being dismissed. `fumio-player.js`
+(the script injected into the live site) no longer hides Download buttons,
+swallows download clicks or bounces `/download` back to `/` — that whole block
+existed only because downloads were dead.
+
+**What is deliberately unchanged:** the smartlink/ad killing in
+`fumio-player.js`, the popunder blocking in the player surface, and the
+`/verify` gate (one ad wall in Chrome every 12 hours — `VerifyClient` /
+`VerifyWall`). Ad behaviour is exactly what it was.
+
+### Saved files + offline playback
+
+- `DownloadsLibrary.java` records every enqueue (name, page title, mime,
+  DownloadManager id) and folds live status back in, so the app can list what
+  is actually on the phone.
+- `DownloadsActivity.java` is the app's own **Downloads** screen: dark theme,
+  one card per file, Play / Delete. Reachable at `/my-downloads` on the site's
+  origin, or via `window.FumioNative.openDownloads()`.
+- `OfflinePlayerActivity.java` plays a saved file natively with Media3
+  (ExoPlayer): **MKV with every embedded audio track and subtitle selectable**,
+  each labelled with its language, plus per-file resume. The website keeps its
+  own player; a file on the phone does not need a WebView.
+
+Everything in this section works with the network off.
 
 ### Stream sources + manual fallback
 

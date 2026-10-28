@@ -103,7 +103,10 @@ final class Downloader {
                 toast(activity, "Downloads aren't available on this device.");
                 return false;
             }
-            manager.enqueue(request);
+            long id = manager.enqueue(request);
+            // Recorded so the app's own Downloads screen can list and replay it
+            // with the network off (DownloadsLibrary).
+            DownloadsLibrary.remember(activity, id, fileName, pageTitle(webView, fileName), mimeType);
             toast(activity, "Downloading " + fileName);
             return true;
         } catch (Exception ignored) {
@@ -210,6 +213,18 @@ final class Downloader {
             );
         } catch (Exception ignored) {
             /* the download still runs */
+        }
+    }
+
+    /** The page's own title is the film/series name — the best label we have. */
+    private static String pageTitle(WebView webView, String fallback) {
+        try {
+            String title = webView == null ? null : webView.getTitle();
+            if (title == null) return fallback;
+            String clean = title.replaceAll("(?i)\\s*[|—-]\\s*TheOGPirateBot.*$", "").trim();
+            return clean.isEmpty() ? fallback : clean;
+        } catch (Exception ignored) {
+            return fallback;
         }
     }
 

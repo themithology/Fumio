@@ -40,6 +40,22 @@
 
         </activity>
 
+        <!-- Files already on the phone. Both screens work with the network
+             off, which is the whole point of a download. -->
+        <activity
+            android:name=".DownloadsActivity"
+            android:exported="false"
+            android:label="Downloads"
+            android:theme="@style/AppTheme.NoActionBar" />
+
+        <activity
+            android:name=".OfflinePlayerActivity"
+            android:exported="false"
+            android:label="Player"
+            android:screenOrientation="sensorLandscape"
+            android:configChanges="orientation|screenSize|smallestScreenSize|keyboardHidden|screenLayout|uiMode"
+            android:theme="@style/AppTheme.NoActionBar" />
+
         <provider
             android:name="androidx.core.content.FileProvider"
             android:authorities="${applicationId}.fileprovider"

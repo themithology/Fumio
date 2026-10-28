@@ -301,13 +301,16 @@ final class FumioPlayerOverlay {
 
                 @Override
                 public boolean shouldOverrideUrlLoading(WebView v, WebResourceRequest request) {
+                    if (openOfflineLibrary(request.getUrl())) return true;
                     return blockPlayerPopunder(request.getUrl(), request.isForMainFrame());
                 }
 
                 @Override
                 @SuppressWarnings("deprecation")
                 public boolean shouldOverrideUrlLoading(WebView v, String url) {
-                    return blockPlayerPopunder(url == null ? null : Uri.parse(url), true);
+                    Uri uri = url == null ? null : Uri.parse(url);
+                    if (openOfflineLibrary(uri)) return true;
+                    return blockPlayerPopunder(uri, true);
                 }
 
                 @Override
@@ -550,6 +553,19 @@ final class FumioPlayerOverlay {
             || clean.endsWith(".theogpiratebot.online"));
     }
 
+    /** /my-downloads belongs to the app, not to the site's router. */
+    private boolean openOfflineLibrary(Uri url) {
+        if (url == null) return false;
+        String path = url.getPath();
+        if (path == null || !path.toLowerCase(Locale.US).startsWith("/my-downloads")) return false;
+        try {
+            activity.startActivity(new android.content.Intent(activity, DownloadsActivity.class));
+        } catch (Exception ignored) {
+            /* nothing to show */
+        }
+        return true;
+    }
+
     private static boolean isLiveUrl(String url) {
         return url != null && url.startsWith(LIVE_ORIGIN);
     }
@@ -593,6 +609,11 @@ final class FumioPlayerOverlay {
     }
 
     private class Bridge {
+        @JavascriptInterface
+        public void openDownloads() {
+            activity.runOnUiThread(() -> openOfflineLibrary(Uri.parse(LOCAL_ORIGIN + "/my-downloads")));
+        }
+
         @JavascriptInterface
         public void trackWatch(String type, String id, String season, String episode) {
             if (id == null || id.isEmpty()) return;

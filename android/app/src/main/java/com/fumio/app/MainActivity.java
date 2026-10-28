@@ -238,6 +238,39 @@ public class MainActivity extends BridgeActivity {
         }
 
         @JavascriptInterface
+        public void openDownloads() {
+            runOnUiThread(
+                () -> {
+                    try {
+                        startActivity(new Intent(MainActivity.this, DownloadsActivity.class));
+                    } catch (Exception ignored) {
+                        // Nothing to show if the activity cannot start.
+                    }
+                }
+            );
+        }
+
+        @JavascriptInterface
+        public void playDownloaded(String uri, String title) {
+            if (uri == null || uri.isEmpty()) return;
+            runOnUiThread(
+                () -> {
+                    try {
+                        startActivity(
+                            OfflinePlayerActivity.intentFor(
+                                MainActivity.this,
+                                Uri.parse(uri),
+                                title == null ? "" : title
+                            )
+                        );
+                    } catch (Exception ignored) {
+                        // Unplayable file: the list stays as it was.
+                    }
+                }
+            );
+        }
+
+        @JavascriptInterface
         public void openWatch(String type, String id, String season, String episode) {
             runOnUiThread(() -> openAppPlayer(type, id, season, episode));
         }
@@ -400,6 +433,22 @@ public class MainActivity extends BridgeActivity {
                 return true;
             }
             if (isLiveSite(url)) {
+                // The app's offline library. The website has no /my-downloads
+                // route, so this URL is the portable way to reach the files
+                // already on the phone (and a link the site can point at).
+                String livePathRaw = url.getPath();
+                if (livePathRaw != null && livePathRaw.toLowerCase(Locale.US).startsWith("/my-downloads")) {
+                    runOnUiThread(
+                        () -> {
+                            try {
+                                startActivity(new Intent(MainActivity.this, DownloadsActivity.class));
+                            } catch (Exception ignored) {
+                                // Stay where we are.
+                            }
+                        }
+                    );
+                    return true;
+                }
                 if (isVerifyPath(url)) {
                     openVerifyInChrome(url.toString());
                     return true;
