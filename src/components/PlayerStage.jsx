@@ -43,9 +43,10 @@ export default function PlayerStage({
   const [useFumioPlayer, setUseFumioPlayer] = useState(false);
   const [phase, setPhase] = useState("checking"); // checking | playing | error
   const [fallbackSourceId, setFallbackSourceId] = useState(null);
-  const [hostsTick, setHostsTick] = useState(0); in this player (sub/dub lanes built from
-  // AniList ids, plus the resolver-gated ToonStream), so a list harvested from
-  // the site's page must not replace it — that is what broke anime playback.
+  const [hostsTick, setHostsTick] = useState(0);
+  // Anime has its own resolver in this player (sub/dub lanes built from AniList
+  // ids, plus the resolver-gated ToonStream), so a list harvested from the
+  // site's page must not replace it — that is what broke anime playback.
   const animeLane = Boolean(toonStreamLoading || toonStreamSource) || (animeSources?.length || 0) > 0;
   // The APK shell fetches the site's CURRENT server list and injects it here.
   // Present only inside the app; on the website this stays null and every
