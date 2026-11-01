@@ -179,6 +179,19 @@ Now (`FumioPlayerOverlay`):
    `window.__fumioLiveHosts` — it now only keeps that *offline* copy pointing at
    living hosts.
 
+The app never rebuilds the site's player URL from scratch. `FumioPlayerOverlay`
+takes the **original encoded query string** of whatever link started playback
+and merges it over its own defaults (`mergeQuery`), so every parameter the site
+uses — `server` (slot index *or* stable key), the `anilist` anchor, UI season
+values, anything added next month — reaches the live player untouched. Adding a
+parameter to `/player` therefore never needs an APK release; only `id` and
+`type` are guaranteed when a link omits them.
+
+If the site's route itself ever changes, the player answers with a page whose
+title says 404/Not Found, which the overlay treats as a failed load and falls
+back to the bundled build — a wrong guess degrades to offline playback instead
+of a dead screen.
+
 Side effect worth knowing: browsing and the player share one origin again, so
 Continue Watching / the auth token live in a single `localStorage` instead of
 two (`applySeed()` seeds the live origin on player open).

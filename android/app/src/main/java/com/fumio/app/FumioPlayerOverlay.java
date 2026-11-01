@@ -20,7 +20,9 @@ import android.webkit.WebViewClient;
 import android.widget.FrameLayout;
 import androidx.webkit.WebViewAssetLoader;
 import java.io.InputStream;
+import java.util.LinkedHashMap;
 import java.util.Locale;
+import java.util.Map;
 import org.json.JSONArray;
 import org.json.JSONObject;
 import org.json.JSONTokener;
@@ -67,6 +69,8 @@ final class FumioPlayerOverlay {
     private int previousOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED;
     private String pendingSeed;
     private String pendingServer;
+    /** Raw `?…` of the link that opened the player; forwarded untouched. */
+    private String pendingSourceQuery;
     private boolean closing;
     private boolean closedOut;
     private volatile String lastType = "tv";
@@ -107,11 +111,31 @@ final class FumioPlayerOverlay {
      *               website honours it, so the app must not strip it.
      */
     void open(String type, String id, String season, String episode, String seed, String server) {
+        open(type, id, season, episode, seed, server, null);
+    }
+
+    /**
+     * @param sourceQuery the ORIGINAL encoded query string of the link that
+     *                    started playback. It is forwarded verbatim (see
+     *                    mergeQuery), so a parameter the site adds tomorrow —
+     *                    an `anilist` anchor, a UI season, anything — reaches
+     *                    the live player without the app knowing its name.
+     */
+    void open(
+        String type,
+        String id,
+        String season,
+        String episode,
+        String seed,
+        String server,
+        String sourceQuery
+    ) {
         if (id == null || id.isEmpty()) return;
         closing = false;
         closedOut = false;
         pendingSeed = seed;
         pendingServer = empty(server) ? null : server;
+        pendingSourceQuery = empty(sourceQuery) ? null : sourceQuery;
         String media = "movie".equalsIgnoreCase(type) ? "movie" : "tv";
         lastType = media;
         lastId = id;
@@ -143,14 +167,59 @@ final class FumioPlayerOverlay {
      * site's 404 page.
      */
     private String livePathFor(String media, String id, String season, String episode) {
-        StringBuilder live = new StringBuilder("/player?id=").append(Uri.encode(id));
-        live.append("&type=").append("movie".equals(media) ? "movie" : "tv");
+        StringBuilder base = new StringBuilder("id=").append(Uri.encode(id));
+        base.append("&type=").append("movie".equals(media) ? "movie" : "tv");
         if (!"movie".equals(media)) {
-            live.append("&season=").append(empty(season) ? "1" : season);
-            live.append("&episode=").append(empty(episode) ? "1" : episode);
+            base.append("&season=").append(empty(season) ? "1" : season);
+            base.append("&episode=").append(empty(episode) ? "1" : episode);
         }
-        if (!empty(pendingServer)) live.append("&server=").append(Uri.encode(pendingServer));
-        return live.toString();
+        if (!empty(pendingServer)) base.append("&server=").append(Uri.encode(pendingServer));
+
+        String query = mergeQuery(base.toString(), pendingSourceQuery);
+        return query.isEmpty() ? "/player" : "/player?" + query;
+    }
+
+    /**
+     * Base parameters (what the app knows) + the ORIGINAL query, which wins.
+     *
+     * This is the end of "the app has to be taught the website's URL": every
+     * parameter the site sent — server, anilist anchor, UI season, anything
+     * added later — survives the hand-off because it is copied, not rebuilt.
+     * Only the keys the app must guarantee (id/type/season/episode) are added
+     * when the link did not carry them.
+     */
+    private static String mergeQuery(String baseQuery, String sourceQuery) {
+        LinkedHashMap<String, String> pairs = new LinkedHashMap<>();
+        collectPairs(pairs, baseQuery);
+        collectPairs(pairs, sourceQuery); // the site's own values win
+        StringBuilder out = new StringBuilder();
+        for (Map.Entry<String, String> entry : pairs.entrySet()) {
+            String key = entry.getKey();
+            String value = entry.getValue();
+            if (key == null || key.isEmpty() || value == null) continue;
+            if (out.length() > 0) out.append('&');
+            out.append(Uri.encode(key)).append('=').append(Uri.encode(value));
+        }
+        return out.toString();
+    }
+
+    private static void collectPairs(Map<String, String> into, String query) {
+        if (query == null || query.isEmpty()) return;
+        String clean = query.startsWith("?") ? query.substring(1) : query;
+        for (String pair : clean.split("&")) {
+            if (pair.isEmpty()) continue;
+            int eq = pair.indexOf('=');
+            String key = eq >= 0 ? pair.substring(0, eq) : pair;
+            String value = eq >= 0 ? pair.substring(eq + 1) : "";
+            try {
+                key = Uri.decode(key);
+                value = Uri.decode(value);
+            } catch (Exception ignored) {
+                /* keep the raw pair; a bad escape must not drop the link */
+            }
+            if (key == null || key.isEmpty()) continue;
+            into.put(key, value == null ? "" : value);
+        }
     }
 
     /**
