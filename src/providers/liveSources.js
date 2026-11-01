@@ -24,11 +24,13 @@
 //   1. A list belongs to ONE episode. S1E1's URLs are S1E1's embed URLs — they
 //      must never play for S1E2. `liveSourcesAsPlayerSources()` therefore
 //      returns null when the envelope does not match the page it is read on.
-//   2. The ANIME lane keeps its own resolver. Anime servers (MegaPlay sub/dub,
-//      ZokoAnime, 4animo, ToonStream) are built from AniList ids with the
-//      site's arc/season redirects, and this app already resolves them itself
-//      — feeding it a harvested list is what broke anime playback. The caller
-//      says whether the anime lane is active and we step aside.
+//   2. BOTH lanes are dynamic. Anime used to keep its own resolver, but that is
+//      still "servers the app knows about". The site's anime lane is the
+//      authority for anime too, and it re-numbers itself for arcs: a request
+//      for S1E1 can land on a different season/episode (see `resolvedSeason`
+//      / `resolvedEpisode` / `resolvedHref` below), so this module accepts a
+//      list whose season/episode match EITHER what we asked for OR what the
+//      site resolved.
 //
 // On the website itself (no shell, no injection) everything here returns null
 // and the site is untouched.
@@ -76,6 +78,9 @@ const readEnvelope = () => {
     type: raw.type == null ? null : String(raw.type),
     season: raw.season == null ? null : String(raw.season),
     episode: raw.episode == null ? null : String(raw.episode),
+    resolvedSeason: raw.resolvedSeason == null ? null : String(raw.resolvedSeason),
+    resolvedEpisode: raw.resolvedEpisode == null ? null : String(raw.resolvedEpisode),
+    resolvedHref: typeof raw.resolvedHref === "string" ? raw.resolvedHref : null,
   };
 };
 
@@ -101,20 +106,38 @@ const same = (a, b) => a == null || b == null || String(a) === String(b);
 /**
  * The live list for the page it is read on, or null.
  *
- * Null when: nothing was injected, the envelope belongs to a DIFFERENT title or
- * episode (a stale harvest), or the anime lane is active (it has its own
- * resolver — see rule 2 in the header).
+ * Null only when nothing was injected, or the envelope clearly belongs to
+ * another TITLE (a stale harvest). Season/episode are allowed to differ when
+ * the site itself re-numbered them for an arc — that is the anime case, and the
+ * site's answer is the one the hosts actually accept.
  */
-export function liveSourcesFor({ animeLane = false } = {}) {
-  if (animeLane) return null;
+export function liveSourcesFor() {
   const envelope = readEnvelope();
   if (!envelope) return null;
   const page = pageIdentity();
   if (envelope.id && page.id && String(envelope.id) !== String(page.id)) return null;
   if (envelope.type && page.type && String(envelope.type) !== String(page.type)) return null;
-  if (envelope.season && page.season && String(envelope.season) !== String(page.season)) return null;
-  if (envelope.episode && page.episode && String(envelope.episode) !== String(page.episode)) return null;
+
+  const seasonOk =
+    same(envelope.season, page.season) ||
+    same(envelope.resolvedSeason, page.season) ||
+    same(envelope.resolvedSeason, envelope.season);
+  const episodeOk =
+    same(envelope.episode, page.episode) ||
+    same(envelope.resolvedEpisode, page.episode) ||
+    same(envelope.resolvedEpisode, envelope.episode);
+  if (!seasonOk || !episodeOk) return null;
   return envelope.servers;
+}
+
+/** What the site resolved to, when it differs from what we asked for. */
+export function liveResolvedEpisode() {
+  const envelope = readEnvelope();
+  if (!envelope || !envelope.resolvedSeason || !envelope.resolvedEpisode) return null;
+  if (same(envelope.resolvedSeason, envelope.season) && same(envelope.resolvedEpisode, envelope.episode)) {
+    return null;
+  }
+  return { season: Number(envelope.resolvedSeason), episode: Number(envelope.resolvedEpisode) };
 }
 
 /**
@@ -123,8 +146,8 @@ export function liveSourcesFor({ animeLane = false } = {}) {
  * would play. `url()` ignores its arguments on purpose — the site resolved this
  * exact episode, and the episode match is enforced above.
  */
-export function liveSourcesAsPlayerSources({ animeLane = false } = {}) {
-  const servers = liveSourcesFor({ animeLane });
+export function liveSourcesAsPlayerSources() {
+  const servers = liveSourcesFor();
   if (!servers) return null;
   return servers.map((entry) => ({
     id: entry.key,

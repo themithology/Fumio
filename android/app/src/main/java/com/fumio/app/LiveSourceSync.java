@@ -128,10 +128,25 @@ final class LiveSourceSync {
             if (result == null || !result.optBoolean("ok", false)) return null;
             Object data = result.opt("data");
             JSONArray servers = null;
-            if (data instanceof JSONObject) servers = ((JSONObject) data).optJSONArray("servers");
-            else if (data instanceof JSONArray) servers = (JSONArray) data;
+            String resolvedSeason = null;
+            String resolvedEpisode = null;
+            if (data instanceof JSONObject) {
+                JSONObject body = (JSONObject) data;
+                servers = body.optJSONArray("servers");
+                resolvedSeason = body.has("season") ? body.optString("season", null) : null;
+                resolvedEpisode = body.has("episode") ? body.optString("episode", null) : null;
+            } else if (data instanceof JSONArray) {
+                servers = (JSONArray) data;
+            }
             if (servers == null) return null;
-            return normalise(servers, id, type, season, episode);
+            String envelope = normalise(
+                servers,
+                id,
+                type,
+                resolvedSeason == null ? season : resolvedSeason,
+                resolvedEpisode == null ? episode : resolvedEpisode
+            );
+            return envelope;
         } catch (Exception ignored) {
             return null;
         }
@@ -142,7 +157,24 @@ final class LiveSourceSync {
      * harvested for S1E1 must never be played for S1E2, and the anime lane has
      * its own resolver, so the page needs to know what this list is FOR.
      */
-    private static String normalise(JSONArray raw, String id, String type, String season, String episode) {
+    private static String normalise(
+        JSONArray raw,
+        String id,
+        String type,
+        String season,
+        String episode
+    ) {
+        return normalise(raw, id, type, season, episode, null);
+    }
+
+    private static String normalise(
+        JSONArray raw,
+        String id,
+        String type,
+        String season,
+        String episode,
+        String resolvedHref
+    ) {
         JSONArray out = new JSONArray();
         for (int i = 0; i < raw.length(); i += 1) {
             JSONObject row = raw.optJSONObject(i);
@@ -174,6 +206,18 @@ final class LiveSourceSync {
             envelope.put("season", season == null ? "1" : season);
             envelope.put("episode", episode == null ? "1" : episode);
             envelope.put("servers", out);
+            if (resolvedHref != null && !resolvedHref.isEmpty()) {
+                // Where the SITE ended up. Anime links get redirected to the
+                // arc whose numbering the hosts actually use, so this is the
+                // truth the app should compare against.
+                java.util.regex.Matcher seasonMatch =
+                    java.util.regex.Pattern.compile("[?&]season=(\\d+)").matcher(resolvedHref);
+                java.util.regex.Matcher episodeMatch =
+                    java.util.regex.Pattern.compile("[?&]episode=(\\d+)").matcher(resolvedHref);
+                if (seasonMatch.find()) envelope.put("resolvedSeason", seasonMatch.group(1));
+                if (episodeMatch.find()) envelope.put("resolvedEpisode", episodeMatch.group(1));
+                envelope.put("resolvedHref", resolvedHref);
+            }
             return envelope.toString();
         } catch (Exception ignored) {
             return null;
@@ -289,7 +333,17 @@ final class LiveSourceSync {
                     }
                     String normalised = null;
                     try {
-                        normalised = normalise(new JSONArray(raw), id, type, season, episode);
+                        JSONArray servers = null;
+                        String href = null;
+                        String trimmed = raw.trim();
+                        if (trimmed.startsWith("[")) {
+                            servers = new JSONArray(trimmed);
+                        } else {
+                            JSONObject payload = new JSONObject(trimmed);
+                            servers = payload.optJSONArray("servers");
+                            href = payload.optString("href", null);
+                        }
+                        normalised = normalise(servers, id, type, season, episode, href);
                     } catch (Exception ignored) {
                         normalised = null;
                     }
@@ -329,7 +383,7 @@ final class LiveSourceSync {
     private static final String HARVEST_JS =
         "(async function(){"
             + "var sleep=function(ms){return new Promise(function(r){setTimeout(r,ms);});};"
-            + "var report=function(list){try{FumioHarvest.deliver(JSON.stringify(list||[]));}catch(e){}};"
+            + "var report=function(list){try{FumioHarvest.deliver(JSON.stringify({servers:list||[],href:String(location.href||'')}));}catch(e){}};"
             + "var buttons=function(){var all=document.querySelectorAll('button');var out=[];"
             + "for(var i=0;i<all.length;i++){var t=(all[i].textContent||'').replace(/\\s+/g,' ').trim();"
             + "if(/^Server\\s+\\d+/i.test(t)&&!all[i].disabled)out.push(all[i]);}return out;};"
