@@ -131,14 +131,18 @@ final class LiveSourceSync {
             if (data instanceof JSONObject) servers = ((JSONObject) data).optJSONArray("servers");
             else if (data instanceof JSONArray) servers = (JSONArray) data;
             if (servers == null) return null;
-            return normalise(servers);
+            return normalise(servers, id, type, season, episode);
         } catch (Exception ignored) {
             return null;
         }
     }
 
-    /** {key,label,url} only — the shape the player UI understands. */
-    private static String normalise(JSONArray raw) {
+    /**
+     * {…meta, servers:[{key,label,url}]} — the meta is not decoration: a list
+     * harvested for S1E1 must never be played for S1E2, and the anime lane has
+     * its own resolver, so the page needs to know what this list is FOR.
+     */
+    private static String normalise(JSONArray raw, String id, String type, String season, String episode) {
         JSONArray out = new JSONArray();
         for (int i = 0; i < raw.length(); i += 1) {
             JSONObject row = raw.optJSONObject(i);
@@ -162,7 +166,18 @@ final class LiveSourceSync {
                 /* one bad row must not lose the list */
             }
         }
-        return out.length() == 0 ? null : out.toString();
+        if (out.length() == 0) return null;
+        try {
+            JSONObject envelope = new JSONObject();
+            envelope.put("id", id == null ? "" : id);
+            envelope.put("type", type == null ? "tv" : type);
+            envelope.put("season", season == null ? "1" : season);
+            envelope.put("episode", episode == null ? "1" : episode);
+            envelope.put("servers", out);
+            return envelope.toString();
+        } catch (Exception ignored) {
+            return null;
+        }
     }
 
     // ─── 2. harvest the site's player page ───────────────────────────────────
@@ -274,7 +289,7 @@ final class LiveSourceSync {
                     }
                     String normalised = null;
                     try {
-                        normalised = normalise(new JSONArray(raw));
+                        normalised = normalise(new JSONArray(raw), id, type, season, episode);
                     } catch (Exception ignored) {
                         normalised = null;
                     }

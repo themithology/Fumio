@@ -6,7 +6,11 @@ import {
 } from "../providers/sources.js";
 import { buildPlayerServerSlots } from "../providers/serverSlots.js";
 import { subscribeLiveHosts } from "../providers/liveHosts.js";
-import { liveSourcesAsPlayerSources, livePreferredKey, subscribeLiveSources } from "../providers/liveSources.js";
+import {
+  livePreferredKey,
+  liveSourcesAsPlayerSources,
+  subscribeLiveSources,
+} from "../providers/liveSources.js";
 import { checkStreamAlive } from "../lib/streamCheck.js";
 import ServerPickerBar from "./ServerPickerBar.jsx";
 import FumioPlayerStage from "./FumioPlayerStage.jsx";
@@ -39,11 +43,14 @@ export default function PlayerStage({
   const [useFumioPlayer, setUseFumioPlayer] = useState(false);
   const [phase, setPhase] = useState("checking"); // checking | playing | error
   const [fallbackSourceId, setFallbackSourceId] = useState(null);
-  const [hostsTick, setHostsTick] = useState(0);
+  const [hostsTick, setHostsTick] = useState(0); in this player (sub/dub lanes built from
+  // AniList ids, plus the resolver-gated ToonStream), so a list harvested from
+  // the site's page must not replace it — that is what broke anime playback.
+  const animeLane = Boolean(toonStreamLoading || toonStreamSource) || (animeSources?.length || 0) > 0;
   // The APK shell fetches the site's CURRENT server list and injects it here.
   // Present only inside the app; on the website this stays null and every
   // branch below keeps using the bundled list.
-  const [liveSources, setLiveSources] = useState(() => liveSourcesAsPlayerSources());
+  const [liveSources, setLiveSources] = useState(() => liveSourcesAsPlayerSources({ animeLane }));
   const timeoutRef = useRef(null);
   const tgLoadedRef = useRef(false);
 
@@ -54,7 +61,7 @@ export default function PlayerStage({
   const { fallbackSources, pickerSources } = slots;
 
   useEffect(() => {
-    setLiveSources(liveSourcesAsPlayerSources());
+    setLiveSources(liveSourcesAsPlayerSources({ animeLane }));
     setUseFumioPlayer(false);
     setPhase("checking");
     setFallbackSourceId(null);
@@ -65,7 +72,10 @@ export default function PlayerStage({
 
   // A fetch that lands after the player opened (or a cached list priming it)
   // replaces the bundled list in place — same player, same picker, new names.
-  useEffect(() => subscribeLiveSources(() => setLiveSources(liveSourcesAsPlayerSources())), []);
+  useEffect(
+    () => subscribeLiveSources(() => setLiveSources(liveSourcesAsPlayerSources({ animeLane }))),
+    [animeLane, tmdbId, mediaType, season, episode],
+  );
 
   // A deliberately chosen/persisted stable key is still honored, but only a
   // viewer choice can move to a fallback after this player has opened.
@@ -125,7 +135,18 @@ export default function PlayerStage({
 
   const returnToPrimary = () => chooseServer(TG_VID_SOURCE);
 
-  // Live list from the site wins: it is the thing the owner actually edits.
+  // Anime detection resolves after mount (Iris metadata + TMDB details), so a
+  // list that was adopted before it landed has to be dropped again.
+  useEffect(() => {
+    setLiveSources((current) => {
+      const next = liveSourcesAsPlayerSources({ animeLane });
+      if (!next && current) return null;
+      return current ?? next;
+    });
+  }, [animeLane, tmdbId, mediaType, season, episode]);
+
+  // Live list from the site wins on the NORMAL lane: it is the thing the
+  // owner actually edits.
   // Everything about the surface stays ours — FumioPlayerStage is this app's
   // player, it is only being handed a different set of servers.
   if (liveSources?.length) {
