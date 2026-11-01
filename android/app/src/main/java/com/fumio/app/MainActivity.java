@@ -86,6 +86,8 @@ public class MainActivity extends BridgeActivity {
     private boolean pipOpen;
     private volatile boolean suppressEmbedOpen = true;
     private long lastPlayerOpenAt;
+    /** Polls the browse WebView for the site's SPA player route. */
+    private Runnable playerRouteWatcher;
     private View fullscreenView;
     private WebChromeClient.CustomViewCallback fullscreenCallback;
 
@@ -554,6 +556,7 @@ public class MainActivity extends BridgeActivity {
                     view.clearHistory();
                 }
                 injectPlayerScript(view);
+                startPlayerRouteWatcher(view);
             }
             deliverPendingAuthToken();
         }
@@ -747,6 +750,13 @@ public class MainActivity extends BridgeActivity {
             // DownloadManager by the popup's listener.
             return false;
         }
+        if (isLiveSite(url) && isWatchPath(url) && !playerActive) {
+            // A Play button that opens the site's player in a new window:
+            // hand it to the APP's player instead of showing a web page.
+            dismissPopup();
+            openAppPlayerFromWatch(url);
+            return true;
+        }
         if (isBenignPopupUrl(url) || isAuthProvider(url) || isLiveSite(url)) return false;
         if (isDiscord(url)) {
             openExternal(url);
@@ -858,6 +868,69 @@ public class MainActivity extends BridgeActivity {
             appScheme.equalsIgnoreCase(url.getScheme());
     }
 
+    /**
+     * The site is a single-page app: its Play button calls history.pushState,
+     * which the WebView never reports through shouldOverrideUrlLoading —
+     * so the site's /player page used to load INSIDE the browse WebView.
+     *
+     * This watches the live WebView's location while the app player is closed
+     * and, the moment it lands on the player route, opens the APP's player and
+     * puts the browse page back where the viewer was. Deterministic: it does
+     * not depend on our injected script winning a race with the site's bundle.
+     */
+    private void startPlayerRouteWatcher(WebView view) {
+        if (view == null) return;
+        stopPlayerRouteWatcher();
+        playerRouteWatcher =
+            new Runnable() {
+                @Override
+                public void run() {
+                    Bridge bridge = getBridge();
+                    WebView live = bridge == null ? null : bridge.getWebView();
+                    if (live == null || playerActive || isFinishing() || isDestroyed()) return;
+                    live.evaluateJavascript(
+                        "(function(){try{return location.pathname+location.search;}catch(e){return '';}})()",
+                        value -> {
+                            String raw = value == null ? "" : value;
+                            if (raw.startsWith("\"") && raw.endsWith("\"") && raw.length() > 1) {
+                                raw = raw.substring(1, raw.length() - 1);
+                            }
+                            raw = raw.replace("\\/", "/");
+                            if (raw.isEmpty() || playerActive) return;
+                            Uri target = Uri.parse(LIVE_ORIGIN + (raw.startsWith("/") ? raw : "/" + raw));
+                            if (!isWatchPath(target)) return;
+                            stopPlayerRouteWatcher();
+                            openAppPlayerFromWatch(target);
+                            // Put the browse page back so closing the player
+                            // lands on the details page, not on /player.
+                            live.post(
+                                () ->
+                                    live.evaluateJavascript(
+                                        "(function(){try{history.back();}catch(e){}})()",
+                                        null
+                                    )
+                            );
+                        }
+                    );
+                    view.postDelayed(this, 400);
+                }
+            };
+        view.postDelayed(playerRouteWatcher, 400);
+    }
+
+    private void stopPlayerRouteWatcher() {
+        Runnable watcher = playerRouteWatcher;
+        playerRouteWatcher = null;
+        if (watcher == null) return;
+        try {
+            Bridge bridge = getBridge();
+            WebView live = bridge == null ? null : bridge.getWebView();
+            if (live != null) live.removeCallbacks(watcher);
+        } catch (Exception ignored) {
+            /* activity going away */
+        }
+    }
+
     private void injectPlayerScript(WebView view) {
         if (view == null || playerScript == null || playerScript.isEmpty()) return;
         view.evaluateJavascript(playerScript, null);
@@ -961,6 +1034,7 @@ public class MainActivity extends BridgeActivity {
         if (id == null || id.isEmpty()) return;
         if (playerActive) return;
         playerActive = true;
+        stopPlayerRouteWatcher();
         lastPlayerOpenAt = System.currentTimeMillis();
         freezeLiveWebView(true, true);
         SystemBars.hide(getWindow(), liveWebView());
@@ -984,6 +1058,10 @@ public class MainActivity extends BridgeActivity {
 
     private void onOverlayClosed(String continueWatching) {
         playerActive = false;
+        Bridge afterBridge = getBridge();
+        if (afterBridge != null && afterBridge.getWebView() != null) {
+            startPlayerRouteWatcher(afterBridge.getWebView());
+        }
         pipOpen = false;
         setPipAutoEnter(false);
         freezeLiveWebView(false, true);
