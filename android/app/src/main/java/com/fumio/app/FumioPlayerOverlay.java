@@ -4,14 +4,11 @@ import android.app.Activity;
 import android.content.pm.ActivityInfo;
 import android.content.res.AssetManager;
 import android.net.Uri;
-import android.os.Handler;
-import android.os.Looper;
 import android.view.View;
 import android.view.ViewGroup;
 import android.webkit.CookieManager;
 import android.webkit.JavascriptInterface;
 import android.webkit.WebChromeClient;
-import android.webkit.WebResourceError;
 import android.webkit.WebResourceRequest;
 import android.webkit.WebResourceResponse;
 import android.webkit.WebSettings;
@@ -20,31 +17,28 @@ import android.webkit.WebViewClient;
 import android.widget.FrameLayout;
 import androidx.webkit.WebViewAssetLoader;
 import java.io.InputStream;
-import java.util.LinkedHashMap;
 import java.util.Locale;
-import java.util.Map;
 import org.json.JSONArray;
 import org.json.JSONObject;
 import org.json.JSONTokener;
 
 /**
- * Fullscreen player surface.
+ * The app's own fullscreen player.
  *
- * ─── 2026-10-28: the player now comes FROM THE SITE, not from the APK ───────
- * Until today this overlay always loaded {@code https://localhost/watch/…} —
- * the build frozen inside the APK's assets. That is why renaming a server or
- * moving a host on the site changed nothing in the app: the app was playing a
- * months-old copy of players.js / sources.js / serverRegistry.
+ * ─── What is ours, and what comes from the website ─────────────────────────
+ * OURS: this is the bundled player build ({@code https://localhost}), with its
+ * own iframe surface, its own server picker, its own theme and its own ad
+ * behaviour. The website's player page is never embedded here — that was a
+ * mistake on 2026-10-28 and is gone.
  *
- * Now the overlay loads {@code https://theogpiratebot.online/watch/…} FIRST, so
- * every server list, label, order, embed parameter, ad unit and mobile layout
- * change on the site is live in the app the moment it deploys — no APK release.
+ * THE WEBSITE'S: the server LIST. Names, order, count and embed URLs are
+ * fetched live by {@link LiveSourceSync} (a /api/players answer when the site
+ * offers one, otherwise a harvest of the site's own player page) and pushed
+ * into the page as {@code window.__fumioLiveSources}. Rename, reorder, add or
+ * retire a server on the site and the app shows it with no APK release.
  *
- * The bundled build stays mounted under {@code https://localhost} as the
- * FALLBACK: it is used only when the live page does not paint in
- * LIVE_TIMEOUT_MS or fails at the network level (offline, site down, bad
- * deploy). Playback therefore still works on a plane and during an outage, and
- * a broken deploy can never turn the player into a black screen.
+ * If the fetch fails (offline, site down), the bundled list stays in place, so
+ * playback never depends on the network call succeeding.
  */
 final class FumioPlayerOverlay {
 
@@ -54,11 +48,8 @@ final class FumioPlayerOverlay {
 
     private static final String AUTH_KEY = "firebase:authUser:AIzaSyDapNgnKdO8l_t7BJPCO8IsbL73aILA1cI:[DEFAULT]";
 
-    /** Where the live player lives. The bundled asset copy is the fallback. */
-    private static final String LIVE_ORIGIN = "https://theogpiratebot.online";
+    /** The app's own player build, served out of the APK. */
     private static final String LOCAL_ORIGIN = "https://localhost";
-    /** How long the live player gets before the offline copy takes over. */
-    private static final long LIVE_TIMEOUT_MS = 14000;
 
     private final Activity activity;
     private final Host host;
@@ -80,13 +71,8 @@ final class FumioPlayerOverlay {
 
     /** Bundled-build route (/watch/…) — what the offline fallback replays. */
     private String playerPath = "";
-    /** Site route (/player?…) — what the live player is opened with. */
-    private String livePath = "";
-    private final Handler handler = new Handler(Looper.getMainLooper());
-    private Runnable liveWatchdog;
-    private volatile boolean livePainted;
-    /** True once the bundled copy owns the screen; a burst of errors must not reload it. */
-    private boolean usingFallback;
+    /** Live server list from the website as JSON; null until it is fetched. */
+    private String pendingSourcesJson;
 
     FumioPlayerOverlay(Activity activity, Host host) {
         this.activity = activity;
@@ -141,14 +127,11 @@ final class FumioPlayerOverlay {
         lastId = id;
         lastSeason = empty(season) ? "1" : season;
         lastEpisode = empty(episode) ? "1" : episode;
-        // TWO routes, deliberately:
-        //   · LIVE  — the site's own player route: /player?type=…&id=…  (this is
-        //     what the website itself links to; /watch/… 404s there)
-        //   · LOCAL — the bundled build's router: /watch/{type}/{id}?…
-        // They are not interchangeable, which is exactly why the live player
-        // answered with the site's 404 page on the first try.
+        // The player UI is OURS — this bundled page, its iframe, its picker,
+        // its theme. Only the server LIST comes from the website: LiveSourceSync
+        // fetches it and injects it as window.__fumioLiveSources. If that fetch
+        // fails the page keeps its bundled list, exactly as before.
         playerPath = localPathFor(media, id, season, episode);
-        livePath = livePathFor(media, id, season, episode);
         previousOrientation = activity.getRequestedOrientation();
         activity.setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE);
         if (webView == null) webView = buildPlayerView();
@@ -156,69 +139,44 @@ final class FumioPlayerOverlay {
         root.setVisibility(View.VISIBLE);
         root.bringToFront();
         hideSystemUi();
-        loadLive(livePath);
+        loadLocal(playerPath);
+        primeLiveSources();
     }
 
     /**
-     * The website's player URL, exactly the shape the site links to itself:
-     *   /player?id=312359&type=tv&season=1&episode=1&server=0
-     * `server` is the site's own slot index / stable key, so a deep link that
-     * names a server keeps naming it. Anything else (/watch/movie/1) is the
-     * site's 404 page.
+     * Give the player page the live server list: the cached copy immediately
+     * (zero delay), then the freshly fetched one when it lands.
      */
-    private String livePathFor(String media, String id, String season, String episode) {
-        StringBuilder base = new StringBuilder("id=").append(Uri.encode(id));
-        base.append("&type=").append("movie".equals(media) ? "movie" : "tv");
-        if (!"movie".equals(media)) {
-            base.append("&season=").append(empty(season) ? "1" : season);
-            base.append("&episode=").append(empty(episode) ? "1" : episode);
-        }
-        if (!empty(pendingServer)) base.append("&server=").append(Uri.encode(pendingServer));
-
-        String query = mergeQuery(base.toString(), pendingSourceQuery);
-        return query.isEmpty() ? "/player" : "/player?" + query;
-    }
-
-    /**
-     * Base parameters (what the app knows) + the ORIGINAL query, which wins.
-     *
-     * This is the end of "the app has to be taught the website's URL": every
-     * parameter the site sent — server, anilist anchor, UI season, anything
-     * added later — survives the hand-off because it is copied, not rebuilt.
-     * Only the keys the app must guarantee (id/type/season/episode) are added
-     * when the link did not carry them.
-     */
-    private static String mergeQuery(String baseQuery, String sourceQuery) {
-        LinkedHashMap<String, String> pairs = new LinkedHashMap<>();
-        collectPairs(pairs, baseQuery);
-        collectPairs(pairs, sourceQuery); // the site's own values win
-        StringBuilder out = new StringBuilder();
-        for (Map.Entry<String, String> entry : pairs.entrySet()) {
-            String key = entry.getKey();
-            String value = entry.getValue();
-            if (key == null || key.isEmpty() || value == null) continue;
-            if (out.length() > 0) out.append('&');
-            out.append(Uri.encode(key)).append('=').append(Uri.encode(value));
-        }
-        return out.toString();
-    }
-
-    private static void collectPairs(Map<String, String> into, String query) {
-        if (query == null || query.isEmpty()) return;
-        String clean = query.startsWith("?") ? query.substring(1) : query;
-        for (String pair : clean.split("&")) {
-            if (pair.isEmpty()) continue;
-            int eq = pair.indexOf('=');
-            String key = eq >= 0 ? pair.substring(0, eq) : pair;
-            String value = eq >= 0 ? pair.substring(eq + 1) : "";
-            try {
-                key = Uri.decode(key);
-                value = Uri.decode(value);
-            } catch (Exception ignored) {
-                /* keep the raw pair; a bad escape must not drop the link */
+    private void primeLiveSources() {
+        pendingSourcesJson = LiveSourceSync.cachedFor(activity, lastId, lastType, lastSeason, lastEpisode);
+        applyLiveSources();
+        LiveSourceSync.fetch(
+            activity,
+            lastId,
+            lastType,
+            lastSeason,
+            lastEpisode,
+            json -> {
+                if (json == null) return;
+                pendingSourcesJson = json;
+                applyLiveSources();
             }
-            if (key == null || key.isEmpty()) continue;
-            into.put(key, value == null ? "" : value);
+        );
+    }
+
+    /** Injects the list into the player page (no-op while it is loading). */
+    private void applyLiveSources() {
+        if (webView == null || pendingSourcesJson == null) return;
+        try {
+            final String raw = pendingSourcesJson;
+            String quoted = JSONObject.quote(raw);
+            webView.evaluateJavascript(
+                "(function(raw){try{window.__fumioLiveSources=JSON.parse(raw);"
+                    + "window.dispatchEvent(new Event('fumio-live-sources'));}catch(e){}})" + "(" + quoted + ")",
+                null
+            );
+        } catch (Exception ignored) {
+            /* the bundled list stays in place */
         }
     }
 
@@ -241,42 +199,10 @@ final class FumioPlayerOverlay {
         return local.toString();
     }
 
-    /** The site's own player — the default, and the reason updates need no APK. */
-    private void loadLive(String path) {
-        if (webView == null) return;
-        livePainted = false;
-        usingFallback = false;
-        armWatchdog(path);
-        webView.loadUrl(LIVE_ORIGIN + path);
-    }
-
     /** The build frozen in the APK — offline, or the site did not answer. */
     private void loadLocal(String path) {
         if (webView == null) return;
-        if (usingFallback) return;
-        usingFallback = true;
-        cancelWatchdog();
         webView.loadUrl(LOCAL_ORIGIN + path);
-    }
-
-    /**
-     * A live page that never paints must not leave the viewer on a black
-     * screen: the bundled build takes over after LIVE_TIMEOUT_MS.
-     */
-    private void armWatchdog(String path) {
-        cancelWatchdog();
-        final String target = path;
-        liveWatchdog = () -> {
-            if (!livePainted && webView != null) loadLocal(playerPath);
-        };
-        handler.postDelayed(liveWatchdog, LIVE_TIMEOUT_MS);
-    }
-
-    private void cancelWatchdog() {
-        if (liveWatchdog != null) {
-            handler.removeCallbacks(liveWatchdog);
-            liveWatchdog = null;
-        }
     }
 
     private void attachToActivity() {
@@ -436,32 +362,6 @@ final class FumioPlayerOverlay {
 
                 @Override
                 public void onPageFinished(WebView v, String url) {
-                    if (isLiveUrl(url)) {
-                        // The site answered — this player IS the site now, so
-                        // nothing about it can drift from the deploy again.
-                        livePainted = true;
-                        usingFallback = false;
-                        cancelWatchdog();
-                        // …unless what it answered with is its own 404 page
-                        // (which paints perfectly and would otherwise be
-                        // accepted as a working player).
-                        v.evaluateJavascript(
-                            "document.title",
-                            value -> {
-                                String title = String.valueOf(value == null ? "" : value).toLowerCase(Locale.US);
-                                if (usingFallback) return;
-                                if (title.contains("not found") || title.contains("404")) {
-                                    livePainted = false;
-                                    loadLocal(playerPath);
-                                }
-                            }
-                        );
-                    } else if (isLocalUrl(url)) {
-                        // Offline copy (or a failed live load): never race it
-                        // back to the network mid-playback.
-                        cancelWatchdog();
-                        usingFallback = true;
-                    }
                     v.evaluateJavascript(
                         "(function(){try{window.open=function(){return null;}}catch(e){}})()",
                         null
@@ -469,29 +369,11 @@ final class FumioPlayerOverlay {
                     LiveServers.bindPlayer(v);
                     applySeed();
                     injectTrail(v);
+                    // The player page must never lose the live list: re-apply
+                    // it after every render (episode change, server switch).
+                    applyLiveSources();
                 }
 
-                @Override
-                public void onReceivedError(WebView v, WebResourceRequest request, WebResourceError error) {
-                    // A dead network / dead site falls back ONCE to the
-                    // bundled build; an offline copy that fails has nothing
-                    // left to try.
-                    if (usingFallback) return;
-                    if (request != null && request.isForMainFrame()
-                        && isLiveUrl(String.valueOf(request.getUrl()))) {
-                        livePainted = false;
-                        loadLocal(playerPath);
-                    }
-                }
-
-                @Override
-                @SuppressWarnings("deprecation")
-                public void onReceivedError(WebView v, int errorCode, String description, String failingUrl) {
-                    if (!usingFallback && isLiveUrl(failingUrl)) {
-                        livePainted = false;
-                        loadLocal(playerPath);
-                    }
-                }
             }
         );
         view.setWebChromeClient(
@@ -700,14 +582,6 @@ final class FumioPlayerOverlay {
             /* nothing to show */
         }
         return true;
-    }
-
-    private static boolean isLiveUrl(String url) {
-        return url != null && url.startsWith(LIVE_ORIGIN);
-    }
-
-    private static boolean isLocalUrl(String url) {
-        return url != null && url.startsWith(LOCAL_ORIGIN);
     }
 
     private static boolean isSpaRoute(String path) {

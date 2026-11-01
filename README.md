@@ -149,57 +149,38 @@ npm run worker:dev     # http://127.0.0.1:8787, via workerd
 npm run dev            # Vite proxies /tmdb and /api to it
 ```
 
-### Where the player actually comes from (2026-10-28)
+### The player: ours — the servers: the site's
 
-The Android app has two WebViews, and until 2026-10-28 only one of them was
-live:
+The app has its **own** player: the bundled build (`https://localhost`), its own
+iframe surface, its own picker, its own theme and its own ad behaviour. The
+website's player page is **never** embedded — that was a wrong turn on
+2026-10-28 and it is gone.
 
-| Surface | Loaded | Freshness |
-| --- | --- | --- |
-| Browsing (Home, Details, Search, Live TV, /download…) | `https://theogpiratebot.online` | always the newest deploy |
-| Player | `https://localhost/watch/…` — the build frozen in the APK's `assets/public` | froze at release time |
+What comes from the website is the **server list** — names, order, count and
+each embed URL — because the site is the thing the owner edits:
 
-That is why renaming a server or moving an embed host on the website changed
-nothing inside the app: the player was running a months-old copy of
-`src/providers/*`. A regex scraper (`LiveServers.java`) could only rewrite a
-hostname from six known families, and could never change a slot order, a label,
-an embed parameter, or add/remove a server.
+- `LiveSourceSync.java` asks `GET /api/players?id=&type=&season=&episode=`
+  (contract in `docs/iris-players-endpoint.md`). One request, ~50 ms.
+- If the site has no such endpoint, it **harvests** the site's own player page
+  in an offscreen WebView: it clicks each `Server N (…)` button and records the
+  iframe URL the site then plays. Same data, no site change required.
+- The list is cached per title+episode for 6 hours and injected into the player
+  page as `window.__fumioLiveSources`.
+- `src/providers/liveSources.js` is the only consumer: when that array exists,
+  `PlayerStage` feeds it to `FumioPlayerStage` instead of the bundled list.
+- Nothing fetched? The bundled list stays. Playback never waits on the network
+  call.
 
-Now (`FumioPlayerOverlay`):
+So: rename, reorder, add or retire a server on the website → the app shows it,
+with no APK release.
 
-1. The player loads **`https://theogpiratebot.online/watch/…`** first, so every
-   server list, label, slot order, embed parameter, ad unit and mobile layout
-   change on the site is live in the app the instant it deploys — **no APK
-   release for a server change, ever**.
-2. The bundled build stays mounted at `https://localhost` as the **fallback**:
-   used when the live page fails at the network level or has not painted within
-   `LIVE_TIMEOUT_MS` (14 s). Offline playback and outages still work, and a bad
-   deploy cannot leave the player on a black screen.
-3. `LiveServers.java` still scrapes host families and injects
-   `window.__fumioLiveHosts` — it now only keeps that *offline* copy pointing at
-   living hosts.
-
-The app never rebuilds the site's player URL from scratch. `FumioPlayerOverlay`
-takes the **original encoded query string** of whatever link started playback
-and merges it over its own defaults (`mergeQuery`), so every parameter the site
-uses — `server` (slot index *or* stable key), the `anilist` anchor, UI season
-values, anything added next month — reaches the live player untouched. Adding a
-parameter to `/player` therefore never needs an APK release; only `id` and
-`type` are guaranteed when a link omits them.
-
-If the site's route itself ever changes, the player answers with a page whose
-title says 404/Not Found, which the overlay treats as a failed load and falls
-back to the bundled build — a wrong guess degrades to offline playback instead
-of a dead screen.
-
-Side effect worth knowing: browsing and the player share one origin again, so
+Side effect worth knowing: browsing and the player share one origin, so
 Continue Watching / the auth token live in a single `localStorage` instead of
-two (`applySeed()` seeds the live origin on player open).
+two (`applySeed()` seeds it on player open).
 
-The `src/providers/*` files in this repo are now strictly the **offline
-fallback** lane. Editing them no longer changes what a phone plays, so keep
-server work in the website repo and only touch these when the fallback itself
-needs to move.
+The `src/providers/*` files in this repo remain the **offline / first-run
+fallback** lane: they are what plays before the fetch lands, and when the site
+cannot be reached at all.
 
 ### Downloads
 

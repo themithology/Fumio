@@ -6,6 +6,7 @@ import {
 } from "../providers/sources.js";
 import { buildPlayerServerSlots } from "../providers/serverSlots.js";
 import { subscribeLiveHosts } from "../providers/liveHosts.js";
+import { liveSourcesAsPlayerSources, livePreferredKey, subscribeLiveSources } from "../providers/liveSources.js";
 import { checkStreamAlive } from "../lib/streamCheck.js";
 import ServerPickerBar from "./ServerPickerBar.jsx";
 import FumioPlayerStage from "./FumioPlayerStage.jsx";
@@ -39,6 +40,10 @@ export default function PlayerStage({
   const [phase, setPhase] = useState("checking"); // checking | playing | error
   const [fallbackSourceId, setFallbackSourceId] = useState(null);
   const [hostsTick, setHostsTick] = useState(0);
+  // The APK shell fetches the site's CURRENT server list and injects it here.
+  // Present only inside the app; on the website this stays null and every
+  // branch below keeps using the bundled list.
+  const [liveSources, setLiveSources] = useState(() => liveSourcesAsPlayerSources());
   const timeoutRef = useRef(null);
   const tgLoadedRef = useRef(false);
 
@@ -49,6 +54,7 @@ export default function PlayerStage({
   const { fallbackSources, pickerSources } = slots;
 
   useEffect(() => {
+    setLiveSources(liveSourcesAsPlayerSources());
     setUseFumioPlayer(false);
     setPhase("checking");
     setFallbackSourceId(null);
@@ -56,6 +62,10 @@ export default function PlayerStage({
   }, [tmdbId, mediaType, season, episode]);
 
   useEffect(() => subscribeLiveHosts(() => setHostsTick((tick) => tick + 1)), []);
+
+  // A fetch that lands after the player opened (or a cached list priming it)
+  // replaces the bundled list in place — same player, same picker, new names.
+  useEffect(() => subscribeLiveSources(() => setLiveSources(liveSourcesAsPlayerSources())), []);
 
   // A deliberately chosen/persisted stable key is still honored, but only a
   // viewer choice can move to a fallback after this player has opened.
@@ -114,6 +124,22 @@ export default function PlayerStage({
   };
 
   const returnToPrimary = () => chooseServer(TG_VID_SOURCE);
+
+  // Live list from the site wins: it is the thing the owner actually edits.
+  // Everything about the surface stays ours — FumioPlayerStage is this app's
+  // player, it is only being handed a different set of servers.
+  if (liveSources?.length) {
+    return (
+      <FumioPlayerStage
+        tmdbId={tmdbId}
+        mediaType={mediaType}
+        season={season}
+        episode={episode}
+        sources={liveSources}
+        initialSourceId={livePreferredKey() || liveSources[0].id}
+      />
+    );
+  }
 
   if (useFumioPlayer) {
     return (
