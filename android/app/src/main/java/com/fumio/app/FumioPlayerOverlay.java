@@ -262,7 +262,6 @@ final class FumioPlayerOverlay {
     }
 
     private void destroyView() {
-        cancelWatchdog();
         LiveServers.bindPlayer(null);
         WebView view = webView;
         FrameLayout holder = root;
