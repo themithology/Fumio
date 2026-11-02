@@ -335,6 +335,7 @@ final class LiveSourceSync {
                     try {
                         JSONArray servers = null;
                         String href = null;
+                        int seen = -1;
                         String trimmed = raw.trim();
                         if (trimmed.startsWith("[")) {
                             servers = new JSONArray(trimmed);
@@ -342,6 +343,15 @@ final class LiveSourceSync {
                             JSONObject payload = new JSONObject(trimmed);
                             servers = payload.optJSONArray("servers");
                             href = payload.optString("href", null);
+                            seen = payload.optInt("seen", -1);
+                        }
+                        // A list with holes is worse than no list: it is how
+                        // the picker ended up offering "Server 1" and
+                        // "Server 9" and nothing else. If the page rendered
+                        // more servers than we could capture, discard the lot
+                        // and let the bundled list (which is complete) play.
+                        if (seen > 0 && servers != null && servers.length() < seen) {
+                            servers = null;
                         }
                         normalised = normalise(servers, id, type, season, episode, href);
                     } catch (Exception ignored) {
@@ -383,27 +393,41 @@ final class LiveSourceSync {
     private static final String HARVEST_JS =
         "(async function(){"
             + "var sleep=function(ms){return new Promise(function(r){setTimeout(r,ms);});};"
-            + "var report=function(list){try{FumioHarvest.deliver(JSON.stringify({servers:list||[],href:String(location.href||'')}));}catch(e){}};"
+            + "var report=function(list){try{FumioHarvest.deliver(JSON.stringify({servers:list||[],seen:seen,href:String(location.href||'')}));}catch(e){}};"
             + "var buttons=function(){var all=document.querySelectorAll('button');var out=[];"
             + "for(var i=0;i<all.length;i++){var t=(all[i].textContent||'').replace(/\\s+/g,' ').trim();"
             + "if(/^Server\\s+\\d+/i.test(t)&&!all[i].disabled)out.push(all[i]);}return out;};"
             + "var frame=function(){var f=document.querySelector('iframe[src]');return f?f.src:'';};"
             + "for(var w=0;w<60&&buttons().length===0;w++){await sleep(250);}"
             + "var first=buttons();"
-            + "if(!first.length){report([]);return;}"
-            + "var out=[];"
-            + "for(var i=0;i<first.length;i++){"
-            + "  var list=buttons();var b=list[i];if(!b)continue;"
-            + "  var label=(b.textContent||'').replace(/\\s+/g,' ').trim();"
+            + "var seen=first.length;"
+            + "if(!seen){report([]);return;}"
+            + "var labels=first.map(function(b){return (b.textContent||'').replace(/\\s+/g,' ').trim();});"
+            + "var out=[];var used={};"
+            + "for(var i=0;i<labels.length;i++){"
+            + "  var label=labels[i];"
+            // Find the button by its LABEL, never by position: clicking
+            // re-renders the list, so a positional index drifts and captures
+            // are lost — that is how eleven servers turned into two.
+            + "  var b=null;var list=buttons();"
+            + "  for(var j=0;j<list.length;j++){"
+            + "    var t=(list[j].textContent||'').replace(/\\s+/g,' ').trim();"
+            + "    if(t===label&&!used[t]){b=list[j];break;}"
+            + "  }"
+            + "  if(!b)continue;"
+            + "  used[label]=true;"
             + "  var before=frame();"
             + "  try{b.click();}catch(e){continue;}"
-            + "  var src=before;"
-            + "  for(var k=0;k<40;k++){await sleep(150);var now=frame();"
+            + "  var src='';"
+            // Wait for a NEW url; if the url never changes (identical embed,
+            // slow render) keep what the iframe holds rather than dropping
+            // the server.
+            + "  for(var k=0;k<45;k++){await sleep(150);var now=frame();"
             + "    if(now&&now!==before){src=now;break;}"
-            + "    if(k===20&&now&&!src){src=now;}}"
+            + "    if(now)src=now;}"
             + "  if(src&&src.indexOf('http')===0){"
             + "    var key=label.replace(/^Server\\s+\\d+\\s*/i,'').replace(/[()]/g,'').trim()||('server-'+i);"
-            + "    out.push({key:key,label:label,url:src,index:i});}"
+            + "    out.push({key:key,label:label,url:src,index:out.length});}"
             + "}"
             + "report(out);"
             + "})();";

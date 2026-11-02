@@ -159,11 +159,13 @@ website's player page is **never** embedded — that was a wrong turn on
 What comes from the website is the **server list** — names, order, count and
 each embed URL — because the site is the thing the owner edits:
 
-- `LiveSourceSync.java` asks `GET /api/players?id=&type=&season=&episode=`
-  (contract in `docs/iris-players-endpoint.md`). One request, ~50 ms.
-- If the site has no such endpoint, it **harvests** the site's own player page
-  in an offscreen WebView: it clicks each `Server N (…)` button and records the
-  iframe URL the site then plays. Same data, no site change required.
+- `LiveSourceSync.java` **harvests** the site's own player page in an offscreen
+  WebView: it waits for the site's React render, then clicks each
+  `Server N (…)` button and records the iframe URL the site plays. Nothing is
+  required from the website — no endpoint, no export, no hardcoded list.
+  Buttons are matched by their LABEL (never by position, which drifts as the
+  site re-renders), and a capture that misses any server the page rendered is
+  discarded rather than half-used.
 - The list is cached per title+episode for 6 hours and injected into the player
   page as `window.__fumioLiveSources`.
 - `src/providers/liveSources.js` is the only consumer: when that array exists,

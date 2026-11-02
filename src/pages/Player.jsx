@@ -325,6 +325,14 @@ export default function Player() {
 
     const readIframeEpisode = () => {
       if (type !== "tv") return;
+      // When the server list came from the WEBSITE (the app's dynamic list),
+      // the episode numbers inside those embed URLs are the SITE's numbering —
+      // anime arcs, TMDB/AniList bridges, its own season mapping. Following
+      // them would move the app to a season it never asked for ("Now tracking
+      // S2 E50" on a S1E1 click). Playback tracking stays with the player's own
+      // progress messages, and the embed URL is what the site would play.
+      const liveList = typeof window !== "undefined" && Boolean(window.__fumioLiveSources);
+      if (liveList) return;
       document.querySelectorAll("iframe").forEach((frame) => {
         const src = frame.getAttribute("src") || "";
         const match = src.match(/\/(?:embed\/)?tv\/(\d+)\/(\d+)\/(\d+)/i);

@@ -21,6 +21,22 @@ import FumioPlayerStage from "./FumioPlayerStage.jsx";
 // and then disappears from unexpectedly jumping to VidStuck.
 const TG_LOAD_TIMEOUT_MS = 12000;
 
+/**
+ * The live list is re-read whenever the shell re-injects it — but its ARRAY
+ * identity must stay stable, or FumioPlayerStage remounts its iframe and
+ * restarts the "checking" phase on every render (infinite spinner).
+ */
+const fingerprint = (list) => {
+  if (!list?.length) return { key: "", list: null };
+  const key = list.map((source) => `${source.id}|${source.name}|${source.url()}`).join("~");
+  return { key, list };
+};
+
+const keepIfSame = (current, next) => {
+  const fresh = fingerprint(next);
+  return current.key === fresh.key ? current : fresh;
+};
+
 const rememberServer = (serverKey, titleId) => {
   try {
     localStorage.setItem("preferredServerKey", serverKey);
@@ -47,7 +63,8 @@ export default function PlayerStage({
   // The APK shell fetches the site's CURRENT server list and injects it here.
   // Present only inside the app; on the website this stays null and every
   // branch below keeps using the bundled list.
-  const [liveSources, setLiveSources] = useState(() => liveSourcesAsPlayerSources());
+  const [liveLists, setLiveLists] = useState(() => fingerprint(liveSourcesAsPlayerSources()));
+  const liveSources = liveLists.list;
   const timeoutRef = useRef(null);
   const tgLoadedRef = useRef(false);
 
@@ -58,7 +75,7 @@ export default function PlayerStage({
   const { fallbackSources, pickerSources } = slots;
 
   useEffect(() => {
-    setLiveSources(liveSourcesAsPlayerSources());
+    setLiveLists((current) => keepIfSame(current, liveSourcesAsPlayerSources()));
     setUseFumioPlayer(false);
     setPhase("checking");
     setFallbackSourceId(null);
@@ -70,7 +87,10 @@ export default function PlayerStage({
   // A fetch that lands after the player opened (or a cached list priming it)
   // replaces the bundled list in place — same player, same picker, new names.
   useEffect(
-    () => subscribeLiveSources(() => setLiveSources(liveSourcesAsPlayerSources())),
+    () =>
+      subscribeLiveSources(() =>
+        setLiveLists((current) => keepIfSame(current, liveSourcesAsPlayerSources())),
+      ),
     [tmdbId, mediaType, season, episode],
   );
 
@@ -146,6 +166,11 @@ export default function PlayerStage({
         episode={episode}
         sources={liveSources}
         initialSourceId={livePreferredKey() || liveSources[0].id}
+        onDeadEnd={() => {
+          // Nothing in the site's list could play here (host blocked, moved,
+          // wrong episode). Drop to the bundled lane instead of a dead screen.
+          setLiveLists({ key: "", list: null });
+        }}
       />
     );
   }
