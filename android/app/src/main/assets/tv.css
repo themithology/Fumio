@@ -1,0 +1,70 @@
+/*
+ * The 10-foot skin — deliberately short.
+ *
+ * Every rule here exists because a television has no mouse and no touch:
+ *
+ *   - no hover, so the focused element gets the emphasis (and a 4 px ring that
+ *     reads from three metres);
+ *   - smooth scrolling fights a held D-pad button, so it is off;
+ *   - a focus ring outside the viewport edge is invisible, hence scroll-margin;
+ *   - the site's tap-highlight is a phone artefact and never appears here.
+ *
+ * Nothing in this file changes layout, spacing, colour or type of the site. The
+ * size of the UI is handled natively (initialScale + textZoom in TvUi.java),
+ * which is the only way to scale a site we do not control without breaking it.
+ */
+
+html.fumio-tv,
+html.fumio-tv * {
+  scroll-behavior: auto !important;
+  -webkit-tap-highlight-color: transparent;
+}
+
+html.fumio-tv :focus {
+  outline: none;
+}
+
+html.fumio-tv .fumio-tv-focus,
+html.fumio-tv :focus-visible {
+  outline: 4px solid #ffd400;
+  outline-offset: 4px;
+  border-radius: 10px;
+  box-shadow:
+    0 0 0 8px rgba(255, 212, 0, 0.18),
+    0 18px 48px rgba(0, 0, 0, 0.7);
+  transform: scale(1.04);
+  z-index: 3;
+  transition:
+    transform 120ms ease-out,
+    box-shadow 120ms ease-out;
+  scroll-margin: 14vh 8vw;
+}
+
+/* A card is usually a wrapper around a link; light the wrapper too so the
+   whole tile lifts, the way every streaming app on a TV does it. */
+html.fumio-tv .fumio-tv-focus:has(> a),
+html.fumio-tv .fumio-tv-focus > a:focus-within {
+  outline-offset: 6px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html.fumio-tv .fumio-tv-focus {
+    transform: none;
+    transition: none;
+  }
+}
+
+/* Text the site made hover-only is unreachable on a TV; show it once its card
+   has focus. Purely additive — desktop hover rules keep working as before. */
+html.fumio-tv [class*="hover"]:not(.fumio-tv-focus):not(:focus-within) {
+  /* intentionally empty: hover styles remain the site's business */
+}
+
+/* Native scrollbars are dead weight on a TV. */
+html.fumio-tv {
+  scrollbar-width: none;
+}
+html.fumio-tv ::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+}

@@ -55,6 +55,11 @@ final class FumioPlayerOverlay {
     private final Host host;
     private FrameLayout root;
     private WebView webView;
+
+    /** The player surface, for the TV key router (TvUi.keyTarget). */
+    WebView playerWebView() {
+        return webView;
+    }
     private View customView;
     private WebChromeClient.CustomViewCallback customCallback;
     private int previousOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED;
@@ -368,6 +373,10 @@ final class FumioPlayerOverlay {
                     LiveServers.bindPlayer(v);
                     applySeed();
                     injectTrail(v);
+                    // The player page is ours and ships with the APK, so the
+                    // TV layer is injected here too — same focus engine, same
+                    // scale. No-op on a phone.
+                    TvUi.onPageFinished(activity, v);
                     // The player page must never lose the live list: re-apply
                     // it after every render (episode change, server switch).
                     applyLiveSources();

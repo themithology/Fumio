@@ -5,6 +5,13 @@ Target: one APK, `com.fumio.app`, that is a good phone app **and** a genuinely
 good 10-foot app — D-pad first, no ad wall, proportions that read from 3 m,
 and it must not break the day the website ships something new.
 
+**Built in this pass (T0, T1, T2, the updater), all unverified on a real TV:**
+manifest/banner/leanback entry, `TvMode`, `TvUi` + `assets/tv-nav.js` +
+`assets/tv-viewport.js` + `assets/tv.css`, the ad-wall gate, `Updater`, and a
+versionCode stamped by CI. Verification so far is `docs/tv-ui.test.cjs`
+(18/18 against a synthetic 1920×1080 DOM) plus a full APK build. **Nothing has
+run on a television yet** — §8 keeps that honest.
+
 **Distribution: direct APK** (GitHub release → sideload). Not the Play Store, so
 no listing/TV-review/package rules apply. That removes a pile of constraints and
 adds three of its own — signing stability, an install path for a remote-only
@@ -35,7 +42,36 @@ Two consequences that decide the whole architecture:
 
 ---
 
-## 2. The core fork (pick one)
+## 2. The core fork — DECIDED: B (native TV shell)
+
+**Decision (2026-11-03): B, the native TV shell.** The owner's reason: the app's
+cloud-sync setup is complicated enough that skinning the live site on a TV
+adds a second thing to keep in sync with it. So the TV gets a real television
+UI built natively, not a scaled website.
+
+Two facts make B affordable rather than a rewrite:
+
+1. **There is already a data contract that is not the website's DOM.**
+   `src/lib/proxyTiers.js` + `src/lib/tmdb.js` show the app talks to
+   `GET {base}/tmdb/{path}?{params}` through a ladder of four Cloudflare
+   workers (plus same-origin), with `https://image.tmdb.org/t/p/{size}{path}`
+   for art. A native shell can call exactly that: no key, no scraping, and it
+   is *the same pipeline the phone uses today*.
+2. **Playback is already ours.** The server list comes from
+   `GET /api/players` (or the harvest fallback), and the player is the bundled
+   `https://localhost/watch/...` surface. The shell only has to decide *what*
+   to watch and hand `{type,id,season,episode,server}` to the existing overlay.
+
+So the shell duplicates **presentation only** — rows, cards, details, pickers —
+over data both builds already consume. A change on the website (new TMDB
+source, a new server) reaches TV through the same JSON the phone reads.
+
+What the earlier A/C analysis is still good for: the site-skin path (T2) is
+already built and stays as the fallback browse surface — if a TV build ever
+fails to render the shell, or a pref turns it off, the app drops back to the
+live site with working D-pad. Nothing is thrown away.
+
+### A / C, for the record (superseded)
 
 ### A. TV presentation layer on the live site — *recommended*
 Reuse the existing injection channel: `assets/tv-nav.js` (spatial focus engine,
@@ -152,12 +188,25 @@ The trap: a TV at 1080p can report density **1.0** (most boxes) or **2.0**
 (Shield, some Sony panels). At density 2 the WebView thinks it is 960 CSS px
 wide and renders the site's **tablet** layout on a 55-inch screen. So:
 
-**Normalise the layout to 1920 CSS px on every TV** — `setInitialScale(round(100 / density))`
-(100 at density 1, 50 at density 2) + `setUseWideViewPort(true)`, then apply a
-14 % text bump for viewing distance with `webSettings.setTextZoom(115)` — a
+**Normalise the layout to 1920 CSS px on every TV.** `setInitialScale` does not
+do this for a page that already carries `<meta name="viewport" content="width=device-width">`
+— the layout width stays `physicalWidth / density`, so a density-2 box gets a
+960-unit viewport and the site's *tablet* design. What does work is rewriting the
+viewport meta itself (`assets/tv-viewport.js`, injected on every page):
+
+```
+width=1920, initial-scale=(cssWidth / 1920)
+```
+
+Blink re-computes the layout viewport when that attribute changes, so the site
+lays out as a 1920-wide desktop and the scale factor fills the panel exactly —
+1080p@1.0 → scale 1, 1080p@2.0 (Shield) → 0.5, 720p@1.0 → 0.667. Same CSS for
+every box, no per-device numbers, and nothing about the site is rewritten.
+
+Then a text bump for viewing distance: `WebSettings.setTextZoom(115)` — a
 documented WebView knob that scales text **without** compounding through nested
 elements (unlike `em`/`zoom` hacks, which break card layouts). Tune 110–120 in
-one place.
+one place: `TvUi.TEXT_ZOOM`.
 
 | Quantity | Value (1080p) | Why |
 |---|---|---|
@@ -169,8 +218,9 @@ one place.
 | Focus ring | 4 px, 4 px offset | contrast at distance |
 | Player OSD | controls at 64 px tall, 5 % from edges, auto-hide 4 s | cinematic, no clutter |
 
-Not one number is hardcoded per screen: the CSS uses `vw`/`clamp()` (e.g.
-`font-size: clamp(22px, 1.25vw, 30px)`) so 720p and 4K are both proportional.
+The values above are the *design* numbers, measured in the 1920-unit layout the
+viewport rewrite guarantees — so they hold on 720p, 1080p and 4K alike, because
+the layout is always 1920 units and only the scale factor changes.
 **Test matrix:** 720p (`-tvdpi`), 1080p@1.0, 1080p@2.0 (Shield), 4K@2.0.
 
 ---
@@ -232,21 +282,17 @@ What replaces them, and still matters on a sideloaded TV:
    listed at all. That is a *launcher* requirement, not a Play one. Sideloading
    ignores `<uses-feature>` (no filtering risk) — keep the flags anyway, they are
    correct and free.
-2. **Signing stability — settle this before the first TV build.** CI runs
-   `assembleDebug` and there is **no keystore in the repo**
-   (`git ls-files | grep -i keystore` → empty), so each runner generates a fresh
-   debug keystore. If that is what has been happening, two builds have different
-   signatures, and:
-   - the new APK **cannot install over the old one**
-     (`INSTALL_FAILED_UPDATE_INCOMPATIBLE`) → uninstall → **downloads, resume
-     points and prefs are wiped**;
-   - any "sign in once" state dies with it.
-
-   On a TV that hurts far more than on a phone: nobody wants to re-download
-   several GB with a remote. Fix: one keystore, generated once, stored as a
-   base64 CI secret, stable signing key. **Verify before assuming** —
-   `apksigner verify --print-certs` on two consecutive releases and compare the
-   SHA-256; if they match, the runner is reusing a keystore and nothing is broken.
+2. **Signing stability — DONE.** The old builds were signed by a per-run debug
+   keystore, which is why an update could only be installed after uninstalling
+   (and losing every download). There is now a single committed key:
+   `android/app/fumio-release.p12` (PKCS12, alias `fumio`, 30-year self-signed
+   cert, SHA-256 `E3:4D:70:3A:…:F1:B9`), wired into **both** build types in
+   `android/app/build.gradle`, so the debug APK CI publishes carries it too.
+   Consequence, stated once: **the first APK with this key still needs one
+   uninstall** (different signature from the old builds). Every build after
+   that installs over the top. The key is committed on purpose — a sideloaded
+   app has no store identity to protect, and a key in a CI secret is a key
+   someone forgets to set. Rotating it later means the same one-time uninstall.
 3. **How it reaches a TV.** Pick one path and document it in `docs/TV-INSTALL.md`:
    `adb install -r` over USB or `adb connect` wireless debugging (best for us),
    a Downloader-style short code, or USB stick + a file manager on the box.
@@ -286,9 +332,9 @@ only a build-config default differs (decision D5).
 
 | # | Ships | Risk to phone | Notes |
 |---|---|---|---|
-| **T0** | Manifest: `uses-feature leanback (required=false)`, `touchscreen (required=false)`, `LEANBACK_LAUNCHER` intent filter, `android:banner` 320×180 + 640×360, `android:screenOrientation="landscape"` handled at runtime for TV only | **none** (additive manifest, single APK, package stays `com.fumio.app`) | TV icon shows up on the launcher; phone behaviour identical |
-| **T1** | `TvMode` detection (`UI_MODE_TYPE_TELEVISION` / `FEATURE_LEANBACK` / `FEATURE_TELEVISION`), ad-free gate, viewport+density normalisation, safe area | **none** (guarded by `isTv`) | first installable TV build; site is browsable with a remote but no focus ring yet |
-| **T2** | `tv-nav.js` spatial engine + `tv.css` (focus ring, hit sizes, type scale) + native key router | **none** (file only injected on TV) | the phase that decides whether TV feels good |
+| **T0** ✅ | Manifest: `uses-feature leanback / touchscreen / gamepad` (all `required=false`), `LEANBACK_LAUNCHER` filter, `android:banner` (320×180 + 640×360), `REQUEST_INSTALL_PACKAGES` | **none** (additive manifest; package still `com.fumio.app`) | shipped: the app now appears as a proper TV tile |
+| **T1** ✅ | `TvMode` (ui-mode TELEVISION / leanback / FEATURE_TELEVISION), ad-free gate in `ensureUnlocked`, `TvUi.apply` (textZoom 115, zoom controls off), viewport rewrite in `assets/tv-viewport.js` | **none** (one `if` in one method) | shipped: a TV build with no verify wall, laid out as 1920 CSS px |
+| **T2** ✅ | `assets/tv-nav.js` spatial engine + `assets/tv.css` + `TvUi.handleKey` via `dispatchKeyEvent` + `FumioNative.tvInputFocused` | **none** (injected only when `TvMode.isTv`) | shipped, 18/18 in `docs/tv-ui.test.cjs`; needs a real remote to sign off |
 | **T3** | TV player surface: big OSD, server row (`ServerPickerBar` as a horizontal focus rail), quality/audio/subtitle menus, 10 s seek, resume, D-pad everywhere, MKV track menus in `OfflinePlayerActivity` | player code is shared → touched, but behind `window.__fumioTv` / `isTv`; phone visuals unchanged | our surface, safest place to invest |
 | **T4** | Native TV Home spotlight (C) + D-pad pass on `DownloadsActivity` / offline player | new screen only | the "wow" screen |
 | **T5** | Self-test screen, kill switch, auto-demote, TV smoke-test checklist in CI notes | none | the durability layer |
@@ -332,3 +378,80 @@ across sideload updates.
 | Text bump breaks card layout | clipped titles | `setTextZoom` only, 110–120 band, screenshot check at 4 sizes |
 | TV surface leaks into phone | regression in shipped phone app | one `TvMode.isTv()` gate at boot; injection only on TV; phone APK diff = manifest only |
 | Embed iframe ads on TV | expectation mismatch | stated up front, in-app note on first TV launch |
+
+---
+
+## 11. B in practice — the native shell
+
+### 11.1 Screens (each one a new Activity; the phone app never sees them)
+
+| Screen | What it is | Data | Ships |
+|---|---|---|---|
+| `TvHomeActivity` | hero billboard + vertical rails (Trending, Popular movies, Popular series, Top rated, Anime, Continue watching, My downloads) | `/tmdb/trending/all/week`, `/tmdb/movie/popular`, `/tmdb/tv/popular`, `/tmdb/movie/top_rated`, anime via the site's `/api/anime-trending`, local prefs for the last two rails | 1 |
+| `TvDetailsActivity` | backdrop, title, year/runtime/rating, overview, Play, season + episode rails, "More like this" | `/tmdb/{type}/{id}` + `/tmdb/{type}/{id}/season/{n}` | 2 |
+| `TvSearchActivity` | D-pad grid keyboard + results rail | `/tmdb/search/multi` | 3 |
+| player | **existing** `FumioPlayerOverlay` (WebView, our React player) — unchanged | `/api/players` → harvest → bundled | 0 |
+| downloads | **existing** `DownloadsActivity`, given a D-pad pass | local | 3 |
+
+`MainActivity` stays the phone app. On a TV it does one thing differently: if
+`TvMode.isTv(this)` and the shell pref is on, it launches `TvHomeActivity` and
+finishes, so the WebView never loads the site at all on a TV.
+
+### 11.2 Focus, natively
+
+RecyclerView + `LinearLayoutManager`: vertical list of rails, each rail a
+horizontal RecyclerView with `ItemBridgeAdapter`-free focus handling:
+
+- cards are `focusable=true` views; the rail scrolls the focused card to 35 % of
+  its width (same convention as the WebView engine);
+- `nextFocusDown` is left to Android's geometric default, which already does the
+  right thing inside a RecyclerView — with one exception: the *rail* must
+  remember its last focused card, so moving down and back up returns to the same
+  column. One field per rail.
+- `android:descendantFocusability="afterDescendants"` on the containers, and
+  `android:focusable="false"` on the page root, so the first D-pad press lands on
+  a card and not on nothing (the classic "TV app that ignores the remote until
+  you press down twice" bug).
+- BACK: close the details, then home; on home it asks to exit (`AlertDialog`),
+  because a TV remote's BACK is the only way out and hitting it twice by
+  accident should not kill the app.
+
+`assets/tv-nav.js` is **not** used by the shell — Android's own focus system is
+the engine there. It stays for the player page and the site-skin fallback.
+
+### 11.3 Look, without a design system
+
+- 1080p layout; `values-tvdpi`/`values-xxhdpi` dimension buckets expressed as
+  `dp` from a single `dimens.xml` so a 720p box is proportional, not clipped.
+- Cards: 320×180 (16:9) poster art, 12 dp radius, title 22 sp, meta 16 sp,
+  focus = 1.06 scale + 4 dp accent ring (mirrors `tv.css` exactly).
+- Rows: 24 dp gutters, 56 dp between rails, safe area 48 dp on all sides
+  (overscan), no scrollbars, no ripple-tap artefacts.
+- Palette: black background, the site's yellow `#ffd400` as the only accent.
+- Images: **Coil** (`io.coil-kt:coil:2.7.0`, Java API usable from Java) with a
+  memory+disk cache, so a rail scrolls without re-downloading posters.
+- Reduced motion honoured; no parallax; nothing animates longer than 150 ms.
+
+### 11.4 What "adaptable when the website updates" means for B
+
+| Website changes | Effect on TV |
+|---|---|
+| a server is renamed / reordered / added | none — `/api/players` (or harvest) feeds the picker at play time |
+| a new TMDB row is added to the site | **not** automatic (the native rows are our own list) → the row list lives in one Java array, `TvRows.java`, deliberately easy to edit; the *content* of every row is still live |
+| the player or the ad wall changes | none — TV never loads the player page, and has no ad wall |
+| the site adds a whole new hub (e.g. Live TV) | needs a native screen when we want it there; until then Live TV is reachable in the fallback WebView |
+| the site dies | TV keeps working entirely: catalogs come from the TMDB proxies, playback from the cached/harvested list, downloads are local |
+
+That last row is the real argument for B: **the TV build gets more robust, not
+less**, because it stops depending on a page rendering.
+
+### 11.5 Build order (each step is a shippable APK)
+
+1. `TvRows` + `TvHomeActivity` with three rows and a working "Play" hand-off.
+2. `TvDetailsActivity` (movie and series, season/episode pickers).
+3. Search + downloads pass.
+4. Hero billboard, Continue-watching rail, anime rail.
+5. Polish: focus memory per rail, transitions, self-test screen.
+
+Every step is guarded by `TvMode.isTv(...)` at the `MainActivity` entry point,
+so a bad TV build can never change what a phone does.

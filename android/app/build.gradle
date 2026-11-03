@@ -7,8 +7,13 @@ android {
         applicationId "com.fumio.app"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 1
-        versionName "1.0"
+        // The in-app updater (Updater.java) asks one question: "is the published
+        // build newer than mine?" Release tags are
+        // theogpiratebot-apk-<github run_number>, so CI stamps the same number
+        // here and the answer is a single integer comparison. Local builds
+        // without the env var keep 1 and simply never offer an update.
+        versionCode (System.getenv("OGPB_VERSION_CODE") ?: "1").toInteger()
+        versionName "1." + (System.getenv("OGPB_VERSION_CODE") ?: "0")
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         aaptOptions {
              // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.
@@ -16,9 +21,45 @@ android {
             ignoreAssetsPattern '!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~'
         }
     }
+    /*
+     * ONE key, forever.
+     *
+     * Until now every CI run signed app-debug.apk with a fresh debug keystore,
+     * so two releases had different signatures: Android refused the update
+     * (INSTALL_FAILED_UPDATE_INCOMPATIBLE), the only way forward was to
+     * uninstall — which deletes downloads, resume points and settings — and the
+     * in-app updater could never work on a phone, let alone a TV with no
+     * browser.
+     *
+     * fumio-release.p12 is a dedicated key committed to the repo on purpose:
+     * this project ships as a direct APK, there is no store identity to
+     * protect, and a key that lives in a CI secret is a key somebody forgets to
+     * set. The trade-off is stated plainly in docs/PLAN-android-tv.md §7: anyone
+     * with the repo can sign an APK that installs over ours. For a sideloaded
+     * build that risk is the same as "anyone can build the app", and it is
+     * worth paying to make updates keep people's downloads.
+     *
+     * FIRST APK SIGNED WITH THIS KEY STILL NEEDS ONE UNINSTALL. Every build
+     * after that installs over the previous one.
+     */
+    signingConfigs {
+        release {
+            storeFile file("fumio-release.p12")
+            storeType "pkcs12"
+            storePassword "fumioTv2026"
+            keyAlias "fumio"
+            keyPassword "fumioTv2026"
+        }
+    }
+
     buildTypes {
+        debug {
+            // CI publishes the debug variant, so it has to carry the stable key.
+            signingConfig signingConfigs.release
+        }
         release {
             minifyEnabled false
+            signingConfig signingConfigs.release
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
         }
     }

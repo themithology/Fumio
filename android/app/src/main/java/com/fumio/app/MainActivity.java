@@ -11,6 +11,7 @@ import android.os.Bundle;
 import android.os.Message;
 import android.util.Rational;
 import android.view.View;
+import android.view.KeyEvent;
 import android.view.ViewGroup;
 import android.webkit.ConsoleMessage;
 import android.webkit.JavascriptInterface;
@@ -113,12 +114,18 @@ public class MainActivity extends BridgeActivity {
                 "ogpb-verify"
             ).start();
             installClients(webView, bridge);
+            // TELEVISION ONLY. On a phone this call returns immediately.
+            TvUi.install(this, webView);
             LiveServers.load(this);
             LiveServers.refresh(this, webView);
             SystemBars.browse(getWindow(), webView);
             webView.post(() -> SystemBars.browse(getWindow(), webView));
             installBackHandler();
             handleAuthIntent(getIntent());
+            // Sideloaded app, so the update has to come from inside: the
+            // releases CI publishes ARE the version feed. Cheap (once per 6 h),
+            // silent on failure, and it never blocks a launch.
+            Updater.checkAndPrompt(this);
         } catch (Exception ignored) {
             // Prefer a running Capacitor shell over a crash loop.
         }
@@ -161,6 +168,31 @@ public class MainActivity extends BridgeActivity {
         }
     }
 
+    /**
+     * The remote, on a TV. Dialogs (verify wall, updater) live in their own
+     * window and never reach this method, so a D-pad press inside a dialog
+     * stays a dialog press.
+     */
+    @Override
+    public boolean dispatchKeyEvent(KeyEvent event) {
+        try {
+            if (TvUi.handleKey(this, keyTarget(), event)) return true;
+        } catch (Exception ignored) {
+            // Fall through to the normal dispatch: a broken key path must not
+            // make the remote dead.
+        }
+        return super.dispatchKeyEvent(event);
+    }
+
+    /** Whichever WebView the viewer is actually looking at. */
+    private WebView keyTarget() {
+        if (playerActive && playerOverlay != null) {
+            WebView player = playerOverlay.playerWebView();
+            if (player != null) return player;
+        }
+        return liveWebView();
+    }
+
     private void installClients(WebView webView, Bridge bridge) {
         CookieManager.getInstance().setAcceptCookie(true);
         CookieManager.getInstance().setAcceptThirdPartyCookies(webView, true);
@@ -189,6 +221,12 @@ public class MainActivity extends BridgeActivity {
     }
 
     public class NativeBridge {
+        /** tv-nav.js tells us when the remote belongs to a text field. */
+        @JavascriptInterface
+        public void tvInputFocused(boolean typing) {
+            TvUi.setInputFocused(typing);
+        }
+
         @JavascriptInterface
         public void openBrowser(String url) {
             if (url == null) return;
@@ -556,6 +594,7 @@ public class MainActivity extends BridgeActivity {
                     view.clearHistory();
                 }
                 injectPlayerScript(view);
+                TvUi.onPageFinished(this, view);
                 startPlayerRouteWatcher(view);
             }
             deliverPendingAuthToken();
@@ -1432,6 +1471,15 @@ public class MainActivity extends BridgeActivity {
     }
 
     private void ensureUnlocked(Runnable onUnlocked) {
+        // TELEVISION: no ad wall. A 10-foot screen is a family screen — a
+        // 12-hour unlock card in front of a film is the worst thing we could
+        // put on it. This is the ONLY place the decision is made, so the phone
+        // path is byte-for-byte what it was: verify wall, desktop Chrome
+        // hand-off and entitlement cache all still run there.
+        if (TvMode.isTv(this)) {
+            onUnlocked.run();
+            return;
+        }
         if (verifyClient != null && verifyClient.isLocallyUnlocked()) {
             onUnlocked.run();
             return;

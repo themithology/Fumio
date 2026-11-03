@@ -40,8 +40,13 @@ jobs:
       - name: Sync web build into the Android project
         run: npx cap sync android
 
+      # The in-app updater compares this integer with the number in the release
+      # tag (theogpiratebot-apk-<run_number>), so every published APK knows how
+      # old it is without parsing semver or dates. Same number in both places.
       - name: Build debug APK
         working-directory: android
+        env:
+          OGPB_VERSION_CODE: ${{ github.run_number }}
         run: |
           chmod +x ./gradlew
           set -o pipefail
@@ -68,7 +73,7 @@ jobs:
         with:
           tag_name: theogpiratebot-apk-${{ github.run_number }}
           name: "TheOGPirateBot debug APK #${{ github.run_number }} (${{ github.ref_name }}@${{ github.sha }})"
-          body: "TheOGPirateBot debug APK. Commit ${{ github.sha }}."
+          body: "TheOGPirateBot debug APK. Commit ${{ github.sha }}. versionCode ${{ github.run_number }}\n\nInstalls over the previous build (keeping downloads and settings), and the app offers this update by itself."
           prerelease: true
           files: android/app/build/outputs/apk/debug/app-debug.apk
         env:

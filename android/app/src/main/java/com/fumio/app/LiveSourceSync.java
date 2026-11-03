@@ -113,9 +113,27 @@ final class LiveSourceSync {
     // ─── 1. the endpoint ─────────────────────────────────────────────────────
 
     /**
-     * Accepts either
-     *   { "servers": [{ "key", "label", "url" }, …] }
-     * or a bare array of the same objects. Anything else is "no answer".
+     * The site's answer, in any of the shapes it might reasonably take.
+     *
+     * The endpoint is a contract between two repos, and the site side is edited
+     * by hand — so this parser is deliberately forgiving about WRAPPING and
+     * strict about CONTENT. Accepted:
+     *
+     *   { "success": true, "season": 2, "episode": 5, "servers": [ … ] }
+     *   { "servers": [ … ] }
+     *   { "data": { "servers": [ … ] } }
+     *   [ { "key", "label", "url" }, … ]                      (bare array)
+     *
+     * Rejected as "no answer" (which means: fall back to the harvest):
+     *   - HTTP not 2xx, HTML instead of JSON, an "error"/"success:false" body,
+     *   - a servers array that is missing, empty, or has no usable https URL —
+     *     an empty list is not a list, and playing nothing is worse than
+     *     playing the bundled fallback.
+     *
+     * Numbers are read with {@link #pick} rather than optString: a JSON
+     * `"season": 2` (no quotes) is what any sane server sends, and optString's
+     * behaviour on a number is exactly the kind of thing that differs between
+     * Android versions.
      */
     private static String fromEndpoint(String id, String type, String season, String episode) {
         try {
@@ -127,29 +145,60 @@ final class LiveSourceSync {
             JSONObject result = NativeHttp.execute("GET", url, "{\"Accept\":\"application/json\"}", null);
             if (result == null || !result.optBoolean("ok", false)) return null;
             Object data = result.opt("data");
+
+            JSONObject body = null;
             JSONArray servers = null;
-            String resolvedSeason = null;
-            String resolvedEpisode = null;
             if (data instanceof JSONObject) {
-                JSONObject body = (JSONObject) data;
+                body = (JSONObject) data;
+                // An explicit failure is a failure, not an empty result.
+                if (body.has("success") && !body.optBoolean("success", true)) return null;
+                if (body.has("ok") && !body.optBoolean("ok", true)) return null;
                 servers = body.optJSONArray("servers");
-                resolvedSeason = body.has("season") ? body.optString("season", null) : null;
-                resolvedEpisode = body.has("episode") ? body.optString("episode", null) : null;
+                if (servers == null) servers = body.optJSONArray("players");
+                if (servers == null) {
+                    Object nested = body.opt("data");
+                    if (nested instanceof JSONObject) {
+                        body = (JSONObject) nested;
+                        servers = body.optJSONArray("servers");
+                    } else if (nested instanceof JSONArray) {
+                        servers = (JSONArray) nested;
+                    }
+                }
             } else if (data instanceof JSONArray) {
                 servers = (JSONArray) data;
             }
-            if (servers == null) return null;
-            String envelope = normalise(
+            if (servers == null || servers.length() == 0) return null;
+
+            String resolvedSeason = pick(body, "resolvedSeason", "season");
+            String resolvedEpisode = pick(body, "resolvedEpisode", "episode");
+            return normalise(
                 servers,
                 id,
                 type,
                 resolvedSeason == null ? season : resolvedSeason,
                 resolvedEpisode == null ? episode : resolvedEpisode
             );
-            return envelope;
         } catch (Exception ignored) {
             return null;
         }
+    }
+
+    /**
+     * First usable value among {@code names}, as a trimmed string. Numbers are
+     * the normal case (`"season": 2`), so they are converted explicitly; null,
+     * missing and the strings "null"/"" are all "not answered".
+     */
+    private static String pick(JSONObject body, String... names) {
+        if (body == null || names == null) return null;
+        for (String name : names) {
+            if (name == null || !body.has(name)) continue;
+            Object value = body.opt(name);
+            if (value == null || value == JSONObject.NULL) continue;
+            String text = String.valueOf(value).trim();
+            if (text.isEmpty() || "null".equalsIgnoreCase(text)) continue;
+            return text;
+        }
+        return null;
     }
 
     /**
@@ -179,12 +228,37 @@ final class LiveSourceSync {
         for (int i = 0; i < raw.length(); i += 1) {
             JSONObject row = raw.optJSONObject(i);
             if (row == null) continue;
-            String url = row.optString("url", "");
-            if (url.isEmpty() || !url.startsWith("http")) continue;
-            String key = row.optString("key", "");
+            // A row is usable if it carries an https URL under any of the names
+            // a hand-written endpoint tends to use.
+            String url = "";
+            String[] urlKeys = { "url", "embedUrl", "embed", "link", "src" };
+            for (String name : urlKeys) {
+                String candidate = row.optString(name, "");
+                if (candidate.startsWith("https://") || candidate.startsWith("http://")) {
+                    url = candidate;
+                    break;
+                }
+            }
+            if (url.isEmpty()) continue;
+            String key = "";
+            String[] keyKeys = { "key", "id", "slug", "server" };
+            for (String name : keyKeys) {
+                String candidate = row.optString(name, "");
+                if (!candidate.isEmpty()) {
+                    key = candidate;
+                    break;
+                }
+            }
             if (key.isEmpty()) key = "server-" + (i + 1);
-            String label = row.optString("label", "");
-            if (label.isEmpty()) label = row.optString("name", "");
+            String label = "";
+            String[] labelKeys = { "label", "name", "title" };
+            for (String name : labelKeys) {
+                String candidate = row.optString(name, "");
+                if (!candidate.isEmpty()) {
+                    label = candidate;
+                    break;
+                }
+            }
             if (label.isEmpty()) label = "Server " + (i + 1);
             try {
                 JSONObject clean = new JSONObject();

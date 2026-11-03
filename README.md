@@ -272,6 +272,33 @@ npm run cap:sync
 npm run cap:open       # opens Android Studio — Build > Build APK
 ```
 
+### Android TV
+
+The same APK runs on a television — no separate build, no Play Store. On a TV
+it recognises itself (`TvMode`) and changes exactly three things:
+
+- **No ad wall.** The `/verify` 12-hour unlock is skipped (`ensureUnlocked`),
+  because a popup in front of a film on a family screen is the wrong trade.
+  Phones are untouched.
+- **A D-pad layer.** `MainActivity.dispatchKeyEvent` hands the remote to
+  `assets/tv-nav.js`, a geometry-only focus engine (roles + bounding boxes, never
+  the site's class names) with a 4 px focus ring from `assets/tv.css`. While a
+  text field has focus the remote goes back to the page, so the TV keyboard
+  works.
+- **A 10-foot scale.** `assets/tv-viewport.js` rewrites the viewport meta to
+  `width=1920` before the engine runs, so a box that reports density 2 lays out
+  as a desktop rather than a tablet; `TvUi.TEXT_ZOOM` (115 %) covers viewing
+  distance.
+
+Also for TV (and useful on a phone): **`Updater`** — the app checks the GitHub
+releases feed and installs the next APK itself, because most TVs have no
+browser. Every build is signed with one committed key
+(`android/app/fumio-release.p12`), so an update installs over the old one and
+keeps downloads, resume points and settings.
+
+Sideload instructions: **`docs/TV-INSTALL.md`**. The plan, the native-shell
+build order and the risk register live in **`docs/PLAN-android-tv.md`**.
+
 ## Disclaimer
 
 TheOGPirateBot is a media browser and player. It does not host, upload or
