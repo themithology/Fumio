@@ -594,7 +594,7 @@ public class MainActivity extends BridgeActivity {
                     view.clearHistory();
                 }
                 injectPlayerScript(view);
-                TvUi.onPageFinished(this, view);
+                TvUi.onPageFinished(MainActivity.this, view);
                 startPlayerRouteWatcher(view);
             }
             deliverPendingAuthToken();
