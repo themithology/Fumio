@@ -12,8 +12,17 @@ android {
         // theogpiratebot-apk-<github run_number>, so CI stamps the same number
         // here and the answer is a single integer comparison. Local builds
         // without the env var keep 1 and simply never offer an update.
-        versionCode (System.getenv("OGPB_VERSION_CODE") ?: "1").toInteger()
-        versionName "1." + (System.getenv("OGPB_VERSION_CODE") ?: "0")
+        // Parsed defensively: a versionCode that overflows an int (or an empty
+        // env var) must never be the reason a release fails to build.
+        def stamped = 1
+        try {
+            def raw = System.getenv("OGPB_VERSION_CODE")
+            if (raw != null && raw.trim().isInteger()) stamped = raw.trim().toInteger()
+        } catch (Exception ignored) {
+            stamped = 1
+        }
+        versionCode stamped
+        versionName "1." + stamped
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         aaptOptions {
              // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.

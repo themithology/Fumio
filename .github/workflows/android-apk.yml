@@ -40,6 +40,14 @@ jobs:
       - name: Sync web build into the Android project
         run: npx cap sync android
 
+      # If this key cannot be read, the build must say so in one line instead of
+      # failing somewhere inside the packaging task.
+      - name: Verify signing key
+        run: |
+          keytool -list -storetype PKCS12 \
+            -keystore android/app/fumio-release.p12 \
+            -storepass fumioTv2026 2>&1 | head -12
+
       # The in-app updater compares this integer with the number in the release
       # tag (theogpiratebot-apk-<run_number>), so every published APK knows how
       # old it is without parsing semver or dates. Same number in both places.
@@ -56,8 +64,13 @@ jobs:
             sed -n '/What went wrong/,/^\* Try/p' /tmp/gradle.log | head -70 >> "$GITHUB_STEP_SUMMARY"
             echo '```' >> "$GITHUB_STEP_SUMMARY"
             # Compile errors first (the useful ones), then whatever else broke.
-            grep -nE "^e: |error:|Caused by:" /tmp/gradle.log | head -30 \
+            grep -nE "^e: |error:|Caused by:|What went wrong" /tmp/gradle.log | head -20 \
               | while IFS= read -r line; do echo "::error::$line"; done
+            # The workflow log is not always reachable from the API, but
+            # annotations are — so the tail travels as annotations too.
+            tail -25 /tmp/gradle.log | while IFS= read -r line; do
+              [ -n "$line" ] && echo "::error::tail: $line"
+            done
             exit 1
           }
 
