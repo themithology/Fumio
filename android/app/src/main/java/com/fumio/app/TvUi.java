@@ -50,6 +50,7 @@ final class TvUi {
         if (!TvMode.isTv(activity)) return;
         loadAssets(activity);
         apply(webView);
+        TvPointer.install(activity);
     }
 
     private static void loadAssets(Activity activity) {
@@ -107,6 +108,16 @@ final class TvUi {
 
         // 3. The engine.
         evaluate(webView, navScript);
+
+        // 4. And the other half of the hybrid: if the viewer is aiming with the
+        //    pointer, the new page must know where that pointer is.
+        TvPointer.onPageFinished(activity, webView);
+    }
+
+    /** NAV hit a wall — say "MENU gives you a pointer", once. */
+    static void suggestPointer(Activity activity) {
+        if (activity == null || !TvMode.isTv(activity)) return;
+        TvPointer.suggest(activity);
     }
 
     // ─── keys ───────────────────────────────────────────────────────────────
@@ -122,26 +133,43 @@ final class TvUi {
     static boolean handleKey(Activity activity, WebView webView, KeyEvent event) {
         if (activity == null || webView == null || event == null) return false;
         if (!TvMode.isTv(activity)) return false;
-        if (inputFocused) return false; // the TV's own keyboard owns the remote
 
-        String name = keyName(event.getKeyCode());
+        int code = event.getKeyCode();
+        boolean down = event.getAction() == KeyEvent.ACTION_DOWN;
+        boolean up = event.getAction() == KeyEvent.ACTION_UP;
+
+        // Diagnostics live on the Info/Help button: remotes that have one can
+        // print the focus engine's report to logcat without a dev build.
+        if (code == KeyEvent.KEYCODE_INFO || code == KeyEvent.KEYCODE_HELP) {
+            if (down) {
+                evaluate(
+                    webView,
+                    "window.FumioTvSelfTest&&console.log('FumioTvSelfTest '+window.FumioTvSelfTest());"
+                );
+            }
+            return true;
+        }
+
+        // THE HYBRID. Pointer mode owns D-pad/OK/BACK/MENU while it is on; when
+        // it is off this call only watches for MENU, so NAV below is untouched.
+        if (TvPointer.handleKey(activity, webView, event, inputFocused)) return true;
+
+        // Typing in a field: the TV's keyboard owns the remote.
+        if (inputFocused) return false;
+
+        String name = keyName(code);
         if (name == null) return false;
 
         // Consume both edges: the DPAD down we act on, the up so the WebView
         // never sees a half-press and scrolls.
-        if (event.getAction() == KeyEvent.ACTION_UP) return true;
-        if (event.getAction() != KeyEvent.ACTION_DOWN) return false;
+        if (up) return true;
+        if (!down) return false;
         if (event.getRepeatCount() > 0) return true; // a held button must not spam
 
         try {
             webView.requestFocus();
         } catch (Exception ignored) {
             /* nothing to focus */
-        }
-
-        if ("selftest".equals(name)) {
-            evaluate(webView, "window.FumioTvSelfTest&&console.log('FumioTvSelfTest '+window.FumioTvSelfTest());");
-            return true;
         }
 
         evaluate(webView, "window.FumioTvKey&&window.FumioTvKey(" + quote(name) + ");");
@@ -162,8 +190,6 @@ final class TvUi {
             case KeyEvent.KEYCODE_ENTER:
             case KeyEvent.KEYCODE_NUMPAD_ENTER:
                 return "enter";
-            case KeyEvent.KEYCODE_MENU:
-                return "selftest";
             default:
                 return null;
         }

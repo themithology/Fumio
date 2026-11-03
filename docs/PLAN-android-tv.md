@@ -111,7 +111,7 @@ route in the WebView.
 
 ---
 
-## 3. D-pad navigation design (the key component)
+## 3. Navigation — a hybrid: D-pad first, cartoony pointer always available
 
 ### 3.1 Key map
 
@@ -121,7 +121,11 @@ route in the WebView.
 | DPAD_CENTER / ENTER | activate focused element | play / pause | activate |
 | BACK | `history.back()`, at root → "Exit?" | close OSD, then close player | up a level, then exit |
 | MEDIA_PLAY_PAUSE / FF / REW | — | play-pause / +60 s / −60 s | — |
-| MENU | focus the site's top bar / app menu | open server row | context menu |
+| MENU | **switch to pointer mode** (and back) | toggle pointer | toggle pointer |
+| INFO / HELP | print the focus self-test to logcat | — | — |
+| dpad in pointer mode | move the cursor; at an edge it scrolls the page | move the cursor | move the cursor |
+| OK in pointer mode | click at the cursor (touch down + up 60 ms later) | click | click |
+| BACK in pointer mode | leave pointer mode — **not** the page | pointer off | pointer off |
 | long-press OK | open details of focused card | — | — |
 
 Rules: **we consume DPAD/ENTER/BACK ourselves** and forward them as JS calls;
@@ -179,6 +183,46 @@ focusable a TV ring and mirrors hover-ish emphasis:
 
 Also: `:focus-within` for cards, `scroll-margin: 12vh` so a focused card is
 never flush against an edge, `::selection` off, and `cursor` rules removed.
+
+### 3.4 Pointer mode — the escape hatch (built)
+
+A D-pad engine is only as good as the page's willingness to be navigated. A
+`<div>` with an `onClick` and no `tabindex` cannot be adopted with certainty; a
+drag handle, a hover menu or a slider cannot be operated with arrows at all. On
+a website we do not control, that is not a corner case — it is a Tuesday.
+
+So the remote has two modes, and the second one is a real mouse:
+
+| | NAV (default) | POINTER (MENU) |
+|---|---|---|
+| What moves | the focus ring, via `tv-nav.js` | a drawn cursor, `TvCursorView` |
+| What a click is | `element.click()` via `FumioTvKey('enter')` | synthesised `ACTION_DOWN`/`ACTION_UP` at a pixel |
+| Hover | emitted on focus | real `ACTION_HOVER_MOVE` (mouse source), so the page's own hover styles follow the cursor |
+| Reaches | anything focusable by role | **anything at all**, like a mouse |
+| Scroll | the engine reveals the focused card | cursor at an edge scrolls the page 14 % per press |
+| Who gets BACK | the page (`history.back`) | the mode switch — a viewer is not thrown out of what they were doing |
+
+The cursor is deliberately cartoony: a white arrow with a dark 3 dp outline, a
+yellow (#ffd400) glow behind it, three orbiting sparkles, a slow idle bob, a
+squash and an expanding ring on click, and a shadow. It is 30 dp wide so it
+reads from 3 m, and it is obviously *ours* — nobody mistakes it for the system
+pointer or for a broken page. First entry shows a pill: *"OK clicks · MENU or
+BACK returns to D-pad"*.
+
+**The handover is automatic and quiet.** When `tv-nav.js` cannot move or
+activate (nothing focusable in that direction, twice), it calls
+`FumioNative.tvNavDeadEnd()`, and the app shows one hint: *"Press MENU to use
+the pointer"*. It never switches mode on its own — the viewer keeps control of
+the remote — and it hints once per session so a page full of bare `<div>`s does
+not become a nagging machine.
+
+Cost: the cursor view sits above the WebView, so it is drawn rather than
+composited: only the dirty rectangle around it is repainted, at ~16 fps, and
+only while the pointer is on screen. On a phone none of this exists.
+
+**What this buys, in one line:** a website change can make the D-pad worse, but
+it can never make the app unusable — the pointer is the mouse the site was
+always designed for.
 
 ---
 
@@ -334,7 +378,7 @@ only a build-config default differs (decision D5).
 |---|---|---|---|
 | **T0** ✅ | Manifest: `uses-feature leanback / touchscreen / gamepad` (all `required=false`), `LEANBACK_LAUNCHER` filter, `android:banner` (320×180 + 640×360), `REQUEST_INSTALL_PACKAGES` | **none** (additive manifest; package still `com.fumio.app`) | shipped: the app now appears as a proper TV tile |
 | **T1** ✅ | `TvMode` (ui-mode TELEVISION / leanback / FEATURE_TELEVISION), ad-free gate in `ensureUnlocked`, `TvUi.apply` (textZoom 115, zoom controls off), viewport rewrite in `assets/tv-viewport.js` | **none** (one `if` in one method) | shipped: a TV build with no verify wall, laid out as 1920 CSS px |
-| **T2** ✅ | `assets/tv-nav.js` spatial engine + `assets/tv.css` + `TvUi.handleKey` via `dispatchKeyEvent` + `FumioNative.tvInputFocused` | **none** (injected only when `TvMode.isTv`) | shipped, 18/18 in `docs/tv-ui.test.cjs`; needs a real remote to sign off |
+| **T2** ✅ | `assets/tv-nav.js` spatial engine + `assets/tv.css` + `TvUi.handleKey` via `dispatchKeyEvent` + `FumioNative.tvInputFocused`, plus **pointer mode** (`TvPointer`, `TvCursorView`) with the automatic handover | **none** (injected only when `TvMode.isTv`) | shipped, 18/18 in `docs/tv-ui.test.cjs`; needs a real remote to sign off |
 | **T3** | TV player surface: big OSD, server row (`ServerPickerBar` as a horizontal focus rail), quality/audio/subtitle menus, 10 s seek, resume, D-pad everywhere, MKV track menus in `OfflinePlayerActivity` | player code is shared → touched, but behind `window.__fumioTv` / `isTv`; phone visuals unchanged | our surface, safest place to invest |
 | **T4** | Native TV Home spotlight (C) + D-pad pass on `DownloadsActivity` / offline player | new screen only | the "wow" screen |
 | **T5** | Self-test screen, kill switch, auto-demote, TV smoke-test checklist in CI notes | none | the durability layer |

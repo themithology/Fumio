@@ -280,11 +280,15 @@ it recognises itself (`TvMode`) and changes exactly three things:
 - **No ad wall.** The `/verify` 12-hour unlock is skipped (`ensureUnlocked`),
   because a popup in front of a film on a family screen is the wrong trade.
   Phones are untouched.
-- **A D-pad layer.** `MainActivity.dispatchKeyEvent` hands the remote to
-  `assets/tv-nav.js`, a geometry-only focus engine (roles + bounding boxes, never
-  the site's class names) with a 4 px focus ring from `assets/tv.css`. While a
-  text field has focus the remote goes back to the page, so the TV keyboard
-  works.
+- **A D-pad layer, with a pointer on standby.** `MainActivity.dispatchKeyEvent`
+  hands the remote to `assets/tv-nav.js`, a geometry-only focus engine (roles +
+  bounding boxes, never the site's class names) with a 4 px focus ring from
+  `assets/tv.css`. While a text field has focus the remote goes back to the
+  page, so the TV keyboard works. Press **MENU** and the remote becomes a
+  cartoony on-screen cursor (`TvCursorView`): the D-pad moves it, OK clicks at
+  that pixel, and moves are sent as real mouse-hover events — so anything a
+  mouse can reach on the site works even if the site never made it focusable.
+  When the D-pad finds nothing, the app hints "press MENU" once.
 - **A 10-foot scale.** `assets/tv-viewport.js` rewrites the viewport meta to
   `width=1920` before the engine runs, so a box that reports density 2 lays out
   as a desktop rather than a tablet; `TvUi.TEXT_ZOOM` (115 %) covers viewing

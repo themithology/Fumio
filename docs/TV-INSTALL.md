@@ -63,5 +63,8 @@ If you prefer the manual route: `adb install -r` the new APK. Same result.
 - **The site looks tiny or zoomed** → the TV reported an odd density; the
   viewport normalisation should prevent it. Report the box model and the
   `FumioTvSelfTest` numbers.
+- **Something on screen will not select** (a card, a filter, a "more" chevron) →
+  press **MENU**. The remote becomes a pointer; move it with the D-pad and press
+  OK to click. **BACK** returns to D-pad.
 - **A server does not play** → try another server in the picker. The list is the
   website's; a dead host is a website-side problem, not an APK one.

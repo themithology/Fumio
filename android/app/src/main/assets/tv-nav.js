@@ -45,6 +45,19 @@
 
   // ─── tell native when the remote belongs to the page, not to us ──────────
 
+  /**
+   * "I could not move that way." The native side answers with one hint: press
+   * MENU for the pointer. It is not a failure state — it is the handover from
+   * the D-pad to the cursor, which is the whole point of the hybrid.
+   */
+  function deadEnd() {
+    try {
+      if (native && native.tvNavDeadEnd) native.tvNavDeadEnd();
+    } catch (e) {
+      /* optional */
+    }
+  }
+
   function reportInput() {
     var el = document.activeElement;
     var typing =
@@ -309,7 +322,10 @@
   function move(dir) {
     reportInput();
     if (inputFocused) return false;
-    if (!ensure()) return false;
+    if (!ensure()) {
+      deadEnd();
+      return false;
+    }
     var fromRect = box(current);
     if (!usable(fromRect)) return false;
 
@@ -337,13 +353,19 @@
       else if (dir === "up") window.scrollBy(0, -step);
       else if (dir === "left") window.scrollBy(-window.innerWidth * 0.3, 0);
       else window.scrollBy(window.innerWidth * 0.3, 0);
-      if (window.scrollY === before && dir !== "up" && dir !== "down") return false;
+      if (window.scrollY === before && dir !== "up" && dir !== "down") {
+        deadEnd();
+        return false;
+      }
       invalidate();
       var retryPool = collect().filter(function (item) {
         return item.el !== current;
       });
       var retry = pick(dir, box(current) || fromRect, retryPool, current);
-      if (!retry || !visible(retry.el)) return false;
+      if (!retry || !visible(retry.el)) {
+        deadEnd();
+        return false;
+      }
       return focus(retry.el);
     }
     return focus(best.el);
@@ -352,7 +374,10 @@
   function activate() {
     reportInput();
     if (inputFocused) return false;
-    if (!ensure()) return false;
+    if (!ensure()) {
+      deadEnd();
+      return false;
+    }
     try {
       current.click();
       return true;

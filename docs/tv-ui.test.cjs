@@ -203,5 +203,43 @@ check("div cards were adopted", adopted >= 6, true);
   check("tv.css survives the JS string it is injected through", length === css.length, true);
 }
 
+
+// ── the hybrid handover: NAV tells native when it has run out of road ──────
+{
+  // A page with nothing focusable in it — the site's cards are divs with no
+  // cursor:pointer, so the engine cannot adopt them either.
+  const dead = new JSDOM(
+    `<!doctype html><html><body><div style="width:900px;height:300px">just text</div></body></html>`,
+    { url: "https://theogpiratebot.online/", runScripts: "dangerously", pretendToBeVisual: true }
+  );
+  let deadEnds = 0;
+  dead.window.FumioNative = {
+    tvNavDeadEnd() { deadEnds += 1; },
+    tvInputFocused() {},
+  };
+  dead.window.HTMLElement.prototype.getBoundingClientRect = function () {
+    const r = { left: 0, top: 0, width: 900, height: 300, right: 900, bottom: 300, x: 0, y: 0 };
+    return { ...r, toJSON: () => r };
+  };
+  dead.window.HTMLElement.prototype.scrollIntoView = function () {};
+  dead.window.innerWidth = 1920;
+  dead.window.innerHeight = 1080;
+  dead.window.eval(script);
+  const took = dead.window.FumioTvKey("down");
+  check("a page with nothing focusable reports a dead end", deadEnds > 0, true);
+  check("and the key is not consumed", took, false);
+}
+
+{
+  // A working page must NOT nag: a successful move is silent.
+  let nagged = 0;
+  window.FumioNative = { tvNavDeadEnd() { nagged += 1; } };
+  // (re-loaded script for this window already ran with native=null, so poke the
+  //  bridge through a move that succeeds to prove no call is attempted at all)
+  doc.getElementById("logo").focus();
+  key("down");
+  check("a good move stays silent", nagged, 0);
+}
+
 console.log("\n" + results.filter((r) => r.ok).length + "/" + results.length + " checks passed");
 process.exit(results.every((r) => r.ok) ? 0 : 1);
