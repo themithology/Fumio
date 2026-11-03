@@ -52,14 +52,24 @@ jobs:
           set -o pipefail
           ./gradlew assembleDebug --no-daemon 2>&1 | tee /tmp/gradle.log || {
             echo "### Gradle failure" >> "$GITHUB_STEP_SUMMARY"
-            grep -nE "error:|e: file|FAILURE:|What went wrong|Caused by|> Task .* FAILED" /tmp/gradle.log \
-              | head -25 \
-              | while IFS= read -r line; do
-                  echo "::error::$line"
-                  echo "- $line" >> "$GITHUB_STEP_SUMMARY"
-                done
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+            sed -n '/What went wrong/,/^\* Try/p' /tmp/gradle.log | head -70 >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+            # Compile errors first (the useful ones), then whatever else broke.
+            grep -nE "^e: |error:|Caused by:" /tmp/gradle.log | head -30 \
+              | while IFS= read -r line; do echo "::error::$line"; done
             exit 1
           }
+
+      # The job summary is not always enough (some failures are only visible in
+      # the raw log), so the log travels with the run when the build breaks.
+      - name: Upload gradle log
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gradle-log
+          path: /tmp/gradle.log
+          if-no-files-found: ignore
 
       - uses: actions/upload-artifact@v4
         with:
