@@ -8,46 +8,56 @@ import android.graphics.Path;
 import android.graphics.RectF;
 import android.graphics.Typeface;
 import android.os.SystemClock;
+import android.view.Choreographer;
 import android.view.MotionEvent;
 import android.view.View;
 
 /**
- * The pointer. A plain, ordinary arrow — white body, thin dark edge, a tight
- * shadow. Nothing else.
+ * The pointer, drawn smoothly.
  *
- * It exists because a website is allowed to have things a D-pad cannot reach: a
- * card the site never made focusable, a drag handle, a hover menu, a slider.
- * Rather than fail there, the remote becomes a mouse, and clicks are synthesised
- * into the WebView as real touch events — which is exactly what the page already
- * knows how to handle.
+ * TWO POSITIONS, not one. `aimX/aimY` is where the input layer thinks the
+ * cursor is — that is what OK clicks and what the page is asked about. The
+ * drawn arrow lives at `renderX/renderY` and eases toward the aim every frame.
+ * That single indirection is the difference between a cursor that teleports in
+ * 20 dp steps (which reads as broken) and one that glides.
  *
- * DESIGN NOTES, because the first version got this wrong.
+ * The easing is exponential with a ~50 ms time constant, computed from the real
+ * frame delta:
  *
- * A glow, orbiting sparkles and an idle bob made the cursor look generated and,
- * worse, noisy: it competed with the poster art underneath, which is the actual
- * content. What a pointer needs is to be found instantly and then ignored.
+ *     k = 1 - exp(-dt / TAU)      render += (aim - render) * k
  *
- *   - Shape: the classic arrow. 20 dp wide, 29 dp tall, sharp tip. Recognised
- *     without being learned.
- *   - Edge: 1.6 dp of near-black. Not decoration — on a bright poster a pure
- *     white arrow vanishes, and a dark edge is what keeps it visible there
- *     (see the white chip in docs/cursor-styles.png).
- *   - Shadow: one tight, low-alpha offset. Enough to lift it off the art; not
- *     enough to read as a halo.
- *   - Motion: none at rest. A short squash on click, and that is all — a cursor
- *     that moves while you are aiming is a cursor you cannot aim.
+ * Frame-rate independent by construction: the same motion at 30, 60 or 120 Hz,
+ * and no accumulated drift because it is a fixed-target interpolation rather
+ * than a simulation. TAU is the whole feel of the thing — larger is floatier,
+ * smaller is snappier — and it lives in one constant.
  *
- * A consequence worth keeping: with no idle animation there is no continuous
- * repaint, so the view costs nothing while the viewer is reading the screen.
+ * The loop runs on {@link Choreographer}, so frames are vsync-aligned instead of
+ * landing on arbitrary postDelayed timers, and it STOPS when the cursor is
+ * parked. At rest this view asks for no frames at all, which matters because it
+ * sits on top of video.
  */
 final class TvCursorView extends View {
 
-    /** Movement step for one D-pad press, in dp (accelerated on key repeat). */
-    static final float STEP_DP = 26f;
+    /** What the input layer gives the animation loop. */
+    interface Driver {
+        /** Advance the aim by one frame; {@code dtMs} is the real frame delta. */
+        void onFrame(long dtMs);
+        /** True while a direction is held, so the loop must keep running. */
+        boolean wantsFrames();
+        /** Called once the drawn position has advanced, for hover work. */
+        void onRendered();
+    }
+
+    /** Catch-up time constant. 50 ms ≈ 150 ms to visually arrive. */
+    private static final float TAU_MS = 50f;
+    /** Closer than this and the cursor is parked. */
+    private static final float SETTLED_PX = 0.4f;
+    /** Longest frame we integrate (a stall must not teleport the cursor). */
+    private static final long MAX_FRAME_MS = 50L;
+    private static final long CLICK_MS = 110;
 
     private static final int INK = 0xFF0C0C10;
     private static final int BODY = 0xFFFFFFFF;
-    private static final long CLICK_MS = 110;
 
     private final float dp;
     private final Paint body = new Paint(Paint.ANTI_ALIAS_FLAG);
@@ -59,15 +69,78 @@ final class TvCursorView extends View {
     private final Path arrow = new Path();
     private final RectF box = new RectF();
 
-    /** Cursor position in WINDOW coordinates (see TvPointer). */
-    private float windowX;
-    private float windowY;
+    /** Window coordinates: where the input wants to be, and where we draw. */
+    private float aimX;
+    private float aimY;
+    private float renderX;
+    private float renderY;
+
+    private Driver driver;
+    private boolean running;
+    private long lastFrameAt;
     private boolean arrowVisible;
     private long clickAt = -1;
+    private boolean clickDrawn;
     private String hint = "";
     private long hintUntil = -1;
+    private boolean hintDrawn;
+
     private final int[] loc = new int[2];
-    private final RectF lastDirty = new RectF();
+
+    private final Choreographer.FrameCallback frameCallback =
+        new Choreographer.FrameCallback() {
+            @Override
+            public void doFrame(long frameTimeNanos) {
+                long now = SystemClock.uptimeMillis();
+                long dt = lastFrameAt == 0 ? 16L : Math.max(1L, Math.min(MAX_FRAME_MS, now - lastFrameAt));
+                lastFrameAt = now;
+
+                // 1. Let the input layer move the aim (held direction, ramp).
+                if (driver != null) driver.onFrame(dt);
+
+                // 2. Ease the drawn position toward it. Frame-rate independent.
+                float beforeX = renderX;
+                float beforeY = renderY;
+                float k = 1f - (float) Math.exp(-dt / TAU_MS);
+                renderX += (aimX - renderX) * k;
+                renderY += (aimY - renderY) * k;
+                boolean settled =
+                    Math.abs(aimX - renderX) < SETTLED_PX && Math.abs(aimY - renderY) < SETTLED_PX;
+                if (settled) {
+                    renderX = aimX;
+                    renderY = aimY;
+                }
+                if (beforeX != renderX || beforeY != renderY) {
+                    invalidateAround(beforeX, beforeY, renderX, renderY);
+                }
+
+                // 3. Tell the input layer where the arrow actually is, so hover
+                //    follows the visible tip rather than the theoretical aim.
+                if (driver != null) driver.onRendered();
+
+                boolean held = driver != null && driver.wantsFrames();
+                boolean hinting = hintUntil > now;
+                boolean clicking = clickAt > 0 && now - clickAt < CLICK_MS;
+                if (held || !settled || hinting || clicking) {
+                    Choreographer.getInstance().postFrameCallback(this);
+                    return;
+                }
+
+                // Everything has come to rest: one last frame to clear the pill,
+                // then the loop stops. This is why the overlay costs nothing
+                // while a viewer is reading the screen.
+                running = false;
+                lastFrameAt = 0;
+                if (hintDrawn) {
+                    hintDrawn = false;
+                    invalidate();
+                }
+                if (clickDrawn) {
+                    clickDrawn = false;
+                    invalidate();
+                }
+            }
+        };
 
     TvCursorView(Context context) {
         super(context);
@@ -79,15 +152,14 @@ final class TvCursorView extends View {
         body.setStyle(Paint.Style.FILL);
         body.setColor(BODY);
 
-        // Fill AND stroke in one pass: the edge sits exactly on the silhouette,
-        // so the shape stays sharp at 4K instead of gaining a fuzzy ring.
+        // Fill and stroke in one pass, so the edge sits exactly on the
+        // silhouette and stays sharp at 4K.
         edge.setStyle(Paint.Style.FILL_AND_STROKE);
         edge.setColor(INK);
         edge.setStrokeWidth(dp * 1.6f);
         edge.setStrokeJoin(Paint.Join.ROUND);
         edge.setStrokeCap(Paint.Cap.ROUND);
 
-        // Two offset silhouettes emulate a soft shadow without a blur pass.
         shadowNear.setStyle(Paint.Style.FILL);
         shadowNear.setColor(0x55000000);
         shadowFar.setStyle(Paint.Style.FILL);
@@ -101,7 +173,7 @@ final class TvCursorView extends View {
         hintText.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
         hintText.setAntiAlias(true);
 
-        // The arrow: tip at the origin, 20 x 29 dp, classic proportions.
+        // Tip at the origin, 20 x 29 dp.
         arrow.moveTo(0, 0);
         arrow.lineTo(dp * 0.2f, dp * 27.4f);
         arrow.lineTo(dp * 7.3f, dp * 20.8f);
@@ -112,13 +184,34 @@ final class TvCursorView extends View {
         arrow.close();
     }
 
-    // ─── state set from TvPointer ───────────────────────────────────────────
+    // ─── state, set from TvPointer ──────────────────────────────────────────
 
-    void moveToWindow(float x, float y) {
-        if (x == windowX && y == windowY) return;
-        windowX = x;
-        windowY = y;
+    void setDriver(Driver value) {
+        driver = value;
+    }
+
+    /** Move the target. The drawn arrow will glide to it. */
+    void setAim(float x, float y) {
+        aimX = x;
+        aimY = y;
+        startGlide();
+    }
+
+    /** Place both aim and drawing at once — used when the mode changes. */
+    void snapTo(float x, float y) {
+        aimX = x;
+        aimY = y;
+        renderX = x;
+        renderY = y;
         invalidate();
+    }
+
+    float viewX() {
+        return renderX;
+    }
+
+    float viewY() {
+        return renderY;
     }
 
     void setArrowVisible(boolean visible) {
@@ -129,13 +222,40 @@ final class TvCursorView extends View {
 
     void pulse() {
         clickAt = SystemClock.uptimeMillis();
-        invalidate();
+        startGlide();
     }
 
     void showHint(String text, long millis) {
         hint = text == null ? "" : text;
         hintUntil = SystemClock.uptimeMillis() + millis;
-        invalidate();
+        startGlide();
+    }
+
+    void startGlide() {
+        if (running) return;
+        if (!isAttachedToWindow()) return;
+        running = true;
+        lastFrameAt = 0;
+        Choreographer.getInstance().postFrameCallback(frameCallback);
+    }
+
+    @Override
+    protected void onAttachedToWindow() {
+        super.onAttachedToWindow();
+        if (aimX != renderX || aimY != renderY || hintUntil > SystemClock.uptimeMillis()) {
+            startGlide();
+        }
+    }
+
+    @Override
+    protected void onDetachedFromWindow() {
+        try {
+            Choreographer.getInstance().removeFrameCallback(frameCallback);
+        } catch (Exception ignored) {
+            /* nothing posted */
+        }
+        running = false;
+        super.onDetachedFromWindow();
     }
 
     // ─── drawing ────────────────────────────────────────────────────────────
@@ -144,56 +264,42 @@ final class TvCursorView extends View {
     protected void onDraw(Canvas canvas) {
         long now = SystemClock.uptimeMillis();
         getLocationInWindow(loc);
-        float x = windowX - loc[0];
-        float y = windowY - loc[1];
+        float x = renderX - loc[0];
+        float y = renderY - loc[1];
 
         if (arrowVisible) drawPointer(canvas, x, y, now);
-        if (hintUntil > now && !hint.isEmpty()) drawHint(canvas, now);
-
-        // The only two things that animate: the click squash (110 ms) and the
-        // hint fading out. At rest the view does not ask for another frame.
-        boolean animating = (clickAt > 0 && now - clickAt < CLICK_MS) || hintUntil > now;
-        if (!animating || !isShown()) return;
-
-        RectF dirty = dirtyArea(x, y);
-        dirty.union(lastDirty);
-        lastDirty.set(dirtyArea(x, y));
-        postInvalidateDelayed(
-            50,
-            (int) dirty.left,
-            (int) dirty.top,
-            (int) dirty.right,
-            (int) dirty.bottom
-        );
+        if (hintUntil > now && !hint.isEmpty()) {
+            hintDrawn = true;
+            drawHint(canvas, now);
+        }
     }
 
-    /** Everything a frame may touch: the arrow, its shadow, the hint pill. */
-    private RectF dirtyArea(float x, float y) {
+    private void invalidateAround(float fromX, float fromY, float toX, float toY) {
+        getLocationInWindow(loc);
         float spread = dp * 34f;
-        RectF area = new RectF(x - spread, y - spread, x + spread, y + spread + dp * 20f);
-        if (hintUntil > SystemClock.uptimeMillis() && !hint.isEmpty()) {
-            float w = hintText.measureText(hint) + dp * 40f;
-            float cx = getWidth() / 2f;
-            area.union(cx - w / 2, dp * 18f, cx + w / 2, dp * 71f);
-        }
-        return area;
+        float left = Math.min(fromX, toX) - loc[0] - spread;
+        float top = Math.min(fromY, toY) - loc[1] - spread;
+        float right = Math.max(fromX, toX) - loc[0] + spread;
+        float bottom = Math.max(fromY, toY) - loc[1] + spread + dp * 24f;
+        invalidate((int) left, (int) top, (int) right, (int) bottom);
     }
 
     private void drawPointer(Canvas canvas, float x, float y, long now) {
-        // Squash while clicked: 1.0 → 0.93 → 1.0 over 110 ms. Scaled about the
-        // tip, so the point of aim never moves — the click lands where the
-        // viewer was pointing, not a few pixels off.
+        // A 7 % squash while clicked, scaled about the tip so the point of aim
+        // never moves: the click lands where the viewer was pointing.
         float scale = 1f;
         if (clickAt > 0) {
             float t = (now - clickAt) / (float) CLICK_MS;
-            if (t < 1f) scale = 1f - 0.07f * (float) Math.sin(t * Math.PI);
+            if (t < 1f) {
+                scale = 1f - 0.07f * (float) Math.sin(t * Math.PI);
+                clickDrawn = true;
+            }
         }
 
         canvas.save();
         canvas.translate(x, y);
         canvas.scale(scale, scale);
 
-        // Far shadow (wide, very soft), then near shadow, then edge, then body.
         canvas.save();
         canvas.translate(dp * 2.1f, dp * 3.9f);
         canvas.scale(1.015f, 1.02f);
@@ -205,8 +311,7 @@ final class TvCursorView extends View {
         canvas.drawPath(arrow, shadowNear);
         canvas.restore();
 
-        canvas.drawPath(arrow, edge); // FILL_AND_STROKE: silhouette + outline
-        body.setColor(BODY);
+        canvas.drawPath(arrow, edge);
         canvas.drawPath(arrow, body);
 
         canvas.restore();

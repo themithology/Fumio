@@ -280,9 +280,10 @@ it recognises itself (`TvMode`) and changes exactly three things:
 - **No ad wall.** The `/verify` 12-hour unlock is skipped (`ensureUnlocked`),
   because a popup in front of a film on a family screen is the wrong trade.
   Phones are untouched.
-- **The remote is a cursor.** `MainActivity.dispatchKeyEvent` hands the arrows
-  to `TvPointer`: they move a plain arrow (`TvCursorView`), and OK clicks what is
-  under it. `assets/tv-cursor.js` outlines the target the click will hit — the
+- **The remote is a cursor, and it glides.** `MainActivity.dispatchKeyEvent`
+  hands the arrows to `TvPointer`: a tap steps 18 dp, a hold ramps to full speed
+  over ~0.4 s, and the drawn arrow chases the aim with a 50 ms easing curve on a
+  vsync frame loop, so nothing jumps. OK clicks what is under it. `assets/tv-cursor.js` outlines the target the click will hit — the
   nearest link/button/clickable ancestor, so aiming at a poster clicks its card
   — and moves are sent as real mouse-hover events, so the site's own hover
   styles and hover menus work too. BACK is never swallowed. No focus ring, no

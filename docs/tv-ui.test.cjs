@@ -158,6 +158,12 @@ function viewportOf(dom) {
   w.FumioTvHover(40, 40);
   check("a <button> is a target", doc.getElementById("button").classList.contains("fumio-tv-target"), true);
 
+  // One-call hover+click: the native side's only click path.
+  checkThat("ClickAt on empty space reports failure", !w.FumioTvClickAt(60, 60));
+  const before = clicked;
+  checkThat("ClickAt on a target reports success", w.FumioTvClickAt(10, 10));
+  check("ClickAt clicked exactly once", clicked, before + 1);
+
   // Typing: the remote must belong to the keyboard, not to the cursor.
   doc.getElementById("field").focus();
   await new Promise((r) => setTimeout(r, 10));

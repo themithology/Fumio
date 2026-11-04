@@ -147,6 +147,24 @@
     }
   };
 
+  /**
+   * Resolve and click in ONE call: hover at the point, then click the target.
+   *
+   * The native side calls this instead of hover-then-click, because those are
+   * two round trips through the JS bridge and the page can re-render in between
+   * — which is how you end up clicking the card the cursor was over 40 ms ago.
+   * Returns false when nothing clickable is there, so the caller can fall back
+   * to a synthetic tap for canvas / pointer-only controls.
+   */
+  window.FumioTvClickAt = function (x, y) {
+    try {
+      if (!window.FumioTvHover(x, y)) return false;
+      return window.FumioTvClick();
+    } catch (e) {
+      return false;
+    }
+  };
+
   /** Which way the page can still scroll, so native knows when to nudge. */
   window.FumioTvScrollable = function () {
     try {

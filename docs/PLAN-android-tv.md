@@ -152,9 +152,25 @@ television remote rather than a laptop trackpad.
    **after** the first one, because `cursor` is an inherited property: every
    child of a link computes `pointer`, and testing that first would make the
    poster its own target. (A test caught exactly that.)
-3. **Speed with precision.** A tap moves 20 dp (fine aim); holding accelerates
-   to 4.6× (cross the screen in about a second). The first press is always the
-   precise one.
+3. **It glides.** Three mechanisms, and together they are what stops it feeling
+   like a remote pretending to be a mouse:
+
+   - *A tap is a fixed 18 dp step.* Predictable, small enough to land on a 40 dp
+     button, big enough that crossing a card takes three presses.
+   - *A hold accelerates.* The first press also starts a continuous advance that
+     ramps 22 % → 100 % over ~0.4 s with a smoothstep curve, so there is no jolt
+     off the mark. Full speed crosses the screen in ~0.9 s, expressed relative to
+     the screen so a 720p box and a 4K box feel identical.
+   - *The drawn arrow chases the aim.* `TvCursorView` keeps two positions: the
+     aim (what OK clicks, what the page is asked about) and the drawn position,
+     which eases toward it each frame with `k = 1 - exp(-dt/50ms)`. Frame-rate
+     independent, fixed-target interpolation, so it cannot drift — and it means
+     motion is a stream of positions at vsync instead of discrete steps.
+
+   The loop runs on `Choreographer` (vsync-aligned, not `postDelayed` timers),
+   only while the cursor is moving or animating, and **stops when parked** — at
+   rest it requests no frames at all. Hover and clicks use the *drawn* position,
+   so what you see under the tip is exactly what gets clicked.
 4. **Hover that works.** Moves are delivered as real mouse hover events, so the
    site's own `:hover` styling and hover-only menus behave exactly as on a
    desktop — that is content a D-pad could never show.
@@ -175,9 +191,11 @@ removed a permanent repaint loop: at rest the overlay now asks for no frames.
 
 ### 3.4 Cost
 
-The overlay draws only the dirty rectangle around the cursor (and the hint), at
-~20 fps, and only during a click squash or a hint fade. Nothing runs while the
-viewer is reading. On a phone the whole layer does not exist.
+While the cursor moves, the overlay invalidates only the corridor between its old
+and new positions (plus the hint), on vsync. Once it settles — and no direction
+is held — the frame loop returns without re-posting, so a parked cursor costs
+exactly nothing, which is what makes it safe to leave on top of video. On a phone
+the whole layer does not exist.
 
 ## 4. Scale — "not too big, not too small"
 

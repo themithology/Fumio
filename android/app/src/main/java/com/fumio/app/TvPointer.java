@@ -10,31 +10,37 @@ import android.view.View;
 import android.view.ViewGroup;
 import android.webkit.WebView;
 
+import java.lang.ref.WeakReference;
+
 /**
- * The remote is a mouse. That is the whole input model on a television now.
+ * The remote is a mouse — and it glides.
  *
  * Why cursor-only, and not a D-pad focus ring: the browse UI is the live
  * website, which we do not own and which changes whenever its owner changes it.
  * A focus engine can only move between things the page admits are focusable; the
  * moment a card is a plain <div>, or a control is a slider, or a menu opens on
- * hover, the ring has nowhere to go. A cursor has no such dependency — it is the
- * mouse the page was designed for — so it cannot be stranded by a deploy.
+ * hover, the ring has nowhere to go. A cursor has no such dependency.
  *
- * WHAT MAKES IT GOOD ENOUGH TO REPLACE A D-PAD:
+ * HOW THE MOTION WORKS (the part that decides whether this feels good).
  *
- *   1. A target, always. Every move asks the page what is under the cursor
- *      (tv-cursor.js walks up to the nearest link/button/pointer-cursor
- *      ancestor) and outlines it. OK never clicks a random pixel hoping.
- *   2. Forgiveness. OK clicks the TARGET, not the coordinate — so aiming at a
- *      poster works even when the cursor is over its artwork, not its link.
- *   3. Speed. A held direction accelerates up to 4.6x, so crossing the screen is
- *      a second, and a single tap still moves a fine 20 dp.
- *   4. Scrolling. At an edge the cursor stops and the page scrolls, which is how
- *      anything below the fold is reached.
- *   5. Hover that works. Moves are sent to the page as mouse hover, so the site's
- *      own hover states and hover-only menus behave as they do on a desktop.
- *   6. Typing. Click a field and the keyboard opens; while it is open the remote
- *      belongs to the keyboard, not to us.
+ *   A tap is predictable. One press moves the aim 18 dp — small enough to land
+ *   on a 40 dp button, big enough to cross a card in three presses.
+ *
+ *   A hold accelerates. The FIRST press also starts a continuous advance whose
+ *   speed ramps from 22 % to 100 % over about 0.4 s (smoothstep, so there is no
+ *   jolt off the mark). Full speed crosses the screen in ~0.9 s, scaled to the
+ *   screen so a 720p box and a 4K box feel the same.
+ *
+ *   The drawn arrow is always chasing the aim (TvCursorView, ~50 ms time
+ *   constant), so there is no step, no jump, no notch — the motion is a stream of
+ *   positions, 60 times a second.
+ *
+ *   At an edge the aim stops and the page scrolls continuously, the way a mouse
+ *   at the edge of a screen behaves, so nothing below the fold is unreachable.
+ *
+ * Hover and clicks use the DRAWN position, not the aim: what the viewer sees
+ * under the arrow is exactly what gets clicked, which is what makes the whole
+ * thing feel honest.
  *
  * Installed only when {@link TvMode#isTv} is true — a phone never sees any of it.
  */
@@ -42,23 +48,58 @@ final class TvPointer {
 
     private static final String TAG = "FumioTvPointer";
 
-    /** A single tap of the D-pad, in dp. */
-    private static final float STEP_DP = 20f;
-    /** Extra speed per held-key repeat, capped, so holding glides. */
-    private static final float ACCEL_PER_REPEAT = 0.9f;
-    private static final float ACCEL_MAX = 3.6f;
-    /** Don't spam the page with hover work on every pixel of a held key. */
-    private static final long HOVER_MIN_MS = 60L;
-    private static final float HOVER_MIN_DP = 3f;
-    private static final long HINT_MS = 5000L;
+    /** One tap of the D-pad, in dp. Precise, but not fiddly. */
+    private static final float NUDGE_DP = 18f;
+    /** Time for a held direction to reach full speed. */
+    private static final float RAMP_MS = 420f;
+    /** Full speed covers the screen width in this many seconds. */
+    private static final float CROSS_SECONDS = 0.9f;
+    /** Slowest hold speed, as a fraction of full speed (fine aim). */
+    private static final float SLOW_FRACTION = 0.22f;
+    /** Hover work: at most this often, and only after moving this far. */
+    private static final long HOVER_MS = 60L;
+    private static final float HOVER_MIN_DP = 2.5f;
+    /** Continuous edge scrolling cadence. */
+    private static final long SCROLL_MS = 110L;
+    private static final long HINT_MS = 5200L;
+
+    private static final int HOLD_LEFT = 1;
+    private static final int HOLD_RIGHT = 2;
+    private static final int HOLD_UP = 4;
+    private static final int HOLD_DOWN = 8;
+
+    private static final TvCursorView.Driver DRIVER =
+        new TvCursorView.Driver() {
+            @Override
+            public void onFrame(long dtMs) {
+                advance(dtMs);
+            }
+
+            @Override
+            public boolean wantsFrames() {
+                return held != 0;
+            }
+
+            @Override
+            public void onRendered() {
+                maybeHover();
+            }
+        };
 
     private static TvCursorView cursor;
-    private static float windowX;
-    private static float windowY;
-    private static long hoveredAt;
-    private static float hoveredX;
-    private static float hoveredY;
-    private static String scrollable = "{\"x\":false,\"y\":false}";
+    private static WeakReference<WebView> target;
+
+    /** The aim, in window coordinates. The arrow eases toward this. */
+    private static float aimX;
+    private static float aimY;
+    private static boolean placed;
+
+    private static int held;
+    private static long heldMs;
+    private static long lastHoverAt;
+    private static long lastScrollAt;
+    private static float hoverX;
+    private static float hoverY;
 
     private TvPointer() {}
 
@@ -69,15 +110,32 @@ final class TvPointer {
         ensureView(activity);
     }
 
-    /** A new page: keep the mode, keep the aim if it is still on screen. */
+    /** A new page: keep the position, kill any glide left over from the last one. */
     static void onPageFinished(Activity activity, WebView webView) {
         if (activity == null || webView == null || !TvMode.isTv(activity)) return;
         ensureView(activity);
-        clampTo(webView);
-        pushCursor();
-        readScrollable(webView);
+        target = new WeakReference<>(webView);
+        held = 0;
+        heldMs = 0;
+
+        int[] loc = new int[2];
+        webView.getLocationInWindow(loc);
+        float cx = loc[0] + webView.getWidth() / 2f;
+        float cy = loc[1] + webView.getHeight() / 2f;
+        if (!placed || aimX < loc[0] || aimX > loc[0] + webView.getWidth() ||
+            aimY < loc[1] || aimY > loc[1] + webView.getHeight()) {
+            aimX = cx;
+            aimY = cy;
+            placed = true;
+            if (cursor != null) cursor.snapTo(aimX, aimY);
+        } else if (cursor != null) {
+            cursor.snapTo(aimX, aimY);
+        }
+        if (cursor != null) {
+            cursor.setArrowVisible(true);
+            cursor.bringToFront();
+        }
         hover(webView, true);
-        if (cursor != null) cursor.setArrowVisible(true);
     }
 
     private static void ensureView(Activity activity) {
@@ -86,6 +144,7 @@ final class TvPointer {
             ViewGroup root = activity.findViewById(android.R.id.content);
             if (root == null) return;
             cursor = new TvCursorView(activity);
+            cursor.setDriver(DRIVER);
             root.addView(
                 cursor,
                 new ViewGroup.LayoutParams(
@@ -101,27 +160,27 @@ final class TvPointer {
         }
     }
 
-    /** The cursor exists for the whole session; the viewer never has to "enter" it. */
+    /** First key press of the session: put the arrow on screen, with a hint. */
     private static void ensureAimed(Activity activity, WebView webView) {
         ensureView(activity);
-        if (windowX != 0 || windowY != 0) return;
+        target = new WeakReference<>(webView);
+        if (placed) return;
         int[] loc = new int[2];
         webView.getLocationInWindow(loc);
-        windowX = loc[0] + webView.getWidth() / 2f;
-        windowY = loc[1] + webView.getHeight() / 2f;
+        aimX = loc[0] + webView.getWidth() / 2f;
+        aimY = loc[1] + webView.getHeight() / 2f;
+        placed = true;
         if (cursor != null) {
             cursor.bringToFront();
             cursor.setArrowVisible(true);
-            cursor.showHint("Move with the arrows  ·  OK selects", HINT_MS);
+            cursor.snapTo(aimX, aimY);
+            cursor.showHint("Arrows glide  ·  OK selects  ·  BACK goes back", HINT_MS);
         }
-        pushCursor();
     }
 
     // ─── keys ───────────────────────────────────────────────────────────────
 
-    /**
-     * @return true when this layer took the key.
-     */
+    /** @return true when this layer took the key. */
     static boolean handleKey(Activity activity, WebView webView, KeyEvent event, boolean typing) {
         if (activity == null || webView == null || event == null) return false;
         if (!TvMode.isTv(activity)) return false;
@@ -130,36 +189,33 @@ final class TvPointer {
         boolean down = event.getAction() == KeyEvent.ACTION_DOWN;
         boolean up = event.getAction() == KeyEvent.ACTION_UP;
 
-        // MENU is "what does this thing do?" — a ways to re-show the hint.
+        // MENU / INFO: re-show the hint. Remotes with no manual deserve a way to
+        // ask "how does this work?".
         if (code == KeyEvent.KEYCODE_MENU || code == KeyEvent.KEYCODE_INFO) {
             if (up) {
                 ensureAimed(activity, webView);
                 if (cursor != null) {
                     cursor.setArrowVisible(true);
-                    cursor.showHint("Arrows move  ·  OK selects  ·  BACK goes back", HINT_MS);
+                    cursor.showHint("Arrows glide  ·  OK selects  ·  BACK goes back", HINT_MS);
                 }
             }
             return true;
         }
 
-        // BACK belongs to the app (close the player, go back a page). Never
-        // swallowed here: a cursor with no exit is a trap.
+        // BACK is the app's. A cursor with no exit is a trap.
         if (code == KeyEvent.KEYCODE_BACK) return false;
 
-        boolean click =
-            code == KeyEvent.KEYCODE_DPAD_CENTER || code == KeyEvent.KEYCODE_ENTER;
-        int dx = 0;
-        int dy = 0;
-        if (code == KeyEvent.KEYCODE_DPAD_LEFT) dx = -1;
-        else if (code == KeyEvent.KEYCODE_DPAD_RIGHT) dx = 1;
-        else if (code == KeyEvent.KEYCODE_DPAD_UP) dy = -1;
-        else if (code == KeyEvent.KEYCODE_DPAD_DOWN) dy = 1;
-        else if (!click) return false; // not ours: let the page have it
+        boolean click = code == KeyEvent.KEYCODE_DPAD_CENTER || code == KeyEvent.KEYCODE_ENTER;
+        int bit = holdBit(code);
+        if (!click && bit == 0) return false; // not ours
 
         // While the keyboard is open the remote belongs to it.
         if (typing) return false;
 
-        if (up) return true; // consume the release so the WebView never scrolls
+        if (up) {
+            if (bit != 0) release(bit);
+            return true; // consume the release so the WebView never scrolls
+        }
         if (!down) return false;
 
         ensureAimed(activity, webView);
@@ -171,134 +227,195 @@ final class TvPointer {
             return true;
         }
 
-        move(activity, webView, dx, dy, event.getRepeatCount());
+        // Auto-repeat is ignored on purpose: the glide advances the aim every
+        // frame, and stacking key-repeat jumps on top of it is exactly the
+        // notchy motion this replaces. The press we act on is the first one.
+        if (event.getRepeatCount() == 0) press(webView, bit);
         return true;
     }
 
-    // ─── movement ───────────────────────────────────────────────────────────
-
-    private static void move(Activity activity, WebView webView, int dx, int dy, int repeat) {
-        float density = activity.getResources().getDisplayMetrics().density;
-        float speed = 1f + Math.min(ACCEL_MAX, repeat * ACCEL_PER_REPEAT);
-        float step = STEP_DP * density * speed;
-
-        int[] loc = new int[2];
-        webView.getLocationInWindow(loc);
-        float margin = 6f * density;
-        float left = loc[0] + margin;
-        float top = loc[1] + margin;
-        float right = Math.max(left, loc[0] + webView.getWidth() - margin);
-        float bottom = Math.max(top, loc[1] + webView.getHeight() - margin);
-
-        float nextX = windowX + dx * step;
-        float nextY = windowY + dy * step;
-
-        boolean atBottom = nextY > bottom;
-        boolean atTop = nextY < top;
-        boolean atRight = nextX > right;
-        boolean atLeft = nextX < left;
-
-        windowX = Math.max(left, Math.min(right, nextX));
-        windowY = Math.max(top, Math.min(bottom, nextY));
-
-        if (cursor != null) cursor.setArrowVisible(true);
-        pushCursor();
-
-        // At an edge, the page moves instead: that is how the fold is crossed.
-        if (atBottom || atTop || atLeft || atRight) {
-            nudge(webView, atRight, atLeft, atBottom, atTop, speed);
-        }
-        hover(webView, false);
-    }
-
-    private static void nudge(
-        WebView webView,
-        boolean right,
-        boolean left,
-        boolean down,
-        boolean up,
-        float speed
-    ) {
-        int vx = Math.round((right ? 1 : left ? -1 : 0) * webView.getWidth() * 0.16f * speed);
-        int vy = Math.round((down ? 1 : up ? -1 : 0) * webView.getHeight() * 0.16f * speed);
-        String js =
-            "(function(){try{window.scrollBy(" + vx + "," + vy + ");}catch(e){}})();";
-        try {
-            webView.evaluateJavascript(js, null);
-        } catch (Exception ignored) {
-            /* a page that will not scroll simply does not scroll */
+    private static int holdBit(int code) {
+        switch (code) {
+            case KeyEvent.KEYCODE_DPAD_LEFT:
+                return HOLD_LEFT;
+            case KeyEvent.KEYCODE_DPAD_RIGHT:
+                return HOLD_RIGHT;
+            case KeyEvent.KEYCODE_DPAD_UP:
+                return HOLD_UP;
+            case KeyEvent.KEYCODE_DPAD_DOWN:
+                return HOLD_DOWN;
+            default:
+                return 0;
         }
     }
 
-    private static void clampTo(WebView webView) {
-        int[] loc = new int[2];
-        webView.getLocationInWindow(loc);
-        float cx = loc[0] + webView.getWidth() / 2f;
-        float cy = loc[1] + webView.getHeight() / 2f;
-        if (windowX < loc[0] || windowX > loc[0] + webView.getWidth()) windowX = cx;
-        if (windowY < loc[1] || windowY > loc[1] + webView.getHeight()) windowY = cy;
-        pushCursor();
+    private static void press(WebView webView, int bit) {
+        boolean idle = held == 0;
+        held |= bit;
+        if (idle) {
+            // A fresh hold always starts slow: the first frames are the fine
+            // aiming, and the ramp is what makes long moves feel effortless.
+            heldMs = 0;
+            nudge(webView, bit);
+        }
+        if (cursor != null) {
+            cursor.setArrowVisible(true);
+            cursor.startGlide();
+        }
     }
 
-    private static void pushCursor() {
-        if (cursor == null) return;
-        cursor.bringToFront();
-        cursor.moveToWindow(windowX, windowY);
+    private static void release(int bit) {
+        held &= ~bit;
+        if (held == 0) heldMs = 0;
+    }
+
+    /** The tap: an immediate, predictable 18 dp step. */
+    private static void nudge(WebView webView, int bit) {
+        float density = webView.getResources().getDisplayMetrics().density;
+        float step = NUDGE_DP * density;
+        float dx = 0;
+        float dy = 0;
+        if ((bit & HOLD_LEFT) != 0) dx -= step;
+        if ((bit & HOLD_RIGHT) != 0) dx += step;
+        if ((bit & HOLD_UP) != 0) dy -= step;
+        if ((bit & HOLD_DOWN) != 0) dy += step;
+        float[] bounds = bounds(webView, density);
+        aimX = clamp(aimX + dx, bounds[0], bounds[2]);
+        aimY = clamp(aimY + dy, bounds[1], bounds[3]);
+        if (cursor != null) cursor.setAim(aimX, aimY);
+    }
+
+    // ─── the glide ──────────────────────────────────────────────────────────
+
+    /** One frame of held-direction movement. Called from the view's loop. */
+    private static void advance(long dt) {
+        if (held == 0) return;
+        WebView webView = web();
+        if (webView == null) return;
+
+        float density = webView.getResources().getDisplayMetrics().density;
+        float[] bounds = bounds(webView, density);
+        float left = bounds[0];
+        float top = bounds[1];
+        float right = bounds[2];
+        float bottom = bounds[3];
+        float widthPx = Math.max(1f, right - left);
+
+        // Full speed is expressed as "cross the screen in CROSS_SECONDS", so the
+        // feel is identical on a 720p box and a 4K one.
+        float fastPxPerSecond = widthPx / CROSS_SECONDS;
+        heldMs = Math.min(20000L, heldMs + dt);
+        float t = Math.min(1f, heldMs / RAMP_MS);
+        float ramp = t * t * (3f - 2f * t); // smoothstep: no jolt off the mark
+        float speed = fastPxPerSecond * (SLOW_FRACTION + (1f - SLOW_FRACTION) * ramp);
+
+        float dx = 0;
+        float dy = 0;
+        if ((held & HOLD_LEFT) != 0) dx -= 1f;
+        if ((held & HOLD_RIGHT) != 0) dx += 1f;
+        if ((held & HOLD_UP) != 0) dy -= 1f;
+        if ((held & HOLD_DOWN) != 0) dy += 1f;
+        if (dx != 0 && dy != 0) {
+            // Diagonal: same ground speed, not 1.41x faster.
+            dx *= 0.7071f;
+            dy *= 0.7071f;
+        }
+
+        float stepPx = speed * dt / 1000f;
+        float nextX = clamp(aimX + dx * stepPx, left, right);
+        float nextY = clamp(aimY + dy * stepPx, top, bottom);
+
+        boolean stuckX = (dx > 0 && nextX >= right) || (dx < 0 && nextX <= left);
+        boolean stuckY = (dy > 0 && nextY >= bottom) || (dy < 0 && nextY <= top);
+
+        if (nextX != aimX || nextY != aimY) {
+            aimX = nextX;
+            aimY = nextY;
+            if (cursor != null) cursor.setAim(aimX, aimY);
+        }
+
+        // Holding into an edge scrolls the page continuously, so a list that
+        // runs off the bottom is reachable without any special "page down".
+        if (stuckX || stuckY) {
+            long now = SystemClock.uptimeMillis();
+            if (now - lastScrollAt >= SCROLL_MS) {
+                lastScrollAt = now;
+                int vx = stuckX ? Math.round(dx * speed * SCROLL_MS / 1000f) : 0;
+                int vy = stuckY ? Math.round(dy * speed * SCROLL_MS / 1000f) : 0;
+                if (vx != 0 || vy != 0) scroll(webView, vx, vy);
+            }
+        }
     }
 
     // ─── page interaction ───────────────────────────────────────────────────
 
-    /** Ask the page what is under the cursor, and outline it. Throttled. */
+    /**
+     * Ask the page what is under the arrow and outline it, but only when the
+     * arrow has actually gone somewhere — this runs on every animation frame,
+     * and a page does not need to be interrogated 60 times a second.
+     */
+    private static void maybeHover() {
+        if (cursor == null) return;
+        long now = SystemClock.uptimeMillis();
+        float density = cursor.getResources().getDisplayMetrics().density;
+        float moved = Math.abs(cursor.viewX() - hoverX) + Math.abs(cursor.viewY() - hoverY);
+        if (now - lastHoverAt < HOVER_MS) return;
+        if (moved < HOVER_MIN_DP * density) return;
+        WebView webView = web();
+        if (webView == null) return;
+        hover(webView, false);
+    }
+
     private static void hover(WebView webView, boolean force) {
         int[] loc = new int[2];
         webView.getLocationInWindow(loc);
-        float x = windowX - loc[0] + webView.getScrollX();
-        float y = windowY - loc[1] + webView.getScrollY();
-        long now = SystemClock.uptimeMillis();
-        float density = webView.getResources().getDisplayMetrics().density;
-        float moved = Math.abs(x - hoveredX) + Math.abs(y - hoveredY);
+        float viewX = cursor != null ? cursor.viewX() : aimX;
+        float viewY = cursor != null ? cursor.viewY() : aimY;
+        float x = viewX - loc[0] + webView.getScrollX();
+        float y = viewY - loc[1] + webView.getScrollY();
 
-        // Real hover events (so the site's own :hover rules fire) but only when
-        // the pointer has actually gone somewhere.
-        if (force || (now - hoveredAt >= HOVER_MIN_MS && moved >= HOVER_MIN_DP * density)) {
-            hoveredAt = now;
-            hoveredX = x;
-            hoveredY = y;
-            try {
-                MotionEvent event = MotionEvent.obtain(now, now, MotionEvent.ACTION_HOVER_MOVE, x, y, 0);
-                event.setSource(InputDevice.SOURCE_MOUSE);
-                webView.onHoverEvent(event);
-                event.recycle();
-            } catch (Exception ignored) {
-                /* hover is a nicety */
-            }
+        lastHoverAt = SystemClock.uptimeMillis();
+        hoverX = viewX;
+        hoverY = viewY;
+
+        // Real hover, so the site's own :hover styling and hover menus fire.
+        try {
+            MotionEvent event =
+                MotionEvent.obtain(SystemClock.uptimeMillis(), SystemClock.uptimeMillis(),
+                    MotionEvent.ACTION_HOVER_MOVE, x, y, 0);
+            event.setSource(InputDevice.SOURCE_MOUSE);
+            webView.onHoverEvent(event);
+            event.recycle();
+        } catch (Exception ignored) {
+            /* hover is a nicety */
         }
-        if (force || now - hoveredAt < 4) {
-            try {
-                webView.evaluateJavascript(
-                    "window.FumioTvHover&&window.FumioTvHover(" + x + "," + y + ");",
-                    null
-                );
-            } catch (Exception ignored) {
-                /* the helper is optional */
-            }
+        // And our own target resolution, which is what OK will act on.
+        try {
+            webView.evaluateJavascript(
+                "window.FumioTvHover&&window.FumioTvHover(" + x + "," + y + ");",
+                null
+            );
+        } catch (Exception ignored) {
+            /* the helper is optional */
         }
     }
 
     /**
-     * Click. The page's own target wins — that is the forgiveness described in
-     * the class comment. A synthetic tap is the fallback, for anything that only
-     * listens to pointer/touch events (a canvas, a custom video control).
+     * Click at the drawn position. tv-cursor.js resolves the target and clicks
+     * it (so aiming at a poster clicks its card); a synthetic tap is the
+     * fallback for anything that only listens to pointer/touch events.
      */
     private static void click(final WebView webView) {
         int[] loc = new int[2];
         webView.getLocationInWindow(loc);
-        final float x = windowX - loc[0] + webView.getScrollX();
-        final float y = windowY - loc[1] + webView.getScrollY();
+        float viewX = cursor != null ? cursor.viewX() : aimX;
+        float viewY = cursor != null ? cursor.viewY() : aimY;
+        final float x = viewX - loc[0] + webView.getScrollX();
+        final float y = viewY - loc[1] + webView.getScrollY();
 
         try {
             webView.evaluateJavascript(
-                "window.FumioTvClick&&window.FumioTvClick();",
+                "window.FumioTvClickAt?window.FumioTvClickAt(" + x + "," + y + "):false;",
                 clicked -> {
                     if (clicked != null && clicked.startsWith("true")) return;
                     tap(webView, x, y);
@@ -321,7 +438,8 @@ final class TvPointer {
                 () -> {
                     try {
                         MotionEvent up =
-                            MotionEvent.obtain(now, SystemClock.uptimeMillis(), MotionEvent.ACTION_UP, x, y, 0);
+                            MotionEvent.obtain(now, SystemClock.uptimeMillis(),
+                                MotionEvent.ACTION_UP, x, y, 0);
                         up.setSource(InputDevice.SOURCE_TOUCHSCREEN);
                         webView.dispatchTouchEvent(up);
                         up.recycle();
@@ -336,23 +454,43 @@ final class TvPointer {
         }
     }
 
-    private static void readScrollable(WebView webView) {
+    // ─── helpers ────────────────────────────────────────────────────────────
+
+    /** The usable rectangle inside the WebView, in window coordinates. */
+    private static float[] bounds(WebView webView, float density) {
+        int[] loc = new int[2];
+        webView.getLocationInWindow(loc);
+        float margin = 6f * density;
+        float left = loc[0] + margin;
+        float top = loc[1] + margin;
+        float right = Math.max(left, loc[0] + webView.getWidth() - margin);
+        float bottom = Math.max(top, loc[1] + webView.getHeight() - margin);
+        return new float[] { left, top, right, bottom };
+    }
+
+    private static void scroll(WebView webView, int vx, int vy) {
         try {
             webView.evaluateJavascript(
-                "window.FumioTvScrollable&&window.FumioTvScrollable();",
-                value -> {
-                    if (value != null && value.startsWith("\"{")) {
-                        scrollable = value.substring(1, value.length() - 1).replace("\\\"", "\"");
-                    }
-                }
+                "(function(){try{window.scrollBy(" + vx + "," + vy + ");}catch(e){}})();",
+                null
             );
         } catch (Exception ignored) {
-            /* diagnostics only */
+            /* a page that will not scroll simply does not scroll */
         }
     }
 
-    /** For the self-test overlay / logs. */
+    private static WebView web() {
+        return target == null ? null : target.get();
+    }
+
+    private static float clamp(float value, float min, float max) {
+        return value < min ? min : (value > max ? max : value);
+    }
+
+    /** For logs and the self-test screen. */
     static String state() {
-        return "cursor=" + Math.round(windowX) + "," + Math.round(windowY) + " scrollable=" + scrollable;
+        return "aim=" + Math.round(aimX) + "," + Math.round(aimY) +
+            " drawn=" + (cursor == null ? "-" : Math.round(cursor.viewX()) + "," + Math.round(cursor.viewY())) +
+            " held=" + held;
     }
 }
