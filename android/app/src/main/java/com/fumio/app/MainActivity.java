@@ -221,21 +221,13 @@ public class MainActivity extends BridgeActivity {
     }
 
     public class NativeBridge {
-        /** tv-nav.js tells us when the remote belongs to a text field. */
+        /** tv-cursor.js tells us when the remote belongs to a text field. */
         @JavascriptInterface
         public void tvInputFocused(boolean typing) {
             TvUi.setInputFocused(typing);
         }
 
-        /**
-         * The D-pad ran out of things to focus. On a TV that means "the page has
-         * something only a mouse can reach", so we offer the pointer. Nothing is
-         * switched automatically: the viewer keeps control of the remote.
-         */
-        @JavascriptInterface
-        public void tvNavDeadEnd() {
-            runOnUiThread(() -> TvUi.suggestPointer(MainActivity.this));
-        }
+
 
         @JavascriptInterface
         public void openBrowser(String url) {
@@ -604,7 +596,7 @@ public class MainActivity extends BridgeActivity {
                     view.clearHistory();
                 }
                 injectPlayerScript(view);
-                TvUi.onPageFinished(MainActivity.this, view);
+                TvUi.onLivePageFinished(MainActivity.this, view);
                 startPlayerRouteWatcher(view);
             }
             deliverPendingAuthToken();

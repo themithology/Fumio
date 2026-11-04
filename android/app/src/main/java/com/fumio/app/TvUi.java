@@ -2,42 +2,37 @@ package com.fumio.app;
 
 import android.app.Activity;
 import android.util.Log;
-import android.view.KeyEvent;
 import android.webkit.WebView;
 
 import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
 
 /**
- * The television layer: D-pad in, 10-foot scale, and nothing else.
+ * The television layer, split in two by OWNERSHIP.
  *
- * It is a thin native shim around two shipped assets, {@code tv-nav.js} (the
- * spatial focus engine) and {@code tv.css} (the focus ring), because the part
- * that has to survive website changes is the geometry, and the part that has to
- * be cheap is the key path:
+ *   OUR PAGES (the bundled player, https://localhost/…): touch nothing. Our
+ *   React player is already responsive and the TV is just a big landscape
+ *   screen; forcing a 1920-wide layout viewport into it is what cut the player
+ *   in half on 2026-11-05. The only thing injected is the pointer helper
+ *   (tv-cursor.js), which adds no layout of its own.
  *
- *   remote key → {@link #handleKey} → one evaluateJavascript("FumioTvKey(…)")
- *              → tv-nav.js moves focus and scrolls what needs scrolling.
+ *   THE LIVE WEBSITE (theogpiratebot.online): it does not know it is on a TV,
+ *   so it is told. tv-viewport.js normalises the layout width to 1920 CSS px
+ *   and reverts itself if that ever overflows, and textZoom lifts body text for
+ *   a 3 m viewing distance.
  *
- * The key is CONSUMED natively. WebView's own arrow-key behaviour (scroll the
- * page, move its internal caret) would fight the engine and, worse, gives the
- * viewer no idea what is selected — a TV interface without a visible focus is
- * unusable.
- *
- * Only ever active when {@link TvMode#isTv} is true. On a phone every method
- * here returns immediately, which is what keeps the shipped phone app identical.
+ * The input model lives in {@link TvPointer}: a cursor for everything, always on.
  */
 final class TvUi {
 
     private static final String TAG = "FumioTv";
 
-    /** The layout width a TV is normalised to, in CSS pixels (1080p = 1 px/pt). */
+    /** The layout width the live site is normalised to, in CSS px. */
     private static final int DESIGN_WIDTH = 1920;
-    /** Text bump for a 3 m viewing distance (110–120 is the usable band). */
+    /** Text lift for a 3 m viewing distance (110–120 is the usable band). */
     private static final int TEXT_ZOOM = 115;
 
-    private static String navScript = "";
-    private static String navCss = "";
+    private static String cursorScript = "";
     private static String viewportScript = "";
     private static volatile boolean inputFocused;
 
@@ -49,75 +44,54 @@ final class TvUi {
         if (activity == null || webView == null) return;
         if (!TvMode.isTv(activity)) return;
         loadAssets(activity);
-        apply(webView);
         TvPointer.install(activity);
+        applyPageScale(webView);
     }
 
     private static void loadAssets(Activity activity) {
-        if (navScript.isEmpty()) navScript = asset(activity, "tv-nav.js");
-        if (navCss.isEmpty()) navCss = asset(activity, "tv.css");
+        if (cursorScript.isEmpty()) cursorScript = asset(activity, "tv-cursor.js");
         if (viewportScript.isEmpty()) {
             viewportScript = asset(activity, "tv-viewport.js")
                 .replace("__FUMIO_TV_WIDTH__", String.valueOf(DESIGN_WIDTH));
         }
     }
 
-    /** Scaling only — safe to call more than once (rotation, reattach). */
-    static void apply(WebView webView) {
+    /** Live-site scaling. Never called for our own pages. */
+    static void applyPageScale(WebView webView) {
         if (webView == null) return;
         try {
             webView.getSettings().setTextZoom(TEXT_ZOOM);
             webView.getSettings().setBuiltInZoomControls(false);
             webView.getSettings().setDisplayZoomControls(false);
             webView.getSettings().setSupportZoom(false);
-            webView.setFocusable(true);
-            webView.setFocusableInTouchMode(true);
         } catch (Exception ignored) {
             // A settings quirk is never worth a crash.
         }
     }
 
     /**
-     * Called from every {@code onPageFinished} — the browse site and the app's
-     * own player page. Idempotent; the engine guards against a second copy of
-     * itself.
+     * The live website finished loading: normalise its viewport and give it the
+     * pointer helper.
      */
-    static void onPageFinished(Activity activity, WebView webView) {
+    static void onLivePageFinished(Activity activity, WebView webView) {
         if (activity == null || webView == null) return;
         if (!TvMode.isTv(activity)) return;
         loadAssets(activity);
-
-        // 1. Normalise the layout width. The site ships
-        //    <meta name="viewport" content="width=device-width">, so on a TV
-        //    that reports density 2 (Shield, some Sony panels) it would lay out
-        //    at 960 CSS px and pick its TABLET design for a 55-inch screen.
-        //    Rewriting the viewport meta is the one supported way to say "you
-        //    are 1920 px wide" without touching the site: Blink re-computes the
-        //    layout viewport when the meta's content changes.
         evaluate(webView, viewportScript);
-
-        // 2. Focus ring + no smooth-scroll fights.
-        evaluate(
-            webView,
-            "(function(){if(document.documentElement.classList.contains('fumio-tv'))return;" +
-            "document.documentElement.classList.add('fumio-tv');" +
-            "var s=document.createElement('style');s.id='fumio-tv-css';" +
-            "s.textContent=" + quote(navCss) + ";" +
-            "(document.head||document.documentElement).appendChild(s);})();"
-        );
-
-        // 3. The engine.
-        evaluate(webView, navScript);
-
-        // 4. And the other half of the hybrid: if the viewer is aiming with the
-        //    pointer, the new page must know where that pointer is.
+        evaluate(webView, cursorScript);
         TvPointer.onPageFinished(activity, webView);
     }
 
-    /** NAV hit a wall — say "MENU gives you a pointer", once. */
-    static void suggestPointer(Activity activity) {
-        if (activity == null || !TvMode.isTv(activity)) return;
-        TvPointer.suggest(activity);
+    /**
+     * One of OUR pages finished loading (the player): pointer helper only.
+     * No viewport rewrite, no text zoom — see the class comment.
+     */
+    static void onOwnPageFinished(Activity activity, WebView webView) {
+        if (activity == null || webView == null) return;
+        if (!TvMode.isTv(activity)) return;
+        loadAssets(activity);
+        evaluate(webView, cursorScript);
+        TvPointer.onPageFinished(activity, webView);
     }
 
     // ─── keys ───────────────────────────────────────────────────────────────
@@ -126,73 +100,11 @@ final class TvUi {
         inputFocused = typing;
     }
 
-    /**
-     * @return true when the layer handled the key and the WebView must not see
-     *         it.
-     */
-    static boolean handleKey(Activity activity, WebView webView, KeyEvent event) {
+    /** @return true when the TV layer handled the key and the WebView must not see it. */
+    static boolean handleKey(Activity activity, WebView webView, android.view.KeyEvent event) {
         if (activity == null || webView == null || event == null) return false;
         if (!TvMode.isTv(activity)) return false;
-
-        int code = event.getKeyCode();
-        boolean down = event.getAction() == KeyEvent.ACTION_DOWN;
-        boolean up = event.getAction() == KeyEvent.ACTION_UP;
-
-        // Diagnostics live on the Info/Help button: remotes that have one can
-        // print the focus engine's report to logcat without a dev build.
-        if (code == KeyEvent.KEYCODE_INFO || code == KeyEvent.KEYCODE_HELP) {
-            if (down) {
-                evaluate(
-                    webView,
-                    "window.FumioTvSelfTest&&console.log('FumioTvSelfTest '+window.FumioTvSelfTest());"
-                );
-            }
-            return true;
-        }
-
-        // THE HYBRID. Pointer mode owns D-pad/OK/BACK/MENU while it is on; when
-        // it is off this call only watches for MENU, so NAV below is untouched.
-        if (TvPointer.handleKey(activity, webView, event, inputFocused)) return true;
-
-        // Typing in a field: the TV's keyboard owns the remote.
-        if (inputFocused) return false;
-
-        String name = keyName(code);
-        if (name == null) return false;
-
-        // Consume both edges: the DPAD down we act on, the up so the WebView
-        // never sees a half-press and scrolls.
-        if (up) return true;
-        if (!down) return false;
-        if (event.getRepeatCount() > 0) return true; // a held button must not spam
-
-        try {
-            webView.requestFocus();
-        } catch (Exception ignored) {
-            /* nothing to focus */
-        }
-
-        evaluate(webView, "window.FumioTvKey&&window.FumioTvKey(" + quote(name) + ");");
-        return true;
-    }
-
-    private static String keyName(int keyCode) {
-        switch (keyCode) {
-            case KeyEvent.KEYCODE_DPAD_UP:
-                return "up";
-            case KeyEvent.KEYCODE_DPAD_DOWN:
-                return "down";
-            case KeyEvent.KEYCODE_DPAD_LEFT:
-                return "left";
-            case KeyEvent.KEYCODE_DPAD_RIGHT:
-                return "right";
-            case KeyEvent.KEYCODE_DPAD_CENTER:
-            case KeyEvent.KEYCODE_ENTER:
-            case KeyEvent.KEYCODE_NUMPAD_ENTER:
-                return "enter";
-            default:
-                return null;
-        }
+        return TvPointer.handleKey(activity, webView, event, inputFocused);
     }
 
     // ─── plumbing ───────────────────────────────────────────────────────────
@@ -204,22 +116,6 @@ final class TvUi {
         } catch (Exception error) {
             Log.w(TAG, "evaluate failed: " + error.getMessage());
         }
-    }
-
-    private static String quote(String raw) {
-        if (raw == null) return "''";
-        StringBuilder sb = new StringBuilder(raw.length() + 16);
-        sb.append('\'');
-        for (int i = 0; i < raw.length(); i += 1) {
-            char c = raw.charAt(i);
-            if (c == '\\' || c == '\'') sb.append('\\').append(c);
-            else if (c == '\n') sb.append("\\n");
-            else if (c == '\r') sb.append("\\r");
-            else if (c == '\u2028' || c == '\u2029') sb.append(' ');
-            else sb.append(c);
-        }
-        sb.append('\'');
-        return sb.toString();
     }
 
     static String asset(Activity activity, String name) {

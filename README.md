@@ -280,20 +280,20 @@ it recognises itself (`TvMode`) and changes exactly three things:
 - **No ad wall.** The `/verify` 12-hour unlock is skipped (`ensureUnlocked`),
   because a popup in front of a film on a family screen is the wrong trade.
   Phones are untouched.
-- **A D-pad layer, with a pointer on standby.** `MainActivity.dispatchKeyEvent`
-  hands the remote to `assets/tv-nav.js`, a geometry-only focus engine (roles +
-  bounding boxes, never the site's class names) with a 4 px focus ring from
-  `assets/tv.css`. While a text field has focus the remote goes back to the
-  page, so the TV keyboard works. Press **MENU** and the remote becomes an
-  on-screen pointer (`TvCursorView` — plain arrow, thin dark edge, no glow):
-  the D-pad moves it, OK clicks at that pixel, and moves are sent as real
-  mouse-hover events — so anything a mouse can reach on the site works even if
-  the site never made it focusable. When the D-pad finds nothing, the app hints
-  "press MENU" once. Style options: `docs/cursor-styles.png`.
-- **A 10-foot scale.** `assets/tv-viewport.js` rewrites the viewport meta to
-  `width=1920` before the engine runs, so a box that reports density 2 lays out
-  as a desktop rather than a tablet; `TvUi.TEXT_ZOOM` (115 %) covers viewing
-  distance.
+- **The remote is a cursor.** `MainActivity.dispatchKeyEvent` hands the arrows
+  to `TvPointer`: they move a plain arrow (`TvCursorView`), and OK clicks what is
+  under it. `assets/tv-cursor.js` outlines the target the click will hit — the
+  nearest link/button/clickable ancestor, so aiming at a poster clicks its card
+  — and moves are sent as real mouse-hover events, so the site's own hover
+  styles and hover menus work too. BACK is never swallowed. No focus ring, no
+  D-pad engine: on a site we do not own, a ring can be stranded by any deploy,
+  a cursor cannot. Style options: `docs/cursor-styles.png`.
+- **A 10-foot scale, for the live site only.** `assets/tv-viewport.js` rewrites
+  the viewport meta to `width=1920` so a box that reports density 2 lays out as
+  a desktop rather than a tablet, and reverts itself if the result cannot fit;
+  `TvUi.TEXT_ZOOM` (115 %) covers viewing distance. Our own player is never
+  touched — it is responsive already, and rewriting its viewport cut it in half
+  once (docs/PLAN-android-tv.md §12).
 
 Also for TV (and useful on a phone): **`Updater`** — the app checks the GitHub
 releases feed and installs the next APK itself, because most TVs have no

@@ -6,11 +6,14 @@ good 10-foot app — D-pad first, no ad wall, proportions that read from 3 m,
 and it must not break the day the website ships something new.
 
 **Built in this pass (T0, T1, T2, the updater), all unverified on a real TV:**
-manifest/banner/leanback entry, `TvMode`, `TvUi` + `assets/tv-nav.js` +
-`assets/tv-viewport.js` + `assets/tv.css`, the ad-wall gate, `Updater`, and a
-versionCode stamped by CI. Verification so far is `docs/tv-ui.test.cjs`
-(18/18 against a synthetic 1920×1080 DOM) plus a full APK build. **Nothing has
-run on a television yet** — §8 keeps that honest.
+manifest/banner/leanback entry, `TvMode`, `TvUi` + `assets/tv-viewport.js` +
+`assets/tv-cursor.js`, the cursor remote (`TvPointer`, `TvCursorView`), the
+ad-wall gate, `Updater`, and a versionCode stamped by CI. Verification so far is
+`docs/tv-ui.test.cjs` (25/25: the viewport maths, both of its guards, and the
+cursor's target resolution) plus a full APK build. **Nothing has run on a
+television yet** — §8 keeps that honest. The D-pad engine described in §2/§3 as
+"built" has since been **removed by decision** (2026-11-05); §3 is now the
+cursor-only design.
 
 **Distribution: direct APK** (GitHub release → sideload). Not the Play Store, so
 no listing/TV-review/package rules apply. That removes a pile of constraints and
@@ -111,128 +114,70 @@ route in the WebView.
 
 ---
 
-## 3. Navigation — a hybrid: D-pad first, cartoony pointer always available
+## 3. Navigation — cursor only (decided 2026-11-05)
+
+**The D-pad focus engine is gone.** Not parked, not demoted — removed
+(`assets/tv-nav.js`, `assets/tv.css` and the `FumioTvKey` bridge are deleted).
+
+The reason is the one thing about this app that never changes: the browse UI is
+the live website, owned by someone else and edited whenever they like. A focus
+ring can only move between things the page *admits* are focusable. A card
+rendered as a plain `<div>`, a slider, a drag handle, a menu that opens on hover
+— all of those are dead ends for a ring, and every site deploy is a fresh chance
+to create one. A cursor has no such dependency.
+
+So: **the remote is a mouse.** Everything below is about making that feel like a
+television remote rather than a laptop trackpad.
 
 ### 3.1 Key map
 
-| Key | Browse | Player overlay | Native screens |
-|---|---|---|---|
-| DPAD ↑↓←→ | move focus (spatial) | ↑↓ = OSD / server row, ←→ = seek ∓10 s | move focus |
-| DPAD_CENTER / ENTER | activate focused element | play / pause | activate |
-| BACK | `history.back()`, at root → "Exit?" | close OSD, then close player | up a level, then exit |
-| MEDIA_PLAY_PAUSE / FF / REW | — | play-pause / +60 s / −60 s | — |
-| MENU | **switch to pointer mode** (and back) | toggle pointer | toggle pointer |
-| INFO / HELP | print the focus self-test to logcat | — | — |
-| dpad in pointer mode | move the cursor; at an edge it scrolls the page | move the cursor | move the cursor |
-| OK in pointer mode | click at the cursor (touch down + up 60 ms later) | click | click |
-| BACK in pointer mode | leave pointer mode — **not** the page | pointer off | pointer off |
-| long-press OK | open details of focused card | — | — |
+| Key | What happens |
+|---|---|
+| DPAD ↑↓←→ | moves the cursor: 20 dp per tap, accelerating to ~4.6× while held |
+| OK / ENTER | clicks the outlined target; falls back to a synthetic tap at the pixel |
+| BACK | **never consumed** — closes the player, goes back a page, exits |
+| MENU / INFO | re-shows the one-line hint ("Arrows move · OK selects · BACK goes back") |
+| arrows at an edge | cursor stops, the page scrolls 16 % per press (accelerating) |
+| while a text field is focused | the remote belongs to the TV keyboard, not to us |
 
-Rules: **we consume DPAD/ENTER/BACK ourselves** and forward them as JS calls;
-we never rely on WebView's built-in arrow scrolling (it fights our engine and
-gives no focus ring). All other keys fall through to the WebView so text inputs
-(search) behave normally — with one guard: while an `<input>`/`<textarea>` has
-focus, DPAD passes through instead of being consumed.
+### 3.2 What makes it feel good (the five things that replace a D-pad)
 
-### 3.2 Focus engine (`tv-nav.js`) — designed to survive site updates
+1. **A target, always.** Every move asks the page what is under the cursor
+   (`FumioTvHover`) and outlines it with a 2 px white edge. You never press OK
+   into darkness.
+2. **Forgiveness.** OK clicks the *target*, not the coordinate. `tv-cursor.js`
+   walks up to the nearest `a[href] / button / [onclick] / [role=button] /
+   tabindex` — so aiming at a poster image clicks the card around it. There is a
+   second pass for divs the site only marked `cursor: pointer`, and it runs
+   **after** the first one, because `cursor` is an inherited property: every
+   child of a link computes `pointer`, and testing that first would make the
+   poster its own target. (A test caught exactly that.)
+3. **Speed with precision.** A tap moves 20 dp (fine aim); holding accelerates
+   to 4.6× (cross the screen in about a second). The first press is always the
+   precise one.
+4. **Hover that works.** Moves are delivered as real mouse hover events, so the
+   site's own `:hover` styling and hover-only menus behave exactly as on a
+   desktop — that is content a D-pad could never show.
+5. **No dead ends.** Edge scrolling, and if nothing is under the cursor the
+   synthetic tap still fires so canvas/pointer-only controls work.
 
-Collect candidates **by role, not by name**:
-`a[href], button, [role=button], [tabindex]:not([tabindex="-1"]), input, select`
-— plus, on demand, `[onclick]` and any element the site marks as a card.
-Drop invisible ones (`offsetParent`, zero box, `visibility:hidden`, `opacity:0`,
-`pointer-events:none`, `aria-hidden`).
+### 3.3 The cursor itself
 
-Move focus **geometrically**: from the focused rect, score every other
-candidate by angle-weighted distance (primary-axis gap first, cross-axis offset
-as penalty), keep the best, `el.focus({preventScroll:true})`, then
-`scrollIntoView({block:'center', inline:'center', behavior:'smooth'})` and, if
-the nearest scrollable ancestor is horizontal, `scrollLeft` it so the focused
-card lands at ~35 % of the row (streaming-service convention, not dead centre).
-
-Because scoring uses bounding boxes only, **a new card component, a renamed
-class, or a reordered rail still navigates correctly** — the one thing that can
-defeat it is a clickable `<div>` with no `href`/`tabindex`/`role`, so we include
-`[onclick]` and a "clickable-ish" heuristic (cursor:pointer + text) as a second
-pass.
-
-Escape hatches (so the user is never trapped):
-- nothing found in a direction → try scrolling the page by 40 % of the viewport;
-  if that did nothing, re-run the search with the relaxed candidate set;
-- focus lost after a route change → focus the first card in the main content
-  region, never the footer;
-- a toast / modal appears → trap focus inside it, restore on close;
-- `Escape`/BACK inside a modal → close the modal, don't leave the page.
-
-### 3.3 Focus ring
-The site styles `:hover`, which does not exist on a TV. Injected CSS gives every
-focusable a TV ring and mirrors hover-ish emphasis:
-
-```css
-:focus { outline: none; }
-:focus-visible, .fumio-tv-focus {
-  outline: 4px solid #ffd400;          /* 4 px reads from 3 m at 1080p */
-  outline-offset: 4px;
-  border-radius: 10px;
-  transform: scale(1.05);
-  box-shadow: 0 12px 40px rgba(0,0,0,.65);
-  z-index: 2;
-  transition: transform .12s ease, box-shadow .12s ease;
-}
-@media (prefers-reduced-motion: reduce) { /* no scale */ }
-```
-
-Also: `:focus-within` for cards, `scroll-margin: 12vh` so a focused card is
-never flush against an edge, `::selection` off, and `cursor` rules removed.
-
-### 3.4 Pointer mode — the escape hatch (built)
-
-A D-pad engine is only as good as the page's willingness to be navigated. A
-`<div>` with an `onClick` and no `tabindex` cannot be adopted with certainty; a
-drag handle, a hover menu or a slider cannot be operated with arrows at all. On
-a website we do not control, that is not a corner case — it is a Tuesday.
-
-So the remote has two modes, and the second one is a real mouse:
-
-| | NAV (default) | POINTER (MENU) |
-|---|---|---|
-| What moves | the focus ring, via `tv-nav.js` | a drawn cursor, `TvCursorView` |
-| What a click is | `element.click()` via `FumioTvKey('enter')` | synthesised `ACTION_DOWN`/`ACTION_UP` at a pixel |
-| Hover | emitted on focus | real `ACTION_HOVER_MOVE` (mouse source), so the page's own hover styles follow the cursor |
-| Reaches | anything focusable by role | **anything at all**, like a mouse |
-| Scroll | the engine reveals the focused card | cursor at an edge scrolls the page 14 % per press |
-| Who gets BACK | the page (`history.back`) | the mode switch — a viewer is not thrown out of what they were doing |
-
-The cursor is an ordinary arrow, drawn big and clean: white body, a 1.6 dp
-near-black edge, one tight low-alpha shadow, 20×29 dp so it reads from 3 m, and
-no motion at rest. Four candidate styles were drawn to scale over dark, mid and
-bright poster art before choosing — **docs/cursor-styles.png** — and the reason
-the edge exists at all is the white chip: a pure white arrow disappears on bright
-art without it.
+Plain arrow, white body, 1.6 dp near-black edge, one tight shadow, 20×29 dp, no
+motion at rest (a 110 ms squash on click, and that is all). The edge is not
+decoration: on bright poster art a pure white arrow disappears — see
+`docs/cursor-styles.png`, where four styles were drawn to scale over dark, mid
+and bright art before choosing.
 
 The first attempt had a yellow glow, orbiting sparkles and an idle bob. It looked
-generated, and worse, it competed with the poster art, which is the content. A
-pointer needs to be found instantly and then ignored. Cutting the idle animation
-also removed a permanent full-screen repaint loop, so the overlay now costs
-nothing while the viewer is reading.
+generated, and it competed with the poster art. Cutting the idle animation also
+removed a permanent repaint loop: at rest the overlay now asks for no frames.
 
-First entry shows a neutral pill: *"OK clicks · MENU or BACK returns to D-pad"*.
+### 3.4 Cost
 
-**The handover is automatic and quiet.** When `tv-nav.js` cannot move or
-activate (nothing focusable in that direction, twice), it calls
-`FumioNative.tvNavDeadEnd()`, and the app shows one hint: *"Press MENU to use
-the pointer"*. It never switches mode on its own — the viewer keeps control of
-the remote — and it hints once per session so a page full of bare `<div>`s does
-not become a nagging machine.
-
-Cost: the cursor view sits above the WebView, so it is drawn rather than
-composited: only the dirty rectangle around it is repainted, at ~16 fps, and
-only while the pointer is on screen. On a phone none of this exists.
-
-**What this buys, in one line:** a website change can make the D-pad worse, but
-it can never make the app unusable — the pointer is the mouse the site was
-always designed for.
-
----
+The overlay draws only the dirty rectangle around the cursor (and the hint), at
+~20 fps, and only during a click squash or a hint fade. Nothing runs while the
+viewer is reading. On a phone the whole layer does not exist.
 
 ## 4. Scale — "not too big, not too small"
 
@@ -254,6 +199,14 @@ Blink re-computes the layout viewport when that attribute changes, so the site
 lays out as a 1920-wide desktop and the scale factor fills the panel exactly —
 1080p@1.0 → scale 1, 1080p@2.0 (Shield) → 0.5, 720p@1.0 → 0.667. Same CSS for
 every box, no per-device numbers, and nothing about the site is rewritten.
+
+**Two guards**, because the page is not ours and the player is:
+
+- it never runs on `localhost` (our own player) — an earlier version applied it
+  there too and cut the player in half (see §11.6);
+- after applying, it measures the document; if the layout is wider than the
+  visible viewport (a WebView can clamp `initial-scale`), it puts the original
+  meta back. Wrong-but-readable beats right-but-clipped.
 
 Then a text bump for viewing distance: `WebSettings.setTextZoom(115)` — a
 documented WebView knob that scales text **without** compounding through nested
@@ -386,7 +339,7 @@ only a build-config default differs (decision D5).
 |---|---|---|---|
 | **T0** ✅ | Manifest: `uses-feature leanback / touchscreen / gamepad` (all `required=false`), `LEANBACK_LAUNCHER` filter, `android:banner` (320×180 + 640×360), `REQUEST_INSTALL_PACKAGES` | **none** (additive manifest; package still `com.fumio.app`) | shipped: the app now appears as a proper TV tile |
 | **T1** ✅ | `TvMode` (ui-mode TELEVISION / leanback / FEATURE_TELEVISION), ad-free gate in `ensureUnlocked`, `TvUi.apply` (textZoom 115, zoom controls off), viewport rewrite in `assets/tv-viewport.js` | **none** (one `if` in one method) | shipped: a TV build with no verify wall, laid out as 1920 CSS px |
-| **T2** ✅ | `assets/tv-nav.js` spatial engine + `assets/tv.css` + `TvUi.handleKey` via `dispatchKeyEvent` + `FumioNative.tvInputFocused`, plus **pointer mode** (`TvPointer`, `TvCursorView`) with the automatic handover | **none** (injected only when `TvMode.isTv`) | shipped, 18/18 in `docs/tv-ui.test.cjs`; needs a real remote to sign off |
+| **T2** ✅ | **Cursor remote** (decided): `TvPointer` + `TvCursorView` + `assets/tv-cursor.js` (target outline, forgiving click, hover), `dispatchKeyEvent` routing, `TvUi` split into live-site vs own-page injection. The earlier D-pad engine was removed. | **none** (only when `TvMode.isTv`) | 25/25 in `docs/tv-ui.test.cjs`; needs a real remote to sign off |
 | **T3** | TV player surface: big OSD, server row (`ServerPickerBar` as a horizontal focus rail), quality/audio/subtitle menus, 10 s seek, resume, D-pad everywhere, MKV track menus in `OfflinePlayerActivity` | player code is shared → touched, but behind `window.__fumioTv` / `isTv`; phone visuals unchanged | our surface, safest place to invest |
 | **T4** | Native TV Home spotlight (C) + D-pad pass on `DownloadsActivity` / offline player | new screen only | the "wow" screen |
 | **T5** | Self-test screen, kill switch, auto-demote, TV smoke-test checklist in CI notes | none | the durability layer |
@@ -468,15 +421,18 @@ horizontal RecyclerView with `ItemBridgeAdapter`-free focus handling:
   because a TV remote's BACK is the only way out and hitting it twice by
   accident should not kill the app.
 
-`assets/tv-nav.js` is **not** used by the shell — Android's own focus system is
-the engine there. It stays for the player page and the site-skin fallback.
+The shell keeps the same input model as everywhere else on a TV build: the
+cursor (`TvPointer`), because a native focus ring and a web cursor behave
+differently enough that two models on one box is exactly the inconsistency this
+whole redesign exists to avoid.
 
 ### 11.3 Look, without a design system
 
 - 1080p layout; `values-tvdpi`/`values-xxhdpi` dimension buckets expressed as
   `dp` from a single `dimens.xml` so a 720p box is proportional, not clipped.
 - Cards: 320×180 (16:9) poster art, 12 dp radius, title 22 sp, meta 16 sp,
-  focus = 1.06 scale + 4 dp accent ring (mirrors `tv.css` exactly).
+  focus = 1.06 scale + a 2 dp white outline (mirrors the cursor's target
+  outline, so the whole app highlights the same way).
 - Rows: 24 dp gutters, 56 dp between rails, safe area 48 dp on all sides
   (overscan), no scrollbars, no ripple-tap artefacts.
 - Palette: black background, the site's yellow `#ffd400` as the only accent.
@@ -507,3 +463,34 @@ less**, because it stops depending on a page rendering.
 
 Every step is guarded by `TvMode.isTv(...)` at the `MainActivity` entry point,
 so a bad TV build can never change what a phone does.
+
+---
+
+## 12. Post-mortem: the player was cut in half (2026-11-05)
+
+**Symptom.** On a TV the player showed a 1920-wide layout inside a smaller
+visual viewport: the embed's "no source available" text was sliced at the left
+edge, roughly half the frame off screen.
+
+**Cause.** `assets/tv-viewport.js` was injected into *every* WebView, including
+our own bundled player at `https://localhost/…`. It rewrote that page's viewport
+meta to `width=1920, initial-scale=cssWidth/1920`. If the WebView clamps
+`initial-scale` (or the page re-derives its own scale), the layout viewport is
+wider than the picture and a `position: fixed; inset: 0` player — which is
+exactly what `Player.jsx` renders — is laid out at 1920 while only part of it
+fits. The screenshot of the embed is that overflow.
+
+**Fix, three layers.**
+
+1. The viewport rewrite is only injected into the live site:
+   `TvUi.onLivePageFinished` vs `TvUi.onOwnPageFinished` (pointer helper only).
+   `tv-viewport.js` also refuses outright when `location.hostname` is
+   `localhost`.
+2. Self-healing: after applying, it measures `scrollWidth` against
+   `innerWidth`; on overflow it restores the original meta after 700 ms.
+3. `Player.jsx` no longer sizes itself with `h-[100dvh] w-[100dvw]`; it is
+   `fixed inset-0 h-full w-full`. Dynamic-viewport units can disagree with the
+   layout viewport in a WebView; pinning to the containing block cannot.
+
+**Rule for anything added later:** the live site may be told what screen it is
+on. Our own pages must never be — they already know, because we ship them.

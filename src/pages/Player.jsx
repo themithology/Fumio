@@ -373,7 +373,11 @@ export default function Player() {
   }, [navigate, type, id]);
 
   return (
-    <div className="fixed inset-0 z-50 h-[100dvh] w-[100dvw] max-h-[100dvh] max-w-[100vw] overflow-hidden bg-black">
+    // `inset-0` + full width/height, not 100dvw/100dvh: on a television the
+    // dynamic-viewport units can disagree with the layout viewport the WebView
+    // actually has, and the player then overflows its own screen. Pinning to the
+    // containing block is exact everywhere.
+    <div className="fixed inset-0 z-50 h-full w-full overflow-hidden bg-black">
       <PlayerStage
         tmdbId={id}
         mediaType={type}

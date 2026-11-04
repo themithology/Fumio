@@ -373,10 +373,10 @@ final class FumioPlayerOverlay {
                     LiveServers.bindPlayer(v);
                     applySeed();
                     injectTrail(v);
-                    // The player page is ours and ships with the APK, so the
-                    // TV layer is injected here too — same focus engine, same
-                    // scale. No-op on a phone.
-                    TvUi.onPageFinished(activity, v);
+                    // Our own page: the pointer helper only. The viewport
+                    // rewrite is for the live site alone — applying it here is
+                    // what cut the player in half on 2026-11-05.
+                    TvUi.onOwnPageFinished(activity, v);
                     // The player page must never lose the live list: re-apply
                     // it after every render (episode change, server switch).
                     applyLiveSources();

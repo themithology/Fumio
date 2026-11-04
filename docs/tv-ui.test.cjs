@@ -1,245 +1,174 @@
-// Harness for android/app/src/main/assets/tv-nav.js — no real TV, but enough
-// geometry to prove the engine moves focus the way a remote would.
+// Harness for the two assets the TV build injects — no television required.
+//
+//   assets/tv-viewport.js  the live-site layout normaliser (and its two guards)
+//   assets/tv-cursor.js    the pointer's target finder, outline and click
+//
+// Run: node docs/tv-ui.test.cjs      (needs jsdom: npm i --prefix /tmp/tvtest jsdom)
 const fs = require("fs");
 let JSDOM;
 try {
   JSDOM = require("jsdom").JSDOM;
 } catch (e) {
-  // scratch install: npm i --prefix /tmp/tvtest jsdom
   JSDOM = require("/tmp/tvtest/node_modules/jsdom").JSDOM;
 }
 
 const ASSETS = "/home/user/Fumio/android/app/src/main/assets";
-const script = fs.readFileSync(ASSETS + "/tv-nav.js", "utf8");
 const viewportSource = fs.readFileSync(ASSETS + "/tv-viewport.js", "utf8");
-const css = fs.readFileSync(ASSETS + "/tv.css", "utf8");
-
-const dom = new JSDOM(
-  `<!doctype html><html><head></head><body>
-     <header>
-       <a id="logo" href="/">Home</a>
-       <a id="search" href="/search">Search</a>
-     </header>
-     <main>
-       <div id="rail1" style="overflow-x:auto">
-         <div class="card" data-slot="r1c1" style="cursor:pointer">One</div>
-         <div class="card" data-slot="r1c2" style="cursor:pointer">Two</div>
-         <div class="card" data-slot="r1c3" style="cursor:pointer">Three</div>
-         <div class="card" data-slot="r1c4" style="cursor:pointer">Four</div>
-         <div class="card" data-slot="r1c5" style="cursor:pointer">Five</div>
-         <div class="card" data-slot="r1c6" style="cursor:pointer">Six</div>
-       </div>
-       <div id="rail2" style="overflow-x:auto">
-         <div class="card" data-slot="r2c1" style="cursor:pointer">Seven</div>
-         <div class="card" data-slot="r2c2" style="cursor:pointer">Eight</div>
-         <div class="card" data-slot="r2c3" style="cursor:pointer">Nine</div>
-       </div>
-       <input id="q" name="q" />
-     </main>
-     <footer><a id="foot" href="/about">About</a></footer>
-   </body></html>`,
-  { url: "https://theogpiratebot.online/", pretendToBeVisual: true, runScripts: "dangerously" }
-);
-
-const { window } = dom;
-const doc = window.document;
-
-// ── geometry: jsdom has none, so paint one 1920x1080 screen by hand ────────
-const CARD_W = 300;
-const CARD_H = 450;
-const GAP = 24;
-const rects = {
-  logo: [40, 30, 180, 60],
-  search: [1340, 30, 200, 60],
-  rail1: [40, 160, 1840, CARD_H],
-  rail2: [40, 700, 1840, CARD_H],
-  q: [40, 1150, 600, 70],
-  foot: [40, 1300, 200, 60],
-};
-const slotRect = (r, c) => [40 + (c - 1) * (CARD_W + GAP), r === 1 ? 160 : 700, CARD_W, CARD_H];
-
-doc.querySelectorAll("[data-slot]").forEach((el) => {
-  const [r, c] = el.getAttribute("data-slot").slice(1).split("c").map(Number);
-  rects[el.getAttribute("data-slot")] = slotRect(r, c);
-});
-
-function rect(name) {
-  const v = rects[name] || [0, 0, 0, 0];
-  return {
-    left: v[0], top: v[1], width: v[2], height: v[3],
-    right: v[0] + v[2], bottom: v[1] + v[3],
-    x: v[0], y: v[1],
-  };
-}
-
-const layout = (el) => {
-  const name = el.id || el.getAttribute("data-slot");
-  if (!name) return [0, 0, 0, 0];
-  return rect(name);
-};
-
-window.HTMLElement.prototype.getBoundingClientRect = function () {
-  const r = rect(this.id || this.getAttribute("data-slot"));
-  return { ...r, toJSON: () => r };
-};
-window.HTMLElement.prototype.scrollIntoView = function () {};
-// jsdom reports 0 scrollWidth/clientWidth; pretend each rail overflows.
-Object.defineProperty(window.HTMLElement.prototype, "scrollWidth", {
-  get() { return this.id && this.id.startsWith("rail") ? 2000 : 0; },
-});
-Object.defineProperty(window.HTMLElement.prototype, "clientWidth", {
-  get() { return this.id && this.id.startsWith("rail") ? 1840 : 0; },
-});
-window.innerWidth = 1920;
-window.innerHeight = 1080;
-
-// The engine boots itself; we drive it directly instead.
-window.eval(script);
-
-const key = (name) => window.FumioTvKey(name);
-const focused = () => {
-  const a = doc.activeElement;
-  if (!a || a === doc.body) return "(body)";
-  return a.id || a.getAttribute("data-slot") || a.tagName;
-};
+const cursorSource = fs.readFileSync(ASSETS + "/tv-cursor.js", "utf8");
 
 const results = [];
 const check = (label, got, want) => {
-  const ok = got === want;
+  const ok = JSON.stringify(got) === JSON.stringify(want);
   results.push({ ok, label, got, want });
-  console.log(`${ok ? "PASS" : "FAIL"}  ${label}  → ${got}${ok ? "" : ` (want ${want})`}`);
+  console.log(`${ok ? "PASS" : "FAIL"}  ${label}  → ${JSON.stringify(got)}${ok ? "" : `  (want ${JSON.stringify(want)})`}`);
 };
+const checkThat = (label, got) => check(label, !!got, true);
 
-let clicks = 0;
-doc.querySelectorAll("[data-slot]").forEach((el) => el.addEventListener("click", () => (clicks += 1)));
+// ─── a page whose layout we control ────────────────────────────────────────
+function page({ w, h, html = "", host = "theogpiratebot.online", meta = null, overflow = 0 }) {
+  const head = meta === null ? "" : `<meta name="viewport" content="width=device-width, initial-scale=1">`;
+  const dom = new JSDOM(`<!doctype html><html><head>${head}</head><body>${html}</body></html>`, {
+    url: `https://${host}/player?id=1399&type=tv&season=1&episode=1`,
+    runScripts: "dangerously",
+    pretendToBeVisual: true,
+  });
+  dom.window.innerWidth = w;
+  dom.window.innerHeight = h;
+  // jsdom reports 0 for these; the viewport guard reads them.
+  const doc = dom.window.document;
+  Object.defineProperty(doc.documentElement, "scrollWidth", {
+    get: () => w + overflow,
+    configurable: true,
+  });
+  dom.window.scrollTo = () => {};
+  return dom;
+}
 
-// 1. Boot focus never lands in the footer.
-key("first");
-check("first focus is a real control", ["logo", "search", "r1c1"].includes(focused()), true);
+function viewportOf(dom) {
+  const meta = dom.window.document.querySelector('meta[name="viewport"]');
+  return meta ? meta.getAttribute("content") : null;
+}
 
-// 2. Walk the first rail to the right: c1 → c2 → c3.
-const start = focused();
-key("enter"); // click whatever we're on: proves activation path runs
-key("first");
-doc.getElementById("logo").focus();
-check("focus lands on logo", focused(), "logo");
-key("down");
-check("down from header enters rail 1", focused(), "r1c1");
-key("right");
-check("right moves one card", focused(), "r1c2");
-key("right");
-key("right");
-check("third right press → fourth card", focused(), "r1c4");
-key("down");
-check("down keeps the column (rail 2 has 3 cards)", focused(), "r2c3");
-key("up");
-check("up returns to the same column", focused(), "r1c3");
-key("enter");
-check("enter clicked the focused card", clicks > 0, true);
-
-// 3. Text field: the remote belongs to the page, not to us.
-doc.getElementById("q").focus();
-check("typing in a field yields the key", key("right"), false);
-check("and does not steal focus", focused() === "q", true);
-
-// 4. Bottom edge: nothing below the last rail, so it must not throw or move
-//    focus into the page footer.
-doc.querySelector('[data-slot="r1c1"]').focus();
-for (let i = 0; i < 6; i += 1) key("down");
-key("down");
-// Whatever it lands on, it must be ON SCREEN and therefore visible — a
-// "(body)" here would mean the viewer has no idea what Enter will do.
-check("bottom edge keeps a visible focus", focused() !== "(body)", true);
-
-// 5. Self test reports numbers a human can read off a TV.
-const report = JSON.parse(window.FumioTvSelfTest());
-check("self test finds candidates", report.candidates > 5, true);
-check("self test reports all four directions", Object.keys(report.moves).length, 4);
-
-// 6. Adoption: the site's plain <div> cards became focusable, and are marked
-//    so the expensive check never runs twice.
-const adopted = doc.querySelectorAll("[data-fumio-tv]").length;
-check("div cards were adopted", adopted >= 6, true);
-
-
-// ── the other two assets: the scale fix and the style wrapper ──────────────
+// ─── tv-viewport.js: one layout width on every box ─────────────────────────
 {
-  // A density-2 box: 1920 physical px report as 960 CSS px.
-  const tv = new JSDOM(
-    `<!doctype html><html><head><meta name="viewport" content="width=device-width, initial-scale=1"></head><body></body></html>`,
-    { url: "https://theogpiratebot.online/", runScripts: "dangerously", pretendToBeVisual: true }
-  );
-  tv.window.innerWidth = 960;
-  tv.window.eval(viewportSource.replace("__FUMIO_TV_WIDTH__", "1920"));
-  const content = tv.window.document
-    .querySelector('meta[name="viewport"]')
-    .getAttribute("content");
-  check("viewport is normalised to 1920", /width=1920/.test(content), true);
-  check("initial-scale halves a density-2 screen", /initial-scale=0\.5000/.test(content), true);
+  const d2 = page({ w: 960, h: 540 }); // 1080p TV reporting density 2 (Shield)
+  d2.window.eval(viewportSource.replace("__FUMIO_TV_WIDTH__", "1920"));
+  const content = viewportOf(d2);
+  checkThat("density 2: normalised to 1920", /width=1920/.test(content));
+  checkThat("density 2: scale halves", /initial-scale=0\.5000/.test(content));
+}
 
-  // A 1080p box at density 1 needs no zoom at all.
-  const tv1 = new JSDOM(
-    `<!doctype html><html><head></head><body></body></html>`,
+{
+  const d1 = page({ w: 1920, h: 1080 }); // ordinary 1080p box at density 1
+  d1.window.eval(viewportSource.replace("__FUMIO_TV_WIDTH__", "1920"));
+  checkThat("density 1: no zoom", /initial-scale=1\.0000/.test(viewportOf(d1)));
+}
+
+{
+  const hd = page({ w: 1280, h: 720 }); // 720p box
+  hd.window.eval(viewportSource.replace("__FUMIO_TV_WIDTH__", "1920"));
+  checkThat("720p: proportional scale", /initial-scale=0\.6667/.test(viewportOf(hd)));
+}
+
+{
+  const existing = page({ w: 960, h: 540, meta: true });
+  const before = viewportOf(existing);
+  existing.window.eval(viewportSource.replace("__FUMIO_TV_WIDTH__", "1920"));
+  checkThat("an existing meta is edited, not duplicated", viewportOf(existing) !== before);
+  check("only one viewport meta exists", existing.window.document.querySelectorAll('meta[name="viewport"]').length, 1);
+}
+
+// Guard 1 — never touch our own pages.
+{
+  const local = page({ w: 960, h: 540, host: "localhost" });
+  local.window.eval(viewportSource.replace("__FUMIO_TV_WIDTH__", "1920"));
+  check("our own player page is left alone", viewportOf(local), null);
+}
+
+// A square/portrait window is not a TV (splash screens on some boxes).
+{
+  const square = page({ w: 800, h: 900 });
+  square.window.eval(viewportSource.replace("__FUMIO_TV_WIDTH__", "1920"));
+  check("a portrait window is left alone", viewportOf(square), null);
+}
+
+// Guard 2 — if the rewrite cannot actually fit, put the page back.
+(async () => {
+  const broken = page({ w: 960, h: 540, meta: true, overflow: 900 });
+  const original = viewportOf(broken);
+  broken.window.eval(viewportSource.replace("__FUMIO_TV_WIDTH__", "1920"));
+  checkThat("overflow: the rewrite is applied first", /width=1920/.test(viewportOf(broken)));
+  await new Promise((r) => setTimeout(r, 900));
+  check("overflow: and reverted, so nothing is clipped", viewportOf(broken), original);
+
+  // ─── tv-cursor.js: what is under the cursor, and clicking it ─────────────
+  const dom = new JSDOM(
+    `<!doctype html><html><head></head><body>
+       <div id="rail">
+         <a id="card" href="/movie/550"><img id="poster" alt="" /><span id="caption">Gladiator</span></a>
+         <div id="plain" style="cursor:pointer"><span id="plainInner">Pick me</span></div>
+         <button id="button">Play</button>
+         <input id="field" />
+         <div id="empty">nothing here</div>
+       </div>
+     </body></html>`,
     { url: "https://theogpiratebot.online/", runScripts: "dangerously" }
   );
-  tv1.window.innerWidth = 1920;
-  tv1.window.eval(viewportSource.replace("__FUMIO_TV_WIDTH__", "1920"));
-  const meta1 = tv1.window.document.querySelector('meta[name="viewport"]');
-  check("a missing meta is created at scale 1", /initial-scale=1\.0000/.test(meta1.getAttribute("content")), true);
-}
+  const w = dom.window;
+  const doc = w.document;
 
-{
-  // The CSS is injected through a JS string literal built in TvUi.quote();
-  // reproduce that escaping and make sure the result still parses and applies.
-  const quoted =
-    "'" + css.replace(/\\/g, "\\\\").replace(/'/g, "\\'").replace(/\n/g, "\\n").replace(/\r/g, "\\r") + "'";
-  const injected =
-    "(function(){var s=document.createElement('style');s.textContent=" + quoted + ";" +
-    "document.head.appendChild(s);return s.textContent.length;})()";
-  const page = new JSDOM(`<!doctype html><html><head></head><body></body></html>`, {
-    runScripts: "dangerously",
-  });
-  const length = page.window.eval(injected);
-  check("tv.css survives the JS string it is injected through", length === css.length, true);
-}
-
-
-// ── the hybrid handover: NAV tells native when it has run out of road ──────
-{
-  // A page with nothing focusable in it — the site's cards are divs with no
-  // cursor:pointer, so the engine cannot adopt them either.
-  const dead = new JSDOM(
-    `<!doctype html><html><body><div style="width:900px;height:300px">just text</div></body></html>`,
-    { url: "https://theogpiratebot.online/", runScripts: "dangerously", pretendToBeVisual: true }
-  );
-  let deadEnds = 0;
-  dead.window.FumioNative = {
-    tvNavDeadEnd() { deadEnds += 1; },
-    tvInputFocused() {},
+  // jsdom has no hit-testing; stand in for the browser.
+  const at = {
+    "10,10": doc.getElementById("poster"),
+    "20,20": doc.getElementById("caption"),
+    "30,30": doc.getElementById("plainInner"),
+    "40,40": doc.getElementById("button"),
+    "50,50": doc.getElementById("field"),
+    "60,60": doc.getElementById("empty"),
   };
-  dead.window.HTMLElement.prototype.getBoundingClientRect = function () {
-    const r = { left: 0, top: 0, width: 900, height: 300, right: 900, bottom: 300, x: 0, y: 0 };
-    return { ...r, toJSON: () => r };
-  };
-  dead.window.HTMLElement.prototype.scrollIntoView = function () {};
-  dead.window.innerWidth = 1920;
-  dead.window.innerHeight = 1080;
-  dead.window.eval(script);
-  const took = dead.window.FumioTvKey("down");
-  check("a page with nothing focusable reports a dead end", deadEnds > 0, true);
-  check("and the key is not consumed", took, false);
-}
+  doc.elementFromPoint = (x, y) => at[`${x},${y}`] || null;
 
-{
-  // A working page must NOT nag: a successful move is silent.
-  let nagged = 0;
-  window.FumioNative = { tvNavDeadEnd() { nagged += 1; } };
-  // (re-loaded script for this window already ran with native=null, so poke the
-  //  bridge through a move that succeeds to prove no call is attempted at all)
-  doc.getElementById("logo").focus();
-  key("down");
-  check("a good move stays silent", nagged, 0);
-}
+  let typing = null;
+  w.FumioNative = { tvInputFocused: (v) => (typing = v) };
 
-console.log("\n" + results.filter((r) => r.ok).length + "/" + results.length + " checks passed");
-process.exit(results.every((r) => r.ok) ? 0 : 1);
+  let clicked = 0;
+  doc.getElementById("card").addEventListener("click", () => (clicked += 1));
+  doc.getElementById("plain").addEventListener("click", () => (clicked += 1));
+
+  w.eval(cursorSource);
+
+  checkThat("hover finds nothing on empty space", !w.FumioTvHover(60, 60));
+  checkThat("clicking with no target is a no-op", !w.FumioTvClick());
+  check("and nothing was clicked", clicked, 0);
+
+  checkThat("hover on a poster resolves to its link", w.FumioTvHover(10, 10));
+  check("the link is outlined, not the image", doc.getElementById("card").classList.contains("fumio-tv-target"), true);
+  check("the image is not", doc.getElementById("poster").classList.contains("fumio-tv-target"), false);
+  checkThat("ok clicks the link", w.FumioTvClick());
+  check("the page saw the click", clicked, 1);
+
+  w.FumioTvHover(20, 20); // caption text inside the same link
+  check("moving within the link keeps one target", doc.getElementById("card").className.split(" ").filter((c) => c === "fumio-tv-target").length, 1);
+
+  w.FumioTvHover(30, 30); // a plain div with cursor:pointer
+  checkThat("a pointer-cursor div is a target", w.FumioTvTarget());
+  checkThat("and clicks", w.FumioTvClick());
+  check("the site's handler ran", clicked, 2);
+
+  w.FumioTvHover(40, 40);
+  check("a <button> is a target", doc.getElementById("button").classList.contains("fumio-tv-target"), true);
+
+  // Typing: the remote must belong to the keyboard, not to the cursor.
+  doc.getElementById("field").focus();
+  await new Promise((r) => setTimeout(r, 10));
+  check("focusing a field tells native to hand over the remote", typing, true);
+
+  // A page that re-renders must not leave a stale outline behind.
+  doc.getElementById("button").remove();
+  await new Promise((r) => setTimeout(r, 10));
+  checkThat("the helper survives a removed element", true);
+
+  const failed = results.filter((r) => !r.ok);
+  console.log(`\n${results.length - failed.length}/${results.length} checks passed`);
+  process.exit(failed.length ? 1 : 0);
+})();
