@@ -3,43 +3,57 @@ package com.fumio.app;
 import android.content.Context;
 import android.graphics.Canvas;
 import android.graphics.Color;
-import android.graphics.LinearGradient;
 import android.graphics.Paint;
 import android.graphics.Path;
 import android.graphics.RectF;
-import android.graphics.Shader;
 import android.graphics.Typeface;
 import android.os.SystemClock;
 import android.view.MotionEvent;
 import android.view.View;
 
 /**
- * The cartoony pointer. A hand-drawn arrow with a dark outline, a yellow glow,
- * three orbiting sparkles, a gentle idle bob and a squash-and-ring on click.
+ * The pointer. A plain, ordinary arrow — white body, thin dark edge, a tight
+ * shadow. Nothing else.
  *
- * It exists because a website is allowed to have things a D-pad cannot reach:
- * a card the site never made focusable, a drag handle, a hover menu, a slider.
- * Rather than fail there, the remote becomes a mouse — the cursor is drawn by
- * us (so it is on brand and unmistakably ours), and clicks are synthesised into
- * the WebView as real touch events, which is exactly what the page already
+ * It exists because a website is allowed to have things a D-pad cannot reach: a
+ * card the site never made focusable, a drag handle, a hover menu, a slider.
+ * Rather than fail there, the remote becomes a mouse, and clicks are synthesised
+ * into the WebView as real touch events — which is exactly what the page already
  * knows how to handle.
  *
- * Design rules: it must read at 3 m, so it is 30 dp wide with a 3 dp outline and
- * a shadow; it must feel like ours, so it uses the app's yellow; and it must
- * never look like a system arrow, so it bobs, sparkles and squashes.
+ * DESIGN NOTES, because the first version got this wrong.
+ *
+ * A glow, orbiting sparkles and an idle bob made the cursor look generated and,
+ * worse, noisy: it competed with the poster art underneath, which is the actual
+ * content. What a pointer needs is to be found instantly and then ignored.
+ *
+ *   - Shape: the classic arrow. 20 dp wide, 29 dp tall, sharp tip. Recognised
+ *     without being learned.
+ *   - Edge: 1.6 dp of near-black. Not decoration — on a bright poster a pure
+ *     white arrow vanishes, and a dark edge is what keeps it visible there
+ *     (see the white chip in docs/cursor-styles.png).
+ *   - Shadow: one tight, low-alpha offset. Enough to lift it off the art; not
+ *     enough to read as a halo.
+ *   - Motion: none at rest. A short squash on click, and that is all — a cursor
+ *     that moves while you are aiming is a cursor you cannot aim.
+ *
+ * A consequence worth keeping: with no idle animation there is no continuous
+ * repaint, so the view costs nothing while the viewer is reading the screen.
  */
 final class TvCursorView extends View {
 
     /** Movement step for one D-pad press, in dp (accelerated on key repeat). */
     static final float STEP_DP = 26f;
 
+    private static final int INK = 0xFF0C0C10;
+    private static final int BODY = 0xFFFFFFFF;
+    private static final long CLICK_MS = 110;
+
     private final float dp;
-    private final Paint fill = new Paint(Paint.ANTI_ALIAS_FLAG);
-    private final Paint outline = new Paint(Paint.ANTI_ALIAS_FLAG);
-    private final Paint glow = new Paint(Paint.ANTI_ALIAS_FLAG);
-    private final Paint shadow = new Paint(Paint.ANTI_ALIAS_FLAG);
-    private final Paint ring = new Paint(Paint.ANTI_ALIAS_FLAG);
-    private final Paint sparkle = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private final Paint body = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private final Paint edge = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private final Paint shadowNear = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private final Paint shadowFar = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint hintText = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint hintBox = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Path arrow = new Path();
@@ -50,7 +64,6 @@ final class TvCursorView extends View {
     private float windowY;
     private boolean arrowVisible;
     private long clickAt = -1;
-    private long bornAt = SystemClock.uptimeMillis();
     private String hint = "";
     private long hintUntil = -1;
     private final int[] loc = new int[2];
@@ -63,72 +76,54 @@ final class TvCursorView extends View {
         setClickable(false);
         setWillNotDraw(false);
 
-        fill.setStyle(Paint.Style.FILL);
-        fill.setColor(Color.WHITE);
+        body.setStyle(Paint.Style.FILL);
+        body.setColor(BODY);
 
-        outline.setStyle(Paint.Style.STROKE);
-        outline.setStrokeWidth(dp * 3f);
-        outline.setStrokeJoin(Paint.Join.ROUND);
-        outline.setStrokeCap(Paint.Cap.ROUND);
-        outline.setColor(0xFF101014);
+        // Fill AND stroke in one pass: the edge sits exactly on the silhouette,
+        // so the shape stays sharp at 4K instead of gaining a fuzzy ring.
+        edge.setStyle(Paint.Style.FILL_AND_STROKE);
+        edge.setColor(INK);
+        edge.setStrokeWidth(dp * 1.6f);
+        edge.setStrokeJoin(Paint.Join.ROUND);
+        edge.setStrokeCap(Paint.Cap.ROUND);
 
-        glow.setStyle(Paint.Style.STROKE);
-        glow.setStrokeWidth(dp * 7f);
-        glow.setStrokeJoin(Paint.Join.ROUND);
-        glow.setColor(0xAAFFD400);
-
-        shadow.setStyle(Paint.Style.FILL);
-        shadow.setShader(
-            new LinearGradient(
-                0,
-                0,
-                0,
-                dp * 10,
-                new int[] { 0x66000000, 0x00000000 },
-                null,
-                Shader.TileMode.CLAMP
-            )
-        );
-
-        ring.setStyle(Paint.Style.STROKE);
-        ring.setStrokeWidth(dp * 2.5f);
-        ring.setColor(0xFFFFD400);
-
-        sparkle.setStyle(Paint.Style.FILL);
-        sparkle.setColor(0xFFFFD400);
+        // Two offset silhouettes emulate a soft shadow without a blur pass.
+        shadowNear.setStyle(Paint.Style.FILL);
+        shadowNear.setColor(0x55000000);
+        shadowFar.setStyle(Paint.Style.FILL);
+        shadowFar.setColor(0x26000000);
 
         hintBox.setStyle(Paint.Style.FILL);
-        hintBox.setColor(0xD9141418);
+        hintBox.setColor(0xD9121216);
 
         hintText.setColor(Color.WHITE);
-        hintText.setTextSize(dp * 15f);
+        hintText.setTextSize(dp * 14f);
         hintText.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
         hintText.setAntiAlias(true);
 
-        // A classic pointer, tip at the origin, ~20x28 dp.
+        // The arrow: tip at the origin, 20 x 29 dp, classic proportions.
         arrow.moveTo(0, 0);
-        arrow.lineTo(0, dp * 26f);
-        arrow.lineTo(dp * 6.4f, dp * 20f);
-        arrow.lineTo(dp * 10.2f, dp * 28f);
-        arrow.lineTo(dp * 14f, dp * 26.2f);
-        arrow.lineTo(dp * 10.4f, dp * 18.4f);
-        arrow.lineTo(dp * 18.4f, dp * 17.8f);
+        arrow.lineTo(dp * 0.2f, dp * 27.4f);
+        arrow.lineTo(dp * 7.3f, dp * 20.8f);
+        arrow.lineTo(dp * 11.3f, dp * 29.0f);
+        arrow.lineTo(dp * 15.7f, dp * 27.1f);
+        arrow.lineTo(dp * 11.7f, dp * 19.0f);
+        arrow.lineTo(dp * 19.4f, dp * 18.4f);
         arrow.close();
     }
 
     // ─── state set from TvPointer ───────────────────────────────────────────
 
     void moveToWindow(float x, float y) {
+        if (x == windowX && y == windowY) return;
         windowX = x;
         windowY = y;
         invalidate();
     }
 
     void setArrowVisible(boolean visible) {
-        if (arrowVisible != visible) {
-            arrowVisible = visible;
-            bornAt = SystemClock.uptimeMillis();
-        }
+        if (arrowVisible == visible) return;
+        arrowVisible = visible;
         invalidate();
     }
 
@@ -155,18 +150,16 @@ final class TvCursorView extends View {
         if (arrowVisible) drawPointer(canvas, x, y, now);
         if (hintUntil > now && !hint.isEmpty()) drawHint(canvas, now);
 
-        boolean needsFrames =
-            arrowVisible || (clickAt > 0 && now - clickAt < 420) || hintUntil > now;
-        if (!needsFrames || !isShown()) return;
+        // The only two things that animate: the click squash (110 ms) and the
+        // hint fading out. At rest the view does not ask for another frame.
+        boolean animating = (clickAt > 0 && now - clickAt < CLICK_MS) || hintUntil > now;
+        if (!animating || !isShown()) return;
 
-        // Only the pixels around the cursor are recomputed, and only ~16 times a
-        // second: this view sits on top of video on cheap TV GPUs, so a
-        // full-screen 60 fps repaint would be paid for in stutter.
         RectF dirty = dirtyArea(x, y);
         dirty.union(lastDirty);
         lastDirty.set(dirtyArea(x, y));
         postInvalidateDelayed(
-            60,
+            50,
             (int) dirty.left,
             (int) dirty.top,
             (int) dirty.right,
@@ -174,79 +167,61 @@ final class TvCursorView extends View {
         );
     }
 
-    /** Everything the next frame may touch: the pointer, its ring, the hint. */
+    /** Everything a frame may touch: the arrow, its shadow, the hint pill. */
     private RectF dirtyArea(float x, float y) {
-        float spread = dp * 70f;
-        RectF area = new RectF(x - spread, y - spread, x + spread, y + spread + dp * 60f);
+        float spread = dp * 34f;
+        RectF area = new RectF(x - spread, y - spread, x + spread, y + spread + dp * 20f);
         if (hintUntil > SystemClock.uptimeMillis() && !hint.isEmpty()) {
             float w = hintText.measureText(hint) + dp * 40f;
             float cx = getWidth() / 2f;
-            area.union(cx - w / 2, dp * 20f, cx + w / 2, dp * 76f);
+            area.union(cx - w / 2, dp * 18f, cx + w / 2, dp * 71f);
         }
         return area;
     }
 
     private void drawPointer(Canvas canvas, float x, float y, long now) {
-        // Idle bob: a slow float, so the cursor reads as alive, not as a static
-        // system artefact. Never enough to lose the exact aim point.
-        float bobX = (float) Math.sin(now / 620.0) * dp * 1.2f;
-        float bobY = (float) Math.cos(now / 480.0) * dp * 1.2f;
-        // Squash on click, then back to full size in ~90 ms.
-        float since = clickAt > 0 ? (now - clickAt) / 1000f : 99f;
-        float squash = since < 0.09f ? 1f - (0.09f - since) * 1.6f : 1f;
-        // A tiny entry pop when the pointer first appears.
-        float pop = Math.min(1f, (now - bornAt) / 140f);
-
-        canvas.save();
-        canvas.translate(x + bobX, y + bobY);
-        canvas.scale(squash * pop, squash * pop);
-
-        // Glow, then the outline, then the white body: three passes so the
-        // yellow reads as a light behind the arrow rather than a border.
-        canvas.drawPath(arrow, glow);
-        canvas.drawPath(arrow, fill);
-        canvas.drawPath(arrow, outline);
-        canvas.restore();
-
-        // Shadow, drawn under the tip without the bob so it feels grounded.
-        canvas.save();
-        canvas.translate(x + dp * 3f, y + dp * 5f);
-        box.set(-dp * 9f, -dp * 9f, dp * 18f, dp * 12f);
-        canvas.drawOval(box, shadow);
-        canvas.restore();
-
-        // Three sparkles orbiting the tip, twinkling out of phase.
-        for (int i = 0; i < 3; i += 1) {
-            double phase = now / 900.0 + (i * 2.1);
-            float radius = dp * (13f + i * 2.5f);
-            float sx = x + bobX + (float) Math.cos(phase) * radius;
-            float sy = y + bobY + (float) Math.sin(phase) * radius * 0.75f;
-            sparkle.setAlpha((int) (90 + 90 * (0.5 + 0.5 * Math.sin(phase * 2.2))));
-            float size = dp * (1.1f + 0.55f * i);
-            canvas.drawCircle(sx, sy, size, sparkle);
-        }
-
-        // Click: an expanding ring that fades out.
+        // Squash while clicked: 1.0 → 0.93 → 1.0 over 110 ms. Scaled about the
+        // tip, so the point of aim never moves — the click lands where the
+        // viewer was pointing, not a few pixels off.
+        float scale = 1f;
         if (clickAt > 0) {
-            float t = (now - clickAt) / 420f;
-            if (t < 1f) {
-                ring.setAlpha((int) (200 * (1f - t)));
-                ring.setStrokeWidth(dp * (3f - 2f * t));
-                canvas.drawCircle(x, y + dp * 8f, dp * (10f + 34f * t), ring);
-            }
+            float t = (now - clickAt) / (float) CLICK_MS;
+            if (t < 1f) scale = 1f - 0.07f * (float) Math.sin(t * Math.PI);
         }
+
+        canvas.save();
+        canvas.translate(x, y);
+        canvas.scale(scale, scale);
+
+        // Far shadow (wide, very soft), then near shadow, then edge, then body.
+        canvas.save();
+        canvas.translate(dp * 2.1f, dp * 3.9f);
+        canvas.scale(1.015f, 1.02f);
+        canvas.drawPath(arrow, shadowFar);
+        canvas.restore();
+
+        canvas.save();
+        canvas.translate(dp * 1.2f, dp * 2.2f);
+        canvas.drawPath(arrow, shadowNear);
+        canvas.restore();
+
+        canvas.drawPath(arrow, edge); // FILL_AND_STROKE: silhouette + outline
+        body.setColor(BODY);
+        canvas.drawPath(arrow, body);
+
+        canvas.restore();
     }
 
     private void drawHint(Canvas canvas, long now) {
         float pad = dp * 14f;
         float textWidth = hintText.measureText(hint);
-        float h = dp * 40f;
+        float h = dp * 38f;
         float w = textWidth + pad * 2;
         float cx = getWidth() / 2f;
-        float top = dp * 28f;
+        float top = dp * 24f;
         float fade = Math.min(1f, (hintUntil - now) / 400f);
 
-        hintBox.setAlpha((int) (215 * fade));
+        hintBox.setAlpha((int) (205 * fade));
         box.set(cx - w / 2, top, cx + w / 2, top + h);
         canvas.drawRoundRect(box, h / 2, h / 2, hintBox);
 

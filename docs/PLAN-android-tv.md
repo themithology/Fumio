@@ -202,12 +202,20 @@ So the remote has two modes, and the second one is a real mouse:
 | Scroll | the engine reveals the focused card | cursor at an edge scrolls the page 14 % per press |
 | Who gets BACK | the page (`history.back`) | the mode switch — a viewer is not thrown out of what they were doing |
 
-The cursor is deliberately cartoony: a white arrow with a dark 3 dp outline, a
-yellow (#ffd400) glow behind it, three orbiting sparkles, a slow idle bob, a
-squash and an expanding ring on click, and a shadow. It is 30 dp wide so it
-reads from 3 m, and it is obviously *ours* — nobody mistakes it for the system
-pointer or for a broken page. First entry shows a pill: *"OK clicks · MENU or
-BACK returns to D-pad"*.
+The cursor is an ordinary arrow, drawn big and clean: white body, a 1.6 dp
+near-black edge, one tight low-alpha shadow, 20×29 dp so it reads from 3 m, and
+no motion at rest. Four candidate styles were drawn to scale over dark, mid and
+bright poster art before choosing — **docs/cursor-styles.png** — and the reason
+the edge exists at all is the white chip: a pure white arrow disappears on bright
+art without it.
+
+The first attempt had a yellow glow, orbiting sparkles and an idle bob. It looked
+generated, and worse, it competed with the poster art, which is the content. A
+pointer needs to be found instantly and then ignored. Cutting the idle animation
+also removed a permanent full-screen repaint loop, so the overlay now costs
+nothing while the viewer is reading.
+
+First entry shows a neutral pill: *"OK clicks · MENU or BACK returns to D-pad"*.
 
 **The handover is automatic and quiet.** When `tv-nav.js` cannot move or
 activate (nothing focusable in that direction, twice), it calls
