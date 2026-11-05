@@ -366,33 +366,40 @@ final class TvPointer {
         hover(webView, false);
     }
 
+    /**
+     * Tell the page where the arrow is (as a fraction of the WebView) so it can
+     * outline the target, and forward a real mouse-hover so the site's own
+     * :hover rules fire.
+     */
     private static void hover(WebView webView, boolean force) {
-        int[] loc = new int[2];
-        webView.getLocationInWindow(loc);
-        float viewX = cursor != null ? cursor.viewX() : aimX;
-        float viewY = cursor != null ? cursor.viewY() : aimY;
-        float x = viewX - loc[0] + webView.getScrollX();
-        float y = viewY - loc[1] + webView.getScrollY();
-
+        float[] fractions = fractions(webView);
         lastHoverAt = SystemClock.uptimeMillis();
-        hoverX = viewX;
-        hoverY = viewY;
+        if (cursor != null) {
+            hoverX = cursor.viewX();
+            hoverY = cursor.viewY();
+        } else {
+            hoverX = aimX;
+            hoverY = aimY;
+        }
 
-        // Real hover, so the site's own :hover styling and hover menus fire.
+        float x = fractions[0] * webView.getWidth();
+        float y = fractions[1] * webView.getHeight();
+
+        // Real hover first: the DOM event gives the page its hover styling.
         try {
             MotionEvent event =
                 MotionEvent.obtain(SystemClock.uptimeMillis(), SystemClock.uptimeMillis(),
-                    MotionEvent.ACTION_HOVER_MOVE, x, y, 0);
+                    MotionEvent.ACTION_HOVER_MOVE, x + webView.getScrollX(), y + webView.getScrollY(), 0);
             event.setSource(InputDevice.SOURCE_MOUSE);
             webView.onHoverEvent(event);
             event.recycle();
         } catch (Exception ignored) {
             /* hover is a nicety */
         }
-        // And our own target resolution, which is what OK will act on.
+        // And our own resolution, which is what OK will act on.
         try {
             webView.evaluateJavascript(
-                "window.FumioTvHover&&window.FumioTvHover(" + x + "," + y + ");",
+                "window.FumioTvHoverF&&window.FumioTvHoverF(" + fmt(fractions[0]) + "," + fmt(fractions[1]) + ");",
                 null
             );
         } catch (Exception ignored) {
@@ -401,32 +408,51 @@ final class TvPointer {
     }
 
     /**
-     * Click at the drawn position. tv-cursor.js resolves the target and clicks
-     * it (so aiming at a poster clicks its card); a synthetic tap is the
-     * fallback for anything that only listens to pointer/touch events.
+     * Click = a real touch at the target's centre.
+     *
+     * Two deliberate changes from the first version, both because a DOM
+     * `element.click()` is NOT what a finger does:
+     *
+     *   1. It is a native ACTION_DOWN/ACTION_UP pair, so the page generates
+     *      pointerdown / pointerup / click itself. A DOM click only fires
+     *      `click` — any control listening to pointer or touch events (drag
+     *      rails, motion-driven cards, canvas players) ignored it, which is one
+     *      reason the season rail did not respond.
+     *   2. It lands on the outlined target's CENTRE, not on the cursor pixel, so
+     *      aiming at a poster still hits the card. The page computes the centre
+     *      and hands it back as a fraction, so it is correct under any scale or
+     *      scroll.
      */
     private static void click(final WebView webView) {
-        int[] loc = new int[2];
-        webView.getLocationInWindow(loc);
-        float viewX = cursor != null ? cursor.viewX() : aimX;
-        float viewY = cursor != null ? cursor.viewY() : aimY;
-        final float x = viewX - loc[0] + webView.getScrollX();
-        final float y = viewY - loc[1] + webView.getScrollY();
-
+        if (cursor != null) hover(webView, true); // make sure a target exists
         try {
             webView.evaluateJavascript(
-                "window.FumioTvClickAt?window.FumioTvClickAt(" + x + "," + y + "):false;",
-                clicked -> {
-                    if (clicked != null && clicked.startsWith("true")) return;
-                    tap(webView, x, y);
+                "window.FumioTvTapPoint?window.FumioTvTapPoint():'';",
+                point -> {
+                    float[] at = parseFractions(point);
+                    if (at == null) {
+                        // Nothing outlined: tap where the arrow is, so anything
+                        // the page handles by hand still gets a touch.
+                        tapFractions(webView, fractions(webView)[0], fractions(webView)[1]);
+                        return;
+                    }
+                    tapFractions(webView, at[0], at[1]);
                 }
             );
         } catch (Exception error) {
-            tap(webView, x, y);
+            float[] at = fractions(webView);
+            tapFractions(webView, at[0], at[1]);
         }
     }
 
-    /** A real tap: down, then up 70 ms later, so :active and pointer handlers run. */
+    /** Tap a point given as a fraction of the WebView's box. */
+    private static void tapFractions(WebView webView, float fx, float fy) {
+        float x = clamp(fx, 0f, 1f) * webView.getWidth();
+        float y = clamp(fy, 0f, 1f) * webView.getHeight();
+        tap(webView, x + webView.getScrollX(), y + webView.getScrollY());
+    }
+
+    /** A real tap at view coordinates: down, then up 70 ms later. */
     private static void tap(WebView webView, final float x, final float y) {
         long now = SystemClock.uptimeMillis();
         try {
@@ -477,6 +503,48 @@ final class TvPointer {
         } catch (Exception ignored) {
             /* a page that will not scroll simply does not scroll */
         }
+    }
+
+    /**
+     * Where the arrow is, as a fraction of the WebView's box. Fractions are the
+     * only currency that survives page scale (a 1920 CSS layout on a 1280 px
+     * view), page scroll, text zoom and density — see the note in tv-cursor.js.
+     */
+    private static float[] fractions(WebView webView) {
+        int[] loc = new int[2];
+        webView.getLocationInWindow(loc);
+        float viewX = cursor != null ? cursor.viewX() : aimX;
+        float viewY = cursor != null ? cursor.viewY() : aimY;
+        float w = Math.max(1f, webView.getWidth());
+        float h = Math.max(1f, webView.getHeight());
+        return new float[] {
+            clamp((viewX - loc[0]) / w, 0f, 1f),
+            clamp((viewY - loc[1]) / h, 0f, 1f),
+        };
+    }
+
+    /** "0.412000,0.733000" → {0.412f, 0.733f}; anything else → null. */
+    private static float[] parseFractions(String value) {
+        if (value == null) return null;
+        String raw = value.trim();
+        if (raw.length() > 1 && raw.startsWith("\"") && raw.endsWith("\"")) {
+            raw = raw.substring(1, raw.length() - 1);
+        }
+        if (raw.isEmpty() || "null".equals(raw) || "false".equals(raw)) return null;
+        int comma = raw.indexOf(',');
+        if (comma <= 0) return null;
+        try {
+            float fx = Float.parseFloat(raw.substring(0, comma).trim());
+            float fy = Float.parseFloat(raw.substring(comma + 1).trim());
+            if (Float.isNaN(fx) || Float.isNaN(fy)) return null;
+            return new float[] { clamp(fx, 0f, 1f), clamp(fy, 0f, 1f) };
+        } catch (Exception ignored) {
+            return null;
+        }
+    }
+
+    private static String fmt(float value) {
+        return String.format(java.util.Locale.US, "%.6f", value);
     }
 
     private static WebView web() {

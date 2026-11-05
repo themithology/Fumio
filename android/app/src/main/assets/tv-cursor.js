@@ -106,17 +106,52 @@
   }
 
   // ─── the API the native side calls ──────────────────────────────────────
+  //
+  // COORDINATES. The native side never sends pixels, it sends FRACTIONS of the
+  // WebView's box (0..1) — because the page's own coordinate space is not the
+  // same as the view's:
+  //
+  //   • the layout viewport can be 1920 CSS px wide on a screen with 1280 view
+  //     px (the TV viewport normalisation), so a pixel is not a CSS pixel;
+  //   • `elementFromPoint` takes CLIENT coordinates, which ignore page scroll,
+  //     while a point in the view is where the finger is — so once the page is
+  //     scrolled, the two disagree by exactly the scroll offset;
+  //   • density, zoom and text zoom all move the ratio as well.
+  //
+  // A fraction survives every one of those, because the page divides its own
+  // viewport by the same fraction. (The first version passed view pixels and
+  // worked only on unscrolled pages at scale 1 — which is exactly the bug where
+  // the home page responded and a scrolled season rail did not.)
 
-  window.FumioTvHover = function (x, y) {
+  function viewportSize() {
+    var de = document.documentElement || {};
+    var w = de.clientWidth || window.innerWidth || 0;
+    var h = de.clientHeight || window.innerHeight || 0;
+    return { w: w, h: h };
+  }
+
+  function toClient(fx, fy) {
+    var size = viewportSize();
+    var x = Math.max(0, Math.min(size.w - 1, fx * size.w));
+    var y = Math.max(0, Math.min(size.h - 1, fy * size.h));
+    return { x: x, y: y };
+  }
+
+  /** Back to fractions, for anything the native side has to tap. */
+  function toFraction(x, y) {
+    var size = viewportSize();
+    return { fx: size.w ? x / size.w : 0, fy: size.h ? y / size.h : 0 };
+  }
+
+  window.FumioTvHoverF = function (fx, fy) {
     try {
       style();
-      var hit = document.elementFromPoint(x, y);
+      var point = toClient(fx, fy);
+      var hit = document.elementFromPoint(point.x, point.y);
       if (!hit) {
         mark(null);
         return false;
       }
-      // An element the page made draggable or a slider is still worth a click
-      // even when nothing above it is actionable.
       var target = actionable(hit);
       mark(target);
       return !!target;
@@ -125,16 +160,41 @@
     }
   };
 
-  window.FumioTvTarget = function () {
-    return !!(current && current.isConnected);
+  /**
+   * Where to tap, as fractions of the viewport: the CENTRE of the outlined
+   * target, not the cursor's pixel. That is the forgiveness — aim at a poster,
+   * tap the card — and it keeps working now that a click is a real touch.
+   * Returns "" when nothing is targeted.
+   */
+  window.FumioTvTapPoint = function () {
+    try {
+      var el = current && current.isConnected ? current : null;
+      if (!el) return "";
+      var r = el.getBoundingClientRect();
+      if (!r || r.width < 1 || r.height < 1) return "";
+      var size = viewportSize();
+      // Clamp the centre into the visible area: a card half off screen must not
+      // send the tap outside the WebView.
+      var cx = Math.max(0, Math.min(size.w - 1, r.left + r.width / 2));
+      var cy = Math.max(0, Math.min(size.h - 1, r.top + r.height / 2));
+      var f = toFraction(cx, cy);
+      return f.fx.toFixed(6) + "," + f.fy.toFixed(6);
+    } catch (e) {
+      return "";
+    }
   };
 
+  /**
+   * Clicks are TAPS now (see the native side): a real touch at this point, which
+   * the page turns into pointerdown/pointerup/click itself. Kept for the case
+   * where native has no touch to give — and because a DOM click is the only way
+   * to activate a <label> that toggles a hidden input on some frameworks.
+   */
   window.FumioTvClick = function () {
     style();
     var el = current && current.isConnected ? current : null;
     if (!el) return false;
     try {
-      // Typing on a TV: a click would work, but the keyboard must open too.
       if (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable) {
         el.focus();
         el.click();
@@ -147,22 +207,14 @@
     }
   };
 
-  /**
-   * Resolve and click in ONE call: hover at the point, then click the target.
-   *
-   * The native side calls this instead of hover-then-click, because those are
-   * two round trips through the JS bridge and the page can re-render in between
-   * — which is how you end up clicking the card the cursor was over 40 ms ago.
-   * Returns false when nothing clickable is there, so the caller can fall back
-   * to a synthetic tap for canvas / pointer-only controls.
-   */
-  window.FumioTvClickAt = function (x, y) {
-    try {
-      if (!window.FumioTvHover(x, y)) return false;
-      return window.FumioTvClick();
-    } catch (e) {
-      return false;
-    }
+  /** Kept for older callers: hover by pixels, then click. */
+  window.FumioTvHover = function (x, y) {
+    var size = viewportSize();
+    return window.FumioTvHoverF(size.w ? x / size.w : 0, size.h ? y / size.h : 0);
+  };
+
+  window.FumioTvTarget = function () {
+    return !!(current && current.isConnected);
   };
 
   /** Which way the page can still scroll, so native knows when to nudge. */

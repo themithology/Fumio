@@ -174,8 +174,32 @@ television remote rather than a laptop trackpad.
 4. **Hover that works.** Moves are delivered as real mouse hover events, so the
    site's own `:hover` styling and hover-only menus behave exactly as on a
    desktop — that is content a D-pad could never show.
-5. **No dead ends.** Edge scrolling, and if nothing is under the cursor the
-   synthetic tap still fires so canvas/pointer-only controls work.
+5. **No dead ends.** Edge scrolling, and a click is a **real touch** at the
+   target's centre — `ACTION_DOWN`/`ACTION_UP` — so the page generates
+   pointerdown/pointerup/click itself and every handler style reacts (a DOM
+   `element.click()` only fires `click`, which is why drag rails and
+   motion-driven cards ignored the first version).
+
+### 2.5 Coordinates: fractions, never pixels
+
+The single most important detail in the whole remote, and the cause of the one
+bug that mattered (`2026-11-05`: home page responded, a scrolled season rail did
+not).
+
+The page's coordinate space is not the view's:
+
+- the layout viewport can be 1920 CSS px on a 1280 px screen (the TV viewport
+  normalisation), so a view pixel is not a CSS pixel;
+- `elementFromPoint` takes **client** coordinates, which ignore page scroll, so
+  once the page is scrolled a view point and a client point differ by exactly the
+  scroll offset;
+- density, zoom and text zoom all move the ratio too.
+
+So the native side never sends pixels. It sends **fractions of the WebView's
+box** (`FumioTvHoverF(fx, fy)`, `FumioTvTapPoint()` → `"fx,fy"`), and the page
+multiplies by its own `clientWidth`/`clientHeight`. Fractions are invariant under
+every one of the factors above, so this cannot drift again when the site changes
+its layout.
 
 ### 3.3 The cursor itself
 

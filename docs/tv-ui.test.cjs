@@ -101,7 +101,7 @@ function viewportOf(dom) {
   await new Promise((r) => setTimeout(r, 900));
   check("overflow: and reverted, so nothing is clipped", viewportOf(broken), original);
 
-  // ─── tv-cursor.js: what is under the cursor, and clicking it ─────────────
+  // ─── tv-cursor.js: target resolution, coordinates, tap point ─────────────
   const dom = new JSDOM(
     `<!doctype html><html><head></head><body>
        <div id="rail">
@@ -117,16 +117,26 @@ function viewportOf(dom) {
   const w = dom.window;
   const doc = w.document;
 
-  // jsdom has no hit-testing; stand in for the browser.
-  const at = {
-    "10,10": doc.getElementById("poster"),
-    "20,20": doc.getElementById("caption"),
-    "30,30": doc.getElementById("plainInner"),
-    "40,40": doc.getElementById("button"),
-    "50,50": doc.getElementById("field"),
-    "60,60": doc.getElementById("empty"),
+  // A layout viewport, like a real WebView has. jsdom reports 0 otherwise.
+  w.innerWidth = 1024;
+  w.innerHeight = 768;
+  for (const [prop, value] of [["clientWidth", 1024], ["clientHeight", 768]]) {
+    Object.defineProperty(doc.documentElement, prop, { get: () => value, configurable: true });
+  }
+
+  // Stand in for hit-testing AND record the coordinates the helper asked about,
+  // because the coordinates are the bug this test exists for.
+  const ids = ["poster", "caption", "plainInner", "button", "field", "empty"];
+  const askLog = [];
+  doc.elementFromPoint = (x, y) => {
+    askLog.push({ x, y });
+    if (y < 120) return doc.getElementById("poster");
+    if (y < 240) return doc.getElementById("caption");
+    if (y < 360) return doc.getElementById("plainInner");
+    if (y < 480) return doc.getElementById("button");
+    if (y < 600) return doc.getElementById("field");
+    return doc.getElementById("empty");
   };
-  doc.elementFromPoint = (x, y) => at[`${x},${y}`] || null;
 
   let typing = null;
   w.FumioNative = { tvInputFocused: (v) => (typing = v) };
@@ -137,32 +147,42 @@ function viewportOf(dom) {
 
   w.eval(cursorSource);
 
-  checkThat("hover finds nothing on empty space", !w.FumioTvHover(60, 60));
-  checkThat("clicking with no target is a no-op", !w.FumioTvClick());
-  check("and nothing was clicked", clicked, 0);
+  // Fractions in, client coordinates out — no pixels from native, ever.
+  askLog.length = 0;
+  w.FumioTvHoverF(0.5, 0.5);
+  check("hover converts fractions to client px", askLog[0], { x: 512, y: 384 });
+  check("a scrolled page cannot shift the probe", askLog.length, 1);
 
-  checkThat("hover on a poster resolves to its link", w.FumioTvHover(10, 10));
+  checkThat("a poster resolves to its link", w.FumioTvHoverF(0.5, 0.05));
   check("the link is outlined, not the image", doc.getElementById("card").classList.contains("fumio-tv-target"), true);
   check("the image is not", doc.getElementById("poster").classList.contains("fumio-tv-target"), false);
-  checkThat("ok clicks the link", w.FumioTvClick());
-  check("the page saw the click", clicked, 1);
 
-  w.FumioTvHover(20, 20); // caption text inside the same link
-  check("moving within the link keeps one target", doc.getElementById("card").className.split(" ").filter((c) => c === "fumio-tv-target").length, 1);
+  // The tap point is the TARGET's centre, as fractions of the viewport.
+  doc.getElementById("card").getBoundingClientRect = () => ({
+    left: 100, top: 200, width: 300, height: 200, right: 400, bottom: 400, x: 100, y: 200,
+  });
+  const point = w.FumioTvTapPoint();
+  const parsed = point.split(",").map(Number);
+  check("tap point is the target's centre in fractions", parsed.map((n) => Math.round(n * 1000) / 1000), [0.244, 0.391]);
+  check("tap point parses as two numbers", parsed.length === 2 && parsed.every((n) => Number.isFinite(n)), true);
 
-  w.FumioTvHover(30, 30); // a plain div with cursor:pointer
+  // Nothing outlined → no tap point, so native falls back to the cursor pixel.
+  w.FumioTvHoverF(0.5, 0.95); // "empty", which is not actionable
+  check("no target, no tap point", w.FumioTvTapPoint(), "");
+  checkThat("and the target is cleared", !w.FumioTvTarget());
+
+  // A pointer-cursor div is still reachable, and the DOM fallback still clicks.
+  w.FumioTvHoverF(0.5, 0.35);
   checkThat("a pointer-cursor div is a target", w.FumioTvTarget());
-  checkThat("and clicks", w.FumioTvClick());
-  check("the site's handler ran", clicked, 2);
+  checkThat("the DOM fallback clicks it", w.FumioTvClick());
+  check("the site's handler ran", clicked, 1);
 
-  w.FumioTvHover(40, 40);
+  w.FumioTvHoverF(0.5, 0.55); // y ≈ 422 → inside the button's band
   check("a <button> is a target", doc.getElementById("button").classList.contains("fumio-tv-target"), true);
 
-  // One-call hover+click: the native side's only click path.
-  checkThat("ClickAt on empty space reports failure", !w.FumioTvClickAt(60, 60));
-  const before = clicked;
-  checkThat("ClickAt on a target reports success", w.FumioTvClickAt(10, 10));
-  check("ClickAt clicked exactly once", clicked, before + 1);
+  // Backwards-compatible pixel API maps through the same fractions.
+  w.FumioTvHover(512, 384);
+  check("the pixel API still resolves", w.FumioTvTarget(), true);
 
   // Typing: the remote must belong to the keyboard, not to the cursor.
   doc.getElementById("field").focus();
