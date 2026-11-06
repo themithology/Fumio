@@ -139,7 +139,11 @@ function viewportOf(dom) {
   };
 
   let typing = null;
-  w.FumioNative = { tvInputFocused: (v) => (typing = v) };
+  let published = [];
+  w.FumioNative = {
+    tvInputFocused: (v) => (typing = v),
+    tvTarget: (point) => published.push(point),
+  };
 
   let clicked = 0;
   doc.getElementById("card").addEventListener("click", () => (clicked += 1));
@@ -166,8 +170,23 @@ function viewportOf(dom) {
   check("tap point is the target's centre in fractions", parsed.map((n) => Math.round(n * 1000) / 1000), [0.244, 0.391]);
   check("tap point parses as two numbers", parsed.length === 2 && parsed.every((n) => Number.isFinite(n)), true);
 
-  // Nothing outlined → no tap point, so native falls back to the cursor pixel.
-  w.FumioTvHoverF(0.5, 0.95); // "empty", which is not actionable
+  // The target's centre is PUBLISHED to native, so a click never needs a round
+  // trip. Re-hovering the same card republishes when it moves (a scrolling rail
+  // moves the card under a stationary cursor).
+  w.FumioTvHoverF(0.5, 0.05);
+  check("the tap point was published to native", published[published.length - 1], "0.244141,0.390625");
+  const publishesBefore = published.length;
+  w.FumioTvHoverF(0.5, 0.05);
+  check("an unchanged position is not republished", published.length, publishesBefore);
+  doc.getElementById("card").getBoundingClientRect = () => ({
+    left: 100, top: 100, width: 300, height: 200, right: 400, bottom: 300, x: 100, y: 100,
+  });
+  w.FumioTvHoverF(0.5, 0.05);
+  check("a moved card republishes its new centre", published[published.length - 1], "0.244141,0.260417");
+  check("and published as empty when the target clears", (() => {
+    w.FumioTvHoverF(0.5, 0.95); // "empty", which is not actionable
+    return published[published.length - 1];
+  })(), "");
   check("no target, no tap point", w.FumioTvTapPoint(), "");
   checkThat("and the target is cleared", !w.FumioTvTarget());
 
@@ -188,6 +207,18 @@ function viewportOf(dom) {
   doc.getElementById("field").focus();
   await new Promise((r) => setTimeout(r, 10));
   check("focusing a field tells native to hand over the remote", typing, true);
+
+  // An <iframe> is a clickable surface (the player embed lives in one), and the
+  // document itself must never be a target even if the page sets
+  // cursor:pointer on <body>.
+  const frame = doc.createElement("iframe");
+  doc.body.appendChild(frame);
+  doc.elementFromPoint = () => frame;
+  checkThat("an iframe is a target", w.FumioTvHoverF(0.5, 0.5));
+  doc.body.style.cursor = "pointer";
+  doc.elementFromPoint = () => doc.body;
+  w.FumioTvHoverF(0.5, 0.5);
+  check("the document body is never outlined", w.FumioTvVisibleTarget(), false);
 
   // A page that re-renders must not leave a stale outline behind.
   doc.getElementById("button").remove();

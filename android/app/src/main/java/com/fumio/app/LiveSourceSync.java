@@ -142,7 +142,13 @@ final class LiveSourceSync {
                 + "&type=" + android.net.Uri.encode(type == null ? "tv" : type)
                 + "&season=" + android.net.Uri.encode(season == null ? "1" : season)
                 + "&episode=" + android.net.Uri.encode(episode == null ? "1" : episode);
-            JSONObject result = NativeHttp.execute("GET", url, "{\"Accept\":\"application/json\"}", null);
+            JSONObject result = NativeHttp.execute(
+                "GET",
+                url,
+                "{\"Accept\":\"application/json\"}",
+                null,
+                (int) ENDPOINT_TIMEOUT_MS
+            );
             if (result == null || !result.optBoolean("ok", false)) return null;
             Object data = result.opt("data");
 

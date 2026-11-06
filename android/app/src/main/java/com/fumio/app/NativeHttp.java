@@ -16,6 +16,23 @@ public final class NativeHttp {
     private NativeHttp() {}
 
     public static JSONObject execute(String method, String url, String headersJson, String body) {
+        return execute(method, url, headersJson, body, 0);
+    }
+
+    /**
+     * @param timeoutMs 0 keeps the generous defaults (uploads can be slow);
+     *                  anything else is a hard budget for this call. The server
+     *                  list uses it: a hung endpoint must not keep a viewer
+     *                  staring at a spinner when the harvest fallback is right
+     *                  there.
+     */
+    public static JSONObject execute(
+        String method,
+        String url,
+        String headersJson,
+        String body,
+        int timeoutMs
+    ) {
         JSONObject out = new JSONObject();
         try {
             if (url == null || url.isEmpty()) {
@@ -36,8 +53,13 @@ public final class NativeHttp {
             HttpURLConnection conn = (HttpURLConnection) new URL(url).openConnection();
             conn.setInstanceFollowRedirects(true);
             boolean slow = url.contains("/api/toon-stream");
-            conn.setConnectTimeout(15000);
-            conn.setReadTimeout(slow ? 25000 : 15000);
+            if (timeoutMs > 0) {
+                conn.setConnectTimeout(timeoutMs);
+                conn.setReadTimeout(timeoutMs);
+            } else {
+                conn.setConnectTimeout(15000);
+                conn.setReadTimeout(slow ? 25000 : 15000);
+            }
             conn.setRequestMethod(verb);
             conn.setRequestProperty("Accept", "application/json");
             if (headersJson != null && !headersJson.isEmpty()) {

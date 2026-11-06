@@ -45,6 +45,10 @@ final class TvUi {
         if (!TvMode.isTv(activity)) return;
         loadAssets(activity);
         TvPointer.install(activity);
+        // Point the pointer at the browse WebView straight away: if the viewer
+        // presses a key before the first page finishes, hover/click must not go
+        // to a WebView from a previous activity instance.
+        TvPointer.retarget(webView);
         applyPageScale(webView);
     }
 

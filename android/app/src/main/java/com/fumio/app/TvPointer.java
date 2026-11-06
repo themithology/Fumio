@@ -96,6 +96,17 @@ final class TvPointer {
 
     private static int held;
     private static long heldMs;
+
+    /** The tap point the page published for the outlined target ("fx,fy"). */
+    private static float[] tapTarget;
+    /** A press is in flight: DOWN sent, UP pending. */
+    private static boolean pressDown;
+    private static float pressX;
+    private static float pressY;
+    private static long pressAt;
+    private static int pressGeneration;
+    private static final long MIN_PRESS_MS = 70L;
+    private static final long MAX_PRESS_MS = 1500L;
     private static long lastHoverAt;
     private static long lastScrollAt;
     private static float hoverX;
@@ -209,11 +220,21 @@ final class TvPointer {
         int bit = holdBit(code);
         if (!click && bit == 0) return false; // not ours
 
-        // While the keyboard is open the remote belongs to it.
-        if (typing) return false;
+        // While the keyboard is open the remote belongs to it — and any held
+        // direction is released, otherwise the cursor keeps gliding behind the
+        // keyboard because the matching key-up never reaches us.
+        if (typing) {
+            held = 0;
+            heldMs = 0;
+            return false;
+        }
 
         if (up) {
             if (bit != 0) release(bit);
+            if (click) {
+                WebView webViewNow = web();
+                if (webViewNow != null) releasePress(webViewNow);
+            }
             return true; // consume the release so the WebView never scrolls
         }
         if (!down) return false;
@@ -291,7 +312,13 @@ final class TvPointer {
     private static void advance(long dt) {
         if (held == 0) return;
         WebView webView = web();
-        if (webView == null) return;
+        if (webView == null) {
+            // The page is gone: stop gliding, or the Choreographer loop would
+            // keep running at 60 fps for a cursor that cannot move.
+            held = 0;
+            heldMs = 0;
+            return;
+        }
 
         float density = webView.getResources().getDisplayMetrics().density;
         float[] bounds = bounds(webView, density);
@@ -424,32 +451,108 @@ final class TvPointer {
      *      scroll.
      */
     private static void click(final WebView webView) {
-        if (cursor != null) hover(webView, true); // make sure a target exists
-        try {
-            webView.evaluateJavascript(
-                "window.FumioTvTapPoint?window.FumioTvTapPoint():'';",
-                point -> {
-                    float[] at = parseFractions(point);
-                    if (at == null) {
-                        // Nothing outlined: tap where the arrow is, so anything
-                        // the page handles by hand still gets a touch.
-                        tapFractions(webView, fractions(webView)[0], fractions(webView)[1]);
-                        return;
-                    }
-                    tapFractions(webView, at[0], at[1]);
-                }
-            );
-        } catch (Exception error) {
+        if (cursor != null) hover(webView, true); // refresh the target outline
+
+        // Where: the published target centre if there is one, else the arrow.
+        float fx;
+        float fy;
+        if (tapTarget != null) {
+            fx = tapTarget[0];
+            fy = tapTarget[1];
+        } else {
             float[] at = fractions(webView);
-            tapFractions(webView, at[0], at[1]);
+            fx = at[0];
+            fy = at[1];
         }
+
+        pressX = clamp(fx, 0f, 1f) * webView.getWidth() + webView.getScrollX();
+        pressY = clamp(fy, 0f, 1f) * webView.getHeight() + webView.getScrollY();
+        pressAt = SystemClock.uptimeMillis();
+        pressDown = true;
+        final int generation = ++pressGeneration;
+
+        try {
+            MotionEvent down =
+                MotionEvent.obtain(pressAt, pressAt, MotionEvent.ACTION_DOWN, pressX, pressY, 0);
+            down.setSource(InputDevice.SOURCE_TOUCHSCREEN);
+            webView.dispatchTouchEvent(down);
+            down.recycle();
+        } catch (Exception error) {
+            pressDown = false;
+            Log.w(TAG, "tap down failed: " + error.getMessage());
+            return;
+        }
+
+        // Safety net: a key-up can be swallowed (page navigation, focus loss).
+        // Without this the page would be left mid-gesture forever.
+        final WebView target = webView;
+        webView.postDelayed(
+            () -> {
+                if (pressDown && generation == pressGeneration) releasePress(target);
+            },
+            MAX_PRESS_MS
+        );
     }
 
-    /** Tap a point given as a fraction of the WebView's box. */
-    private static void tapFractions(WebView webView, float fx, float fy) {
-        float x = clamp(fx, 0f, 1f) * webView.getWidth();
-        float y = clamp(fy, 0f, 1f) * webView.getHeight();
-        tap(webView, x + webView.getScrollX(), y + webView.getScrollY());
+    /**
+     * The finger leaves. A short press still gets MIN_PRESS_MS of contact, so
+     * the page sees a real gesture (pointerdown → pointerup → click) rather than
+     * a zero-length one — and a HELD press stays down for as long as the button
+     * is held, which is what drag-threshold rails and press-and-hold menus need.
+     */
+    private static void releasePress(final WebView webView) {
+        if (!pressDown) return;
+        pressDown = false;
+        long now = SystemClock.uptimeMillis();
+        long heldFor = now - pressAt;
+        long delay = heldFor >= MIN_PRESS_MS ? 0L : (MIN_PRESS_MS - heldFor);
+        final float x = pressX;
+        final float y = pressY;
+        final int generation = pressGeneration;
+        webView.postDelayed(
+            () -> {
+                // A newer press took over while this UP was waiting: its DOWN is
+                // the live gesture now, and sending this UP would orphan it.
+                if (pressDown && generation != pressGeneration) return;
+                try {
+                    MotionEvent up =
+                        MotionEvent.obtain(
+                            SystemClock.uptimeMillis(),
+                            SystemClock.uptimeMillis(),
+                            MotionEvent.ACTION_UP,
+                            x,
+                            y,
+                            0
+                        );
+                    up.setSource(InputDevice.SOURCE_TOUCHSCREEN);
+                    webView.dispatchTouchEvent(up);
+                    up.recycle();
+                } catch (Exception ignored) {
+                    /* the view went away mid-tap */
+                }
+            },
+            delay
+        );
+    }
+
+    /** The page publishes the outlined target's centre here (tv-cursor.js). */
+    static void setTapTarget(String point) {
+        float[] parsed = parseFractions(point);
+        tapTarget = parsed;
+    }
+
+    /** The browse page is back in front: point the pointer at it again. */
+    static void retarget(WebView webView) {
+        if (webView == null) return;
+        target = new WeakReference<>(webView);
+        tapTarget = null;
+        pressedCancel();
+    }
+
+    private static void pressedCancel() {
+        pressDown = false;
+        held = 0;
+        heldMs = 0;
     }
 
     /** A real tap at view coordinates: down, then up 70 ms later. */

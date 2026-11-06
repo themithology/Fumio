@@ -54,6 +54,7 @@ final class Updater {
     private static final String KEY_LAST_CHECK = "last_check";
     private static final String KEY_SKIP_BUILD = "skip_build";
     private static final String KEY_PENDING_APK = "pending_apk";
+    private static final String KEY_PENDING_BUILD = "pending_build";
     private static final long CHECK_EVERY_MS = 6L * 60 * 60 * 1000L;
     private static final String APK_MIME = "application/vnd.android.package-archive";
     /**
@@ -92,11 +93,19 @@ final class Updater {
         String pending = prefs.getString(KEY_PENDING_APK, "");
         if (!pending.isEmpty()) {
             File apk = new File(pending);
-            if (apk.isFile() && apk.length() > 1024 * 1024 && canInstall(activity)) {
+            int pendingBuild = prefs.getInt(KEY_PENDING_BUILD, 0);
+            // Already installed that build? Clear the marker, or every launch
+            // would keep offering an update that has happened (the old code
+            // never recorded which build the file was, so after installing it
+            // prompted "Finish the update" forever).
+            if (pendingBuild > 0 && versionCode(activity) >= pendingBuild) {
+                clearPending(prefs, apk);
+            } else if (apk.isFile() && apk.length() > 1024 * 1024 && canInstall(activity)) {
                 promptInstall(activity, apk, "Finish the update", "The new build is already downloaded.");
                 return;
+            } else if (!apk.isFile()) {
+                clearPending(prefs, apk);
             }
-            if (!apk.isFile()) prefs.edit().remove(KEY_PENDING_APK).apply();
         }
 
         long now = System.currentTimeMillis();
@@ -192,7 +201,10 @@ final class Updater {
                 "Build " + release.build + " is ready. This APK is build " + current + ".\n\n" +
                 "Installing over the top keeps your downloads, watch history and settings."
             )
-            .setPositiveButton("Install", (d, w) -> download(activity, release.url))
+            .setPositiveButton("Install", (d, w) -> {
+                pendingBuild = release.build;
+                download(activity, release.url);
+            })
             .setNeutralButton("Skip this build", (d, w) -> {
                 prefs(activity).edit().putInt(KEY_SKIP_BUILD, release.build).apply();
             })
@@ -268,7 +280,11 @@ final class Updater {
                             .show();
                         return;
                     }
-                    prefs(activity).edit().putString(KEY_PENDING_APK, target.getAbsolutePath()).apply();
+                    prefs(activity)
+                        .edit()
+                        .putString(KEY_PENDING_APK, target.getAbsolutePath())
+                        .putInt(KEY_PENDING_BUILD, pendingBuildOf(activity))
+                        .apply();
                     if (!canInstall(activity)) {
                         askForInstallPermission(activity);
                         return;
@@ -348,6 +364,21 @@ final class Updater {
         } catch (Exception ignored) {
             return 0;
         }
+    }
+
+    /** The build this download is FOR, captured before the download starts. */
+    private static int pendingBuild;
+    private static int pendingBuildOf(Context context) {
+        return pendingBuild;
+    }
+
+    private static void clearPending(SharedPreferences prefs, File apk) {
+        try {
+            if (apk != null && apk.isFile()) apk.delete();
+        } catch (Exception ignored) {
+            /* the OS will trim the cache anyway */
+        }
+        prefs.edit().remove(KEY_PENDING_APK).remove(KEY_PENDING_BUILD).apply();
     }
 
     private static SharedPreferences prefs(Context context) {

@@ -103,16 +103,20 @@ public class MainActivity extends BridgeActivity {
             playerScript = readAsset("fumio-player.js");
             playerOverlay = new FumioPlayerOverlay(this, this::onOverlayClosed);
             verifyClient = new VerifyClient(this);
-            new Thread(
-                () -> {
-                    try {
-                        verifyClient.entitlement();
-                    } catch (Exception ignored) {
-                        // Prefetch only — Play will retry.
-                    }
-                },
-                "ogpb-verify"
-            ).start();
+            if (!TvMode.isTv(this)) {
+                // A television never shows the wall (ensureUnlocked), so this
+                // prefetch is a wasted request there.
+                new Thread(
+                    () -> {
+                        try {
+                            verifyClient.entitlement();
+                        } catch (Exception ignored) {
+                            // Prefetch only — Play will retry.
+                        }
+                    },
+                    "ogpb-verify"
+                ).start();
+            }
             installClients(webView, bridge);
             // TELEVISION ONLY. On a phone this call returns immediately.
             TvUi.install(this, webView);
@@ -221,6 +225,16 @@ public class MainActivity extends BridgeActivity {
     }
 
     public class NativeBridge {
+        /**
+         * tv-cursor.js publishes where a tap should land (the outlined target's
+         * centre, as fractions of the viewport) every time the target changes —
+         * so a click needs no round trip and can never use a stale point.
+         */
+        @JavascriptInterface
+        public void tvTarget(String point) {
+            TvPointer.setTapTarget(point);
+        }
+
         /** tv-cursor.js tells us when the remote belongs to a text field. */
         @JavascriptInterface
         public void tvInputFocused(boolean typing) {
@@ -586,6 +600,11 @@ public class MainActivity extends BridgeActivity {
                 return;
             }
             if (isOwnOrigin(uri) && openedLive) {
+                // The bundled build (the fallback when the site is down) is our
+                // own page: pointer helper only, no viewport rewrite. Without
+                // this the cursor had no target resolution on the fallback and
+                // every press landed blind.
+                TvUi.onOwnPageFinished(MainActivity.this, view);
                 return;
             }
             if (isLiveSite(uri)) {
@@ -1099,6 +1118,10 @@ public class MainActivity extends BridgeActivity {
 
     private void onOverlayClosed(String continueWatching) {
         playerActive = false;
+        // The cursor was talking to the player's WebView; the viewer is back on
+        // the browse page, so the target must follow them or every click and
+        // hover would go to a hidden view.
+        if (TvMode.isTv(this)) TvPointer.retarget(liveWebView());
         Bridge afterBridge = getBridge();
         if (afterBridge != null && afterBridge.getWebView() != null) {
             startPlayerRouteWatcher(afterBridge.getWebView());

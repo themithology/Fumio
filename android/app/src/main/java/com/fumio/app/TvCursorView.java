@@ -112,6 +112,11 @@ final class TvCursorView extends View {
                 }
                 if (beforeX != renderX || beforeY != renderY) {
                     invalidateAround(beforeX, beforeY, renderX, renderY);
+                } else if (hintUntil > now) {
+                    // The pill fades on its own clock, in its own corner of the
+                    // screen: invalidating only around the cursor left a ghost
+                    // of the previous frame behind.
+                    invalidateHint();
                 }
 
                 // 3. Tell the input layer where the arrow actually is, so hover
@@ -133,7 +138,7 @@ final class TvCursorView extends View {
                 lastFrameAt = 0;
                 if (hintDrawn) {
                     hintDrawn = false;
-                    invalidate();
+                    invalidateHint();
                 }
                 if (clickDrawn) {
                     clickDrawn = false;
@@ -272,6 +277,22 @@ final class TvCursorView extends View {
             hintDrawn = true;
             drawHint(canvas, now);
         }
+    }
+
+    /** The pill's own dirty region (it is drawn at the top centre). */
+    private void invalidateHint() {
+        if (hint.isEmpty()) {
+            invalidate();
+            return;
+        }
+        float w = hintText.measureText(hint) + dp * 40f;
+        float cx = getWidth() / 2f;
+        invalidate(
+            (int) (cx - w / 2) - 4,
+            (int) (dp * 20f),
+            (int) (cx + w / 2) + 4,
+            (int) (dp * 24f + dp * 38f) + 4
+        );
     }
 
     private void invalidateAround(float fromX, float fromY, float toX, float toY) {

@@ -35,7 +35,7 @@
   var ACTIONABLE =
     'a[href],button,[role="button"],[role="link"],[role="tab"],[role="menuitem"],' +
     '[onclick],[tabindex]:not([tabindex="-1"]),input:not([type="hidden"]),' +
-    "select,textarea,label,summary,audio[controls],video[controls]";
+    "select,textarea,label,summary,audio,video,iframe,object,embed,canvas";
 
   function style() {
     if (document.getElementById("fumio-tv-css")) return;
@@ -86,8 +86,49 @@
     return null;
   }
 
+  /**
+   * The point a tap should land on: the CENTRE of the outlined element, as
+   * fractions of the viewport. Published to native on every target change, so a
+   * click never needs a round trip and never uses a stale coordinate.
+   */
+  function tapPointOf(el) {
+    try {
+      if (!el || !el.isConnected) return "";
+      var r = el.getBoundingClientRect();
+      if (!r || r.width < 1 || r.height < 1) return "";
+      var size = viewportSize();
+      if (!size.w || !size.h) return "";
+      var cx = Math.max(0, Math.min(size.w - 1, r.left + r.width / 2));
+      var cy = Math.max(0, Math.min(size.h - 1, r.top + r.height / 2));
+      return (cx / size.w).toFixed(6) + "," + (cy / size.h).toFixed(6);
+    } catch (e) {
+      return "";
+    }
+  }
+
+  var lastPublished = null;
+  function publishTarget(el) {
+    var point = tapPointOf(el);
+    // Re-publishing matters even when the TARGET has not changed: scrolling the
+    // page moves it, and a cached coordinate would tap where the card used to
+    // be. Only a changed string costs a bridge call.
+    if (point === lastPublished) return;
+    lastPublished = point;
+    try {
+      if (native && native.tvTarget) native.tvTarget(point);
+    } catch (e) {
+      /* bridge is optional */
+    }
+  }
+
   function mark(el) {
-    if (el === current) return;
+    // The document itself is never a target: `cursor: pointer` on <body> would
+    // otherwise outline the entire page and swallow every click.
+    if (el && (el === document.body || el === document.documentElement)) el = null;
+    if (el === current) {
+      publishTarget(current); // same element, possibly a new position
+      return;
+    }
     if (current) {
       try {
         current.classList.remove(TARGET_CLASS);
@@ -103,6 +144,7 @@
         /* ignore */
       }
     }
+    publishTarget(current);
   }
 
   // ─── the API the native side calls ──────────────────────────────────────
@@ -167,21 +209,7 @@
    * Returns "" when nothing is targeted.
    */
   window.FumioTvTapPoint = function () {
-    try {
-      var el = current && current.isConnected ? current : null;
-      if (!el) return "";
-      var r = el.getBoundingClientRect();
-      if (!r || r.width < 1 || r.height < 1) return "";
-      var size = viewportSize();
-      // Clamp the centre into the visible area: a card half off screen must not
-      // send the tap outside the WebView.
-      var cx = Math.max(0, Math.min(size.w - 1, r.left + r.width / 2));
-      var cy = Math.max(0, Math.min(size.h - 1, r.top + r.height / 2));
-      var f = toFraction(cx, cy);
-      return f.fx.toFixed(6) + "," + f.fy.toFixed(6);
-    } catch (e) {
-      return "";
-    }
+    return tapPointOf(current);
   };
 
   /**
@@ -214,6 +242,11 @@
   };
 
   window.FumioTvTarget = function () {
+    return !!(current && current.isConnected);
+  };
+
+  /** Same answer as FumioTvTarget, named for diagnostics. */
+  window.FumioTvVisibleTarget = function () {
     return !!(current && current.isConnected);
   };
 
