@@ -638,6 +638,22 @@ final class TvPointer {
         tapTarget = parsed;
     }
 
+    /**
+     * Follow the viewer. The pointer talks to ONE WebView at a time — the browse
+     * site, or the player overlay's own page — and it used to keep talking to the
+     * browse page after the player opened. The result: inside the player, every
+     * arrow moved a cursor over the video and every OK was delivered to a hidden
+     * WebView behind it, so the player's own controls (servers, subtitles,
+     * play/pause) could not be pressed at all. Called on every key, which is
+     * cheap: the identity check is a reference comparison.
+     */
+    static void ensureTarget(WebView webView) {
+        if (webView == null) return;
+        WebView currentTarget = web();
+        if (currentTarget == webView) return;
+        retarget(webView);
+    }
+
     /** The browse page is back in front: point the pointer at it again. */
     static void retarget(WebView webView) {
         if (webView == null) return;

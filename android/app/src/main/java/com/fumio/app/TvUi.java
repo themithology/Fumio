@@ -108,6 +108,10 @@ final class TvUi {
     static boolean handleKey(Activity activity, WebView webView, android.view.KeyEvent event) {
         if (activity == null || webView == null || event == null) return false;
         if (!TvMode.isTv(activity)) return false;
+        // Whatever surface is in front owns the pointer — browse page or the
+        // player overlay. Without this the cursor kept aiming at the hidden
+        // browse WebView while a video was playing.
+        TvPointer.ensureTarget(webView);
         return TvPointer.handleKey(activity, webView, event, inputFocused);
     }
 
