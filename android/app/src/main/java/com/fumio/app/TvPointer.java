@@ -99,6 +99,19 @@ final class TvPointer {
 
     /** The tap point the page published for the outlined target ("fx,fy"). */
     private static float[] tapTarget;
+
+    /**
+     * The strip under the cursor, as fractions of the WebView, and whether it
+     * can still scroll each way: "l,t,r,b,canX,canY" (tv-cursor.js).
+     *
+     * This is what makes horizontal browsing work. A card rail is an inner
+     * scroll container that usually ends well inside the screen, so "the cursor
+     * hit the edge of the screen" is the wrong trigger for scrolling it — the
+     * rail has to scroll as soon as the cursor reaches the RAIL's edge. The
+     * bounds come from the page, so native can test that every frame without a
+     * bridge round trip.
+     */
+    private static float[] scrollZone;
     /** A press is in flight: DOWN sent, UP pending. */
     private static boolean pressDown;
     private static float pressX;
@@ -352,24 +365,62 @@ final class TvPointer {
         float nextX = clamp(aimX + dx * stepPx, left, right);
         float nextY = clamp(aimY + dy * stepPx, top, bottom);
 
-        boolean stuckX = (dx > 0 && nextX >= right) || (dx < 0 && nextX <= left);
-        boolean stuckY = (dy > 0 && nextY >= bottom) || (dy < 0 && nextY <= top);
+        // Where the cursor is stopped. Two different edges matter: the WebView's
+        // (the page must scroll) and the strip under the cursor (a card rail must
+        // scroll). The strip is usually the nearer of the two, which is exactly
+        // why "only scrolls at the screen edge" felt broken.
+        float edgeRight = right;
+        float edgeLeft = left;
+        float edgeBottom = bottom;
+        float edgeTop = top;
+        boolean railX = false;
+        boolean railY = false;
+        if (scrollZone != null) {
+            int[] where = new int[2];
+            webView.getLocationInWindow(where);
+            float zl = where[0] + scrollZone[0] * webView.getWidth();
+            float zt = where[1] + scrollZone[1] * webView.getHeight();
+            float zr = where[0] + scrollZone[2] * webView.getWidth();
+            float zb = where[1] + scrollZone[3] * webView.getHeight();
+            boolean canX = scrollZone[4] > 0.5f;
+            boolean canY = scrollZone[5] > 0.5f;
+            if (canX) {
+                railX = true;
+                if (zr > zl + 1) {
+                    edgeRight = Math.min(edgeRight, zr);
+                    edgeLeft = Math.max(edgeLeft, zl);
+                }
+            }
+            if (canY) {
+                railY = true;
+                if (zb > zt + 1) {
+                    edgeBottom = Math.min(edgeBottom, zb);
+                    edgeTop = Math.max(edgeTop, zt);
+                }
+            }
+        }
 
-        if (nextX != aimX || nextY != aimY) {
-            aimX = nextX;
-            aimY = nextY;
+        boolean stuckX = (dx > 0 && nextX >= edgeRight) || (dx < 0 && nextX <= edgeLeft);
+        boolean stuckY = (dy > 0 && nextY >= edgeBottom) || (dy < 0 && nextY <= edgeTop);
+
+        float clampedX = clamp(nextX, Math.min(edgeLeft, right), Math.max(edgeRight, left));
+        float clampedY = clamp(nextY, Math.min(edgeTop, bottom), Math.max(edgeBottom, top));
+
+        if (clampedX != aimX || clampedY != aimY) {
+            aimX = clampedX;
+            aimY = clampedY;
             if (cursor != null) cursor.setAim(aimX, aimY);
         }
 
-        // Holding into an edge scrolls the page continuously, so a list that
-        // runs off the bottom is reachable without any special "page down".
+        // Holding into an edge scrolls continuously — the strip under the cursor
+        // first (that is the rail), the page second.
         if (stuckX || stuckY) {
             long now = SystemClock.uptimeMillis();
             if (now - lastScrollAt >= SCROLL_MS) {
                 lastScrollAt = now;
-                int vx = stuckX ? Math.round(dx * speed * SCROLL_MS / 1000f) : 0;
-                int vy = stuckY ? Math.round(dy * speed * SCROLL_MS / 1000f) : 0;
-                if (vx != 0 || vy != 0) scroll(webView, vx, vy);
+                int sx = stuckX && (railX || dx != 0) ? (dx > 0 ? 1 : -1) : 0;
+                int sy = stuckY && (railY || dy != 0) ? (dy > 0 ? 1 : -1) : 0;
+                if (sx != 0 || sy != 0) scroll(webView, sx, sy);
             }
         }
     }
@@ -483,6 +534,30 @@ final class TvPointer {
             return;
         }
 
+        // A real touch is the first attempt. If the page has not reacted at all
+        // (same URL, no navigation), the control is one of the few that listens
+        // to pointer/mouse events rather than touch — so press it that way too.
+        // This is the "some buttons just do nothing" fix: it never fires when
+        // the touch already worked.
+        final String before = webView.getUrl();
+        final WebView webViewForFallback = webView;
+        webView.postDelayed(
+            () -> {
+                try {
+                    String now = webViewForFallback.getUrl();
+                    if (now != null && now.equals(before)) {
+                        webViewForFallback.evaluateJavascript(
+                            "window.FumioTvPress&&window.FumioTvPress();",
+                            null
+                        );
+                    }
+                } catch (Exception ignored) {
+                    /* the view may be gone */
+                }
+            },
+            850
+        );
+
         // Safety net: a key-up can be swallowed (page navigation, focus loss).
         // Without this the page would be left mid-gesture forever.
         final WebView target = webView;
@@ -535,6 +610,28 @@ final class TvPointer {
         );
     }
 
+    /** The page publishes the scrollable strip under the cursor. */
+    static void setScrollZone(String payload) {
+        if (payload == null || payload.isEmpty()) {
+            scrollZone = null;
+            return;
+        }
+        String[] parts = payload.split(",");
+        if (parts.length < 6) {
+            scrollZone = null;
+            return;
+        }
+        try {
+            float[] zone = new float[6];
+            for (int i = 0; i < 6; i += 1) {
+                zone[i] = Float.parseFloat(parts[i].trim());
+            }
+            scrollZone = zone;
+        } catch (Exception ignored) {
+            scrollZone = null;
+        }
+    }
+
     /** The page publishes the outlined target's centre here (tv-cursor.js). */
     static void setTapTarget(String point) {
         float[] parsed = parseFractions(point);
@@ -546,6 +643,7 @@ final class TvPointer {
         if (webView == null) return;
         target = new WeakReference<>(webView);
         tapTarget = null;
+        scrollZone = null;
         pressedCancel();
     }
 
@@ -597,10 +695,14 @@ final class TvPointer {
         return new float[] { left, top, right, bottom };
     }
 
-    private static void scroll(WebView webView, int vx, int vy) {
+    /**
+     * Scroll by one step in a direction, using the page's own resolver:
+     * the strip under the cursor if it can move that way, the page otherwise.
+     */
+    private static void scroll(WebView webView, int dirX, int dirY) {
         try {
             webView.evaluateJavascript(
-                "(function(){try{window.scrollBy(" + vx + "," + vy + ");}catch(e){}})();",
+                "window.FumioTvScroll&&window.FumioTvScroll(" + dirX + "," + dirY + ");",
                 null
             );
         } catch (Exception ignored) {

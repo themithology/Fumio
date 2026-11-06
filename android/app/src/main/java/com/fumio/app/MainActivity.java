@@ -225,6 +225,12 @@ public class MainActivity extends BridgeActivity {
     }
 
     public class NativeBridge {
+        /** tv-cursor.js publishes the scrollable strip under the cursor. */
+        @JavascriptInterface
+        public void tvScrollZone(String payload) {
+            TvPointer.setScrollZone(payload);
+        }
+
         /**
          * tv-cursor.js publishes where a tap should land (the outlined target's
          * centre, as fractions of the viewport) every time the target changes —

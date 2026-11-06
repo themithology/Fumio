@@ -174,7 +174,18 @@ television remote rather than a laptop trackpad.
 4. **Hover that works.** Moves are delivered as real mouse hover events, so the
    site's own `:hover` styling and hover-only menus behave exactly as on a
    desktop — that is content a D-pad could never show.
-5. **No dead ends.** Edge scrolling, and a click is a **real touch** at the
+5. **Rails scroll like rails.** The page publishes the strip under the cursor
+   (a card rail, or the page itself) with its bounds and which axes can still
+   move; native stops the cursor at *that* edge and scrolls *that* element. This
+   is why horizontal browsing works at all — a rail ends inside the screen, so
+   "scroll at the screen edge" never reached it.
+
+6. **A press is tried three ways.** A real touch; then, if nothing changed, the
+   full pointer/mouse/click sequence; then, if the target is a link, following it.
+   Each step only runs when the previous one produced no reaction, so nothing
+   double-fires.
+
+7. **No dead ends.** Edge scrolling, and a click is a **real touch** at the
    target's centre — `ACTION_DOWN`/`ACTION_UP` — so the page generates
    pointerdown/pointerup/click itself and every handler style reacts (a DOM
    `element.click()` only fires `click`, which is why drag rails and

@@ -140,9 +140,11 @@ function viewportOf(dom) {
 
   let typing = null;
   let published = [];
+  let zones = [];
   w.FumioNative = {
     tvInputFocused: (v) => (typing = v),
     tvTarget: (point) => published.push(point),
+    tvScrollZone: (payload) => zones.push(payload),
   };
 
   let clicked = 0;
@@ -224,6 +226,56 @@ function viewportOf(dom) {
   doc.getElementById("button").remove();
   await new Promise((r) => setTimeout(r, 10));
   checkThat("the helper survives a removed element", true);
+
+
+  // ── horizontal rails: the strip scrolls, not just the page ───────────────
+  {
+    const rail = doc.createElement("div");
+    rail.id = "seasonRail";
+    rail.style.overflowX = "auto";
+    const card = doc.createElement("a");
+    card.id = "season2";
+    card.href = "/tv/1/2";
+    card.textContent = "Season 2";
+    rail.appendChild(card);
+    doc.getElementById("rail").appendChild(rail);
+
+    // jsdom has no layout: give the rail a real geometry and a scrollLeft.
+    let scrollLeft = 0;
+    Object.defineProperty(rail, "scrollWidth", { get: () => 3000, configurable: true });
+    Object.defineProperty(rail, "clientWidth", { get: () => 1000, configurable: true });
+    Object.defineProperty(rail, "scrollLeft", {
+      get: () => scrollLeft,
+      set: (v) => (scrollLeft = v),
+      configurable: true,
+    });
+    rail.getBoundingClientRect = () => ({
+      left: 0, top: 400, width: 1000, height: 200, right: 1000, bottom: 600, x: 0, y: 400,
+    });
+    card.getBoundingClientRect = () => ({
+      left: 40, top: 420, width: 300, height: 160, right: 340, bottom: 580, x: 40, y: 420,
+    });
+    doc.elementFromPoint = () => card;
+
+    w.FumioTvHoverF(0.2, 0.6); // over the card in the rail
+    const zone = zones[zones.length - 1];
+    check("the rail publishes itself as the scroll zone", zone !== undefined, true);
+    const parts = zone.split(",").map(Number);
+    check("zone carries can-scroll-x", parts[4], 1);
+    // The viewport here is 1024 wide and the rail ends at 1000, so the published
+    // right edge must be 1000/1024 — the rail's edge, not the screen's 1.0.
+    check("zone bounds are the rail's, not the screen's", Math.round(parts[2] * 1024), 1000);
+
+    scrollLeft = 0;
+    checkThat("scrolling right moves the rail", w.FumioTvScroll(1, 0));
+    check("the rail actually scrolled", scrollLeft > 0, true);
+
+    // Vertical presses inside the rail must still reach the page.
+    scrollLeft = 0;
+    const before = w.scrollY;
+    w.FumioTvScroll(0, 1);
+    check("a vertical press is not eaten by the rail", scrollLeft, 0);
+  }
 
   const failed = results.filter((r) => !r.ok);
   console.log(`\n${results.length - failed.length}/${results.length} checks passed`);

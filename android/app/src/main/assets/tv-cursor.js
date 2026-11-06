@@ -94,30 +94,119 @@
   function tapPointOf(el) {
     try {
       if (!el || !el.isConnected) return "";
-      var r = el.getBoundingClientRect();
-      if (!r || r.width < 1 || r.height < 1) return "";
       var size = viewportSize();
       if (!size.w || !size.h) return "";
-      var cx = Math.max(0, Math.min(size.w - 1, r.left + r.width / 2));
-      var cy = Math.max(0, Math.min(size.h - 1, r.top + r.height / 2));
+      var r = el.getBoundingClientRect();
+      if (!r || r.width < 1 || r.height < 1) return "";
+
+      // A target that is half off screen must be brought in first. Clamping its
+      // centre to the edge would tap whatever happens to be at the edge instead
+      // — which is how a "Play" press can land on a poster behind it.
+      var cx = r.left + r.width / 2;
+      var cy = r.top + r.height / 2;
+      if (cx < 0 || cy < 0 || cx > size.w - 1 || cy > size.h - 1) {
+        try {
+          el.scrollIntoView({ block: "center", inline: "center" });
+        } catch (e) {
+          el.scrollIntoView();
+        }
+        r = el.getBoundingClientRect();
+        cx = r.left + r.width / 2;
+        cy = r.top + r.height / 2;
+      }
+      // Still outside: report nothing, so native taps where the arrow is (which
+      // is at least where the viewer thinks they are pointing).
+      if (cx < 0 || cy < 0 || cx > size.w - 1 || cy > size.h - 1) return "";
       return (cx / size.w).toFixed(6) + "," + (cy / size.h).toFixed(6);
     } catch (e) {
       return "";
     }
   }
 
+  /**
+   * The nearest ancestor that actually scrolls — vertically (the page) or
+   * horizontally (a card rail). The home page's rails are `overflow-x: auto`
+   * containers, so `window.scrollBy` does nothing on them: the rail has to be
+   * scrolled itself. That is why horizontal browsing felt broken.
+   */
+  function scrollContainerOf(el, axis) {
+    var node = el;
+    while (node && node !== document.body && node !== document.documentElement) {
+      try {
+        var cs = getComputedStyle(node);
+        var overflow = axis === "x" ? cs.overflowX : cs.overflowY;
+        if (/(auto|scroll|overlay)/.test(overflow)) {
+          var can =
+            axis === "x"
+              ? node.scrollWidth - node.clientWidth > 4
+              : node.scrollHeight - node.clientHeight > 4;
+          if (can) return node;
+        }
+      } catch (e) {
+        /* detached */
+      }
+      node = node.parentElement;
+    }
+    return null;
+  }
+
   var lastPublished = null;
+  var lastScrollPublished = null;
+  var activeScroll = null; // { el, axis }
+
   function publishTarget(el) {
     var point = tapPointOf(el);
     // Re-publishing matters even when the TARGET has not changed: scrolling the
     // page moves it, and a cached coordinate would tap where the card used to
     // be. Only a changed string costs a bridge call.
-    if (point === lastPublished) return;
-    lastPublished = point;
+    if (point !== lastPublished) {
+      lastPublished = point;
+      try {
+        if (native && native.tvTarget) native.tvTarget(point);
+      } catch (e) {
+        /* bridge is optional */
+      }
+    }
+    publishScroll(el);
+  }
+
+  /**
+   * Tell native where the rail/page under the cursor ends and in which
+   * directions it can still move, as fractions:
+   *
+   *   "left,top,right,bottom,canScrollX,canScrollY"
+   *
+   * With that, native can decide SYNCHRONOUSLY — every animation frame, while a
+   * direction is held — whether a press should move the cursor or scroll the
+   * strip underneath it. Asking over the JS bridge per frame would be far too
+   * slow, and a rail only scrolls when the cursor reaches ITS edge, which is
+   * usually well inside the screen.
+   */
+  function publishScroll(el) {
     try {
-      if (native && native.tvTarget) native.tvTarget(point);
+      var size = viewportSize();
+      var node = el || document.body;
+      var sx = scrollContainerOf(node, "x");
+      var sy = scrollContainerOf(node, "y");
+      activeScroll = { x: sx, y: sy };
+      var rect;
+      if (sx) rect = sx.getBoundingClientRect();
+      else if (sy) rect = sy.getBoundingClientRect();
+      else rect = { left: 0, top: 0, right: size.w, bottom: size.h };
+      var canX = !!sx;
+      var canY = !!sy;
+      var payload =
+        (Math.max(0, rect.left) / size.w).toFixed(4) + "," +
+        (Math.max(0, rect.top) / size.h).toFixed(4) + "," +
+        (Math.min(size.w, rect.right) / size.w).toFixed(4) + "," +
+        (Math.min(size.h, rect.bottom) / size.h).toFixed(4) + "," +
+        (canX ? 1 : 0) + "," +
+        (canY ? 1 : 0);
+      if (payload === lastScrollPublished) return;
+      lastScrollPublished = payload;
+      if (native && native.tvScrollZone) native.tvScrollZone(payload);
     } catch (e) {
-      /* bridge is optional */
+      /* publishing is best effort */
     }
   }
 
@@ -248,6 +337,126 @@
   /** Same answer as FumioTvTarget, named for diagnostics. */
   window.FumioTvVisibleTarget = function () {
     return !!(current && current.isConnected);
+  };
+
+  /**
+   * Scroll the strip under the cursor. Called by native when a direction is
+   * held and the cursor has reached the edge of that strip (or of the page).
+   * Container first, window second: pressing right at the end of a rail must
+   * move the RAIL, not the page.
+   */
+  window.FumioTvScroll = function (dx, dy) {
+    try {
+      var step = 0;
+      if (activeScroll && dx !== 0 && activeScroll.x) {
+        step = dx * Math.max(90, activeScroll.x.clientWidth * 0.15);
+        activeScroll.x.scrollLeft += step;
+        publishScroll(current);
+        return true;
+      }
+      if (activeScroll && dy !== 0 && activeScroll.y) {
+        step = dy * Math.max(70, activeScroll.y.clientHeight * 0.18);
+        activeScroll.y.scrollTop += step;
+        publishScroll(current);
+        return true;
+      }
+      // The page itself (or a container we lost track of).
+      var node = current && current.isConnected ? current : null;
+      var sx = node ? scrollContainerOf(node, "x") : null;
+      var sy = node ? scrollContainerOf(node, "y") : null;
+      if (dx !== 0 && sx) {
+        sx.scrollLeft += dx * Math.max(90, sx.clientWidth * 0.15);
+        publishScroll(node);
+        return true;
+      }
+      if (dy !== 0 && sy) {
+        sy.scrollTop += dy * Math.max(70, sy.clientHeight * 0.18);
+        publishScroll(node);
+        return true;
+      }
+      window.scrollBy(dx * Math.round(window.innerWidth * 0.16), dy * Math.round(window.innerHeight * 0.16));
+      publishScroll(node);
+      return true;
+    } catch (e) {
+      return false;
+    }
+  };
+
+  /**
+   * The last resort for a control that ignored a real touch.
+   *
+   * Some of the site's components are wired to pointer/mouse events, or guard
+   * their handler behind a drag threshold, and a synthesised touch can miss
+   * them. This dispatches the full sequence at the target — pointer, mouse and
+   * click, with the properties handlers read — and then, if the page still has
+   * not navigated, follows the link itself. A Play button that does nothing is
+   * worse than a Play button that navigates one way or another.
+   */
+  window.FumioTvPress = function () {
+    try {
+      var el = current && current.isConnected ? current : null;
+      if (!el) return false;
+      var r = el.getBoundingClientRect();
+      var size = viewportSize();
+      var x = r.left + r.width / 2;
+      var y = r.top + r.height / 2;
+      var common = {
+        bubbles: true,
+        cancelable: true,
+        composed: true,
+        clientX: x,
+        clientY: y,
+        screenX: x,
+        screenY: y,
+        view: window,
+        button: 0,
+        buttons: 1,
+        detail: 1,
+        pointerId: 1,
+        pointerType: "touch",
+        isPrimary: true,
+      };
+      var fire = function (Ctor, type, extra) {
+        try {
+          var options = {};
+          for (var key in common) options[key] = common[key];
+          if (extra) for (var k2 in extra) options[k2] = extra[k2];
+          el.dispatchEvent(new Ctor(type, options));
+        } catch (e) {
+          /* an old WebView may lack a constructor; the others still fire */
+        }
+      };
+      if (window.PointerEvent) {
+        fire(window.PointerEvent, "pointerdown");
+      }
+      fire(window.MouseEvent, "mousedown");
+      if (window.PointerEvent) {
+        fire(window.PointerEvent, "pointerup", { buttons: 0 });
+      }
+      fire(window.MouseEvent, "mouseup", { buttons: 0 });
+      fire(window.MouseEvent, "click", { buttons: 0 });
+
+      // If that did nothing and the thing is (or sits inside) a link, follow it.
+      var before = location.href;
+      var link = el.closest && el.closest("a[href]");
+      if (link) {
+        setTimeout(function () {
+          try {
+            if (location.href === before) {
+              var href = link.getAttribute("href") || "";
+              if (href && href.charAt(0) !== "#" && !/^javascript:/i.test(href)) {
+                location.assign(link.href);
+              }
+            }
+          } catch (e) {
+            /* if the page blocks it, nothing more we can do */
+          }
+        }, 420);
+      }
+      return true;
+    } catch (e) {
+      return false;
+    }
   };
 
   /** Which way the page can still scroll, so native knows when to nudge. */

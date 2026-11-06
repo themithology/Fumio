@@ -16,7 +16,14 @@ proves it; **unverified** = needs the television.
 | Clicking does nothing on some cards | a DOM `element.click()` only fires `click`; anything driven by pointer/touch events (drag rails, motion cards) ignored it | fixed (real `ACTION_DOWN`/`ACTION_UP`) |
 | Cursor jumps instead of gliding | discrete 20 dp steps | fixed (aim + eased render on a vsync loop) |
 
-## Bugs found in this audit, all fixed
+## Round 2 (2026-11-06) — reported after #106
+
+| Report | Cause | Fix |
+|---|---|---|
+| Horizontal scrolling does not work (season cards, home rails) | scrolling was triggered only at the **screen** edge and only ever called `window.scrollBy`. A card rail is an inner `overflow-x` container that ends well inside the screen, so it never scrolled at all. | The page now publishes the scrollable strip under the cursor (bounds + which axes can still move) as fractions; native stops the cursor at **that** edge and scrolls **that** element. The strip is refreshed as it scrolls, so one press can never over-shoot. |
+| Play does nothing on movies/series | two causes: (a) the tap only sent a touch, so a control wired to pointer/mouse events ignored it; (b) if the target's centre was off screen the point was **clamped** to the viewport edge — tapping whatever sat at the edge instead of the button. | (a) after 850 ms with no URL change, `FumioTvPress()` dispatches the full pointer/mouse/click sequence and, failing that, follows the link itself. It never fires when the touch already worked. (b) an off-screen target is scrolled into view first; if it still cannot fit, we report no point and tap where the arrow is rather than somewhere wrong. |
+
+## Bugs found in the first audit, all fixed
 
 1. **The pointer kept talking to a dead WebView.** After closing the player, the
    cursor's `target` still referenced the player's hidden WebView, so every
