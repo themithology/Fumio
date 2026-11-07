@@ -212,6 +212,9 @@ final class TvCursorView extends View {
     void pulse() {
         clickAt = SystemClock.uptimeMillis();
         invalidate();
+        // The ring is an animation: without a running loop it would be one
+        // frozen frame. The loop keeps posting while clickAt is recent.
+        startGlide();
     }
 
     void startGlide() {
@@ -284,7 +287,9 @@ final class TvCursorView extends View {
         canvas.restore();
 
         if (clickAt > 0) {
-            float t = (now - clickAt) / 420f;
+            // Same window as the shrink: when the loop parks at CLICK_MS the
+            // ring is already gone, so no half-faded circle is left on screen.
+            float t = (now - clickAt) / (float) CLICK_MS;
             if (t < 1f) {
                 ring.setAlpha((int) (170 * (1f - t)));
                 ring.setStrokeWidth(dp * (2.5f - 1.5f * t));
