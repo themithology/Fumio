@@ -84,6 +84,15 @@ jobs:
           path: /tmp/gradle.log
           if-no-files-found: ignore
 
+      # The "Something went wrong" screen only works if it is really in the
+      # APK: it is the one page that cannot be fetched when it is needed. A
+      # missing asset must break the build here, not the app offline.
+      - name: Verify the offline screen is packaged
+        run: |
+          unzip -l android/app/build/outputs/apk/debug/app-debug.apk \
+            | grep -q "assets/offline.html" \
+            || { echo "::error::assets/offline.html is missing from the APK"; exit 1; }
+
       - uses: actions/upload-artifact@v4
         with:
           name: theogpiratebot-debug-apk
