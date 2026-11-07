@@ -277,6 +277,59 @@ function viewportOf(dom) {
     check("a vertical press is not eaten by the rail", scrollLeft, 0);
   }
 
+  // ─── the two things that made presses unreliable ─────────────────────────
+  {
+    // (1) "No navigation" is not "no reaction". The page must be able to tell
+    // native whether the touch it sent actually became a click, or a Play
+    // button that opens a panel gets pressed twice.
+    const d = page({ w: 1024, h: 576, html: '<button id="b">Play</button>' });
+    const w = d.window;
+    w.eval(cursorSource);
+    check("the press guard exists", typeof w.FumioTvSawPress, "function");
+    check("nothing claimed yet", w.FumioTvSawPress(), false);
+
+    // A touch begins, then the page answers with a click.
+    const down = new w.Event("pointerdown", { bubbles: true });
+    down.pointerType = "touch";
+    d.window.document.getElementById("b").dispatchEvent(down);
+    d.window.document.getElementById("b").dispatchEvent(
+      new w.MouseEvent("click", { bubbles: true })
+    );
+    check("a touch that became a click is reported", w.FumioTvSawPress(), true);
+    check("and the answer is consumed once", w.FumioTvSawPress(), false);
+
+    // A touch that produced nothing keeps the fallback alive.
+    const down2 = new w.Event("pointerdown", { bubbles: true });
+    down2.pointerType = "touch";
+    d.window.document.getElementById("b").dispatchEvent(down2);
+    check("a touch that did nothing is reported as such", w.FumioTvSawPress(), false);
+  }
+
+  {
+    // (2) A route change swaps the page under a ring that did not move: the
+    // target has to be re-resolved, once, after the route settles.
+    const d = page({ w: 1024, h: 576, html: '<a href="/x" id="a">Card</a>' });
+    const w = d.window;
+    const before = w.history.pushState;
+    w.eval(cursorSource);
+    check("the asset wraps history.pushState", w.history.pushState !== before, true);
+    w.document.body.getBoundingClientRect = () => ({
+      left: 0, top: 0, width: 1024, height: 576, right: 1024, bottom: 576, x: 0, y: 0,
+    });
+    w.document.elementFromPoint = () => w.document.getElementById("a");
+    w.FumioTvHoverF(0.5, 0.5);
+
+    let calls = 0;
+    const original = w.FumioTvHoverF;
+    w.FumioTvHoverF = function () {
+      calls += 1;
+      return original.apply(this, arguments);
+    };
+    // history.pushState is wrapped by the asset itself, so drive it directly.
+    w.history.pushState({}, "", "/x");
+    check("a route change does not resolve synchronously", calls, 0);
+  }
+
   const failed = results.filter((r) => !r.ok);
   console.log(`\n${results.length - failed.length}/${results.length} checks passed`);
   process.exit(failed.length ? 1 : 0);

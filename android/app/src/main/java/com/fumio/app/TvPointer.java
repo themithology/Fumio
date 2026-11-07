@@ -227,6 +227,29 @@ final class TvPointer {
     }
 
     /**
+     * The overlay (the player) is added to the same content frame, AFTER the
+     * cursor — so for as long as a video is on screen the ring is buried under
+     * it. Every time the top surface changes, this puts the ring back on top.
+     * Cheap enough to call on that event: it asks the parent for its last child
+     * and returns when that is already us.
+     */
+    static void raise() {
+        bringCursorToFront();
+        try {
+            if (hintView != null && hintView.getParent() instanceof ViewGroup) {
+                ViewGroup parent = (ViewGroup) hintView.getParent();
+                // Keep the hint BELOW the ring so it can never cover the point.
+                if (parent.getChildAt(parent.getChildCount() - 1) == hintView) {
+                    parent.removeView(hintView);
+                    parent.addView(hintView, 0);
+                }
+            }
+        } catch (Exception ignored) {
+            /* a hint out of order is not worth a crash */
+        }
+    }
+
+    /**
      * bringToFront() triggers a layout pass on the whole host, so it runs only
      * when the cursor is not already on top — not on every key press.
      */
@@ -292,6 +315,28 @@ final class TvPointer {
             hintView = view;
         } catch (Exception ignored) {
             hintView = null;
+        }
+    }
+
+    /**
+     * The soft keyboard is up. The ring lives on the activity's content frame,
+     * which is BEHIND that window, so leaving it "visible" only leaves a stale
+     * ring on screen when the keyboard closes over a page that has moved. It is
+     * hidden while typing and brought back on blur, at the same aim.
+     */
+    static void setTyping(boolean typing) {
+        if (cursor == null) return;
+        try {
+            if (typing) {
+                cursor.setArrowVisible(false);
+                exitHover();
+            } else {
+                cursor.setArrowVisible(true);
+                cursor.snapTo(aimX, aimY);
+                raise();
+            }
+        } catch (Exception ignored) {
+            /* the view may be detaching */
         }
     }
 
@@ -389,6 +434,10 @@ final class TvPointer {
         if (!down) return false;
 
         ensureAimed(activity, webView);
+        // Something may have been added above the ring since the last press
+        // (the player overlay is a sibling in the same content frame). This is
+        // a comparison of two references unless the order really changed.
+        raise();
 
         if (click) {
             if (event.getRepeatCount() > 0) return true; // no machine-gun taps
@@ -748,13 +797,26 @@ final class TvPointer {
         webView.postDelayed(
             () -> {
                 try {
-                    String now = webViewForFallback.getUrl();
-                    if (now != null && now.equals(before)) {
-                        webViewForFallback.evaluateJavascript(
-                            "window.FumioTvPress&&window.FumioTvPress();",
-                            null
-                        );
-                    }
+                    if (!webViewForFallback.getUrl().equals(before)) return; // navigated
+                    // "No navigation" is not "no reaction": ask the page whether
+                    // the touch it just received produced a click. A Play button
+                    // that opens a panel, a mute toggle, a menu — none of them
+                    // change the URL, and pressing them twice is the bug this
+                    // question exists to prevent.
+                    webViewForFallback.evaluateJavascript(
+                        "(function(){try{return window.FumioTvSawPress&&window.FumioTvSawPress()?'1':'0';}catch(e){return '0';}})()",
+                        answer -> {
+                            if ("\"1\"".equals(answer)) return; // the touch worked
+                            try {
+                                webViewForFallback.evaluateJavascript(
+                                    "window.FumioTvPress&&window.FumioTvPress();",
+                                    null
+                                );
+                            } catch (Exception ignored) {
+                                /* the view may be gone */
+                            }
+                        }
+                    );
                 } catch (Exception ignored) {
                     /* the view may be gone */
                 }
@@ -974,7 +1036,27 @@ final class TvPointer {
             );
         } catch (Exception ignored) {
             /* a page that will not scroll simply does not scroll */
+            return;
         }
+        // The ring did not move, but the page under it did: whatever is now
+        // beneath the point is a different element, so both the page's hover
+        // state and the tap target are stale. Re-ask, and do it once the scroll
+        // has settled rather than on every step of it.
+        scheduleAfterScroll();
+    }
+
+    private static Runnable afterScroll;
+
+    private static void scheduleAfterScroll() {
+        if (afterScroll != null) UI.removeCallbacks(afterScroll);
+        afterScroll =
+            () -> {
+                afterScroll = null;
+                if (cursor == null || !cursor.isArrowVisible()) return;
+                hoverEntered = false; // the page under the ring changed
+                maybeHover(true);
+            };
+        UI.postDelayed(afterScroll, 130);
     }
 
     /**

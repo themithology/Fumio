@@ -1065,9 +1065,21 @@ public class MainActivity extends BridgeActivity {
      * puts the browse page back where the viewer was. Deterministic: it does
      * not depend on our injected script winning a race with the site's bundle.
      */
+    /**
+     * The route watcher is a safety net for SPA navigation our injected
+     * pushState/replaceState patch did not see (older WebViews, a framework that
+     * keeps its own history object). It is an evaluateJavascript round trip on
+     * the UI thread, so it runs at 400 ms only just after a page load and then
+     * backs off to 2.5 s: fast where a click is about to happen, quiet after.
+     */
+    private static final long ROUTE_POLL_FAST_MS = 400L;
+    private static final long ROUTE_POLL_SLOW_MS = 2500L;
+    private int routePolls;
+
     private void startPlayerRouteWatcher(WebView view) {
         if (view == null) return;
         stopPlayerRouteWatcher();
+        routePolls = 0;
         playerRouteWatcher =
             new Runnable() {
                 @Override
@@ -1099,7 +1111,11 @@ public class MainActivity extends BridgeActivity {
                             );
                         }
                     );
-                    view.postDelayed(this, 400);
+                    routePolls += 1;
+                    view.postDelayed(
+                        this,
+                        routePolls > 50 ? ROUTE_POLL_SLOW_MS : ROUTE_POLL_FAST_MS
+                    );
                 }
             };
         view.postDelayed(playerRouteWatcher, 400);
@@ -1235,6 +1251,10 @@ public class MainActivity extends BridgeActivity {
                 return;
             }
             playerOverlay.open(type, id, season, episode, seed, server, sourceQuery);
+            // The overlay is a new child of the same content frame, so it is
+            // above the cursor view: without this the ring vanishes the moment
+            // a video starts, while every press still goes to the player.
+            if (TvMode.isTv(this)) TvPointer.raise();
         });
     }
 
@@ -1248,7 +1268,10 @@ public class MainActivity extends BridgeActivity {
         // The cursor was talking to the player's WebView; the viewer is back on
         // the browse page, so the target must follow them or every click and
         // hover would go to a hidden view.
-        if (TvMode.isTv(this)) TvPointer.retarget(liveWebView());
+        if (TvMode.isTv(this)) {
+            TvPointer.retarget(liveWebView());
+            TvPointer.raise();
+        }
         Bridge afterBridge = getBridge();
         if (afterBridge != null && afterBridge.getWebView() != null) {
             startPlayerRouteWatcher(afterBridge.getWebView());

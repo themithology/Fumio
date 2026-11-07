@@ -42,10 +42,15 @@
     var css =
       "html.fumio-tv,html.fumio-tv *{scroll-behavior:auto!important;" +
       "-webkit-tap-highlight-color:transparent;}" +
+      // 3 px so it survives being seen from three metres, plus a dark halo
+      // OUTSIDE the lit line so the outline reads on a white poster and on a
+      // black background alike. outline+box-shadow draw outside the box, so
+      // nothing in the grid moves when the target changes.
       "html.fumio-tv ." +
       TARGET_CLASS +
-      "{outline:2px solid rgba(255,255,255,.75)!important;" +
-      "outline-offset:3px!important;border-radius:6px;" +
+      "{outline:3px solid rgba(255,255,255,.92)!important;" +
+      "outline-offset:2px!important;border-radius:6px;" +
+      "box-shadow:0 0 0 5px rgba(0,0,0,.35)!important;" +
       "transition:outline-offset 90ms ease-out;}" +
       "html.fumio-tv input:focus,html.fumio-tv textarea:focus{" +
       "outline:2px solid rgba(255,212,0,.9)!important;outline-offset:2px!important;}";
@@ -295,8 +300,12 @@
     return { fx: size.w ? x / size.w : 0, fy: size.h ? y / size.h : 0 };
   }
 
+  /** The last point the native side asked about, for re-resolving later. */
+  var lastPoint = null;
+
   window.FumioTvHoverF = function (fx, fy) {
     try {
+      lastPoint = { fx: fx, fy: fy };
       // A fresh resolve means a fresh answer: the page may have swapped a
       // stylesheet or re-rendered a rail since the last one. Within one resolve
       // the cache still saves every repeated ancestor walk.
@@ -484,6 +493,44 @@
     }
   };
 
+  // ─── did the touch the native side sent actually reach the page? ──────────
+  //
+  // The press is a real touch. When the URL does not change afterwards, native
+  // used to assume the touch was ignored and ALSO fire a synthetic DOM click
+  // (FumioTvPress) — but "no navigation" is not "no reaction": a Play button
+  // that opens a panel, a mute toggle, a menu that expands all leave the URL
+  // alone. The double activation that followed is a real bug ("pressing once
+  // does the thing twice"). So the page reports the truth instead: a touch
+  // began, and did a click follow it?
+  var touchOpenedAt = 0;
+  var sawClick = false;
+
+  document.addEventListener(
+    "pointerdown",
+    function (event) {
+      if (event.pointerType === "touch" || event.pointerType === "pen") {
+        touchOpenedAt = Date.now();
+        sawClick = false;
+      }
+    },
+    true
+  );
+  document.addEventListener(
+    "click",
+    function () {
+      if (touchOpenedAt && Date.now() - touchOpenedAt < 2000) sawClick = true;
+    },
+    true
+  );
+
+  /** true once, if the last touch produced a click. Resets the flag. */
+  window.FumioTvSawPress = function () {
+    var value = sawClick;
+    sawClick = false;
+    touchOpenedAt = 0;
+    return value;
+  };
+
   /** Which way the page can still scroll, so native knows when to nudge. */
   window.FumioTvScrollable = function () {
     try {
@@ -497,6 +544,50 @@
       return '{"x":false,"y":false}';
     }
   };
+
+  // ─── SPA route changes: the ring cannot know the page under it changed ──
+  //
+  // A navigation without a page load (React Router, Next, any pushState) swaps
+  // the whole view while the pointer stays exactly where it was. Without this,
+  // the outline and the tap target still describe the page you just left, and
+  // the first press after a navigation can hit an element that is no longer
+  // there. Once per route, 300 ms after it settles, re-ask.
+  var routeTimer = 0;
+  function afterRoute() {
+    if (routeTimer) clearTimeout(routeTimer);
+    routeTimer = setTimeout(function () {
+      routeTimer = 0;
+      if (!lastPoint) return;
+      try {
+        window.FumioTvHoverF(lastPoint.fx, lastPoint.fy);
+      } catch (e) {
+        /* the page is between renders; the next hover will fix it */
+      }
+    }, 300);
+  }
+
+  try {
+    window.addEventListener("popstate", afterRoute);
+    window.addEventListener("hashchange", afterRoute);
+    var push = history.pushState;
+    var replace = history.replaceState;
+    if (typeof push === "function") {
+      history.pushState = function () {
+        var out = push.apply(this, arguments);
+        afterRoute();
+        return out;
+      };
+    }
+    if (typeof replace === "function") {
+      history.replaceState = function () {
+        var out = replace.apply(this, arguments);
+        afterRoute();
+        return out;
+      };
+    }
+  } catch (e) {
+    /* history we cannot wrap simply keeps the old behaviour */
+  }
 
   // ─── hand the remote to the keyboard while typing ───────────────────────
 

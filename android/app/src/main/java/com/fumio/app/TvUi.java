@@ -101,7 +101,11 @@ final class TvUi {
     // ─── keys ───────────────────────────────────────────────────────────────
 
     static void setInputFocused(boolean typing) {
+        if (inputFocused == typing) return;
         inputFocused = typing;
+        // The ring has no business sitting over a soft keyboard, and it must be
+        // exactly where it was when the keyboard goes away again.
+        TvPointer.setTyping(typing);
     }
 
     /** @return true when the TV layer handled the key and the WebView must not see it. */
