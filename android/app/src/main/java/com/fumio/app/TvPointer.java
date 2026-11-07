@@ -630,10 +630,11 @@ final class TvPointer {
             long now = SystemClock.uptimeMillis();
             MotionEvent event = MotionEvent.obtain(now, now, action, x, y, 0);
             event.setSource(InputDevice.SOURCE_MOUSE);
-            // dispatchHoverEvent is the real entry point: it updates the view's
-            // hovered state, then calls onHoverEvent, which is where Chromium
-            // reads it. Calling onHoverEvent alone skipped that bookkeeping.
-            if (!webView.dispatchHoverEvent(event)) webView.onHoverEvent(event);
+            // onHoverEvent is the public entry point (dispatchHoverEvent is
+            // protected on ViewGroup) and it is the one Chromium implements:
+            // AwContents turns this into mousemove / mouseenter / mouseleave
+            // for the page, exactly as a physical mouse does.
+            webView.onHoverEvent(event);
             event.recycle();
         } catch (Exception ignored) {
             /* hover is a nicety, never a crash */
