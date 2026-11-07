@@ -2,69 +2,87 @@ package com.fumio.app;
 
 import android.content.Context;
 import android.graphics.Canvas;
-import android.graphics.Color;
 import android.graphics.Paint;
-import android.graphics.Path;
-import android.graphics.RectF;
 import android.os.SystemClock;
 import android.view.Choreographer;
 import android.view.MotionEvent;
 import android.view.View;
 
 /**
- * The pointer: a SMALL view that is moved, never redrawn.
+ * The pointer: a ring. Small view, moved, never redrawn.
  *
- * This is the rewrite that fixed the jitter, and the reason is architectural
- * rather than numeric. The first version was a MATCH_PARENT view drawn on top of
- * the WebView and repainted every frame. Two consequences, both bad:
+ * ─── WHY A RING AND NOT AN ARROW ────────────────────────────────────────────
  *
- *   1. every dirty rectangle it invalidated was a hole punched in the window, so
- *      the WebView underneath had to be recomposited with it — on a television's
- *      GPU that is paid for in dropped frames of the page itself, which is
- *      exactly the "the app is laggy but the site in Chrome is fine" report;
- *   2. redrawing a full-screen overlay 60 times a second while a video is
- *      playing is how you make a cursor feel like it is dragging a bag of sand.
+ * An arrow has a HOTSPOT — the tip — that is not the centre of anything, and
+ * that is a bug factory. The previous version placed the view at (x - 44dp) and
+ * then drew the tip 44dp inside it, so the arrow was painted 44dp right and
+ * 44dp down of the point it was actually pointing at: every press landed up and
+ * to the left of the arrow, by exactly the padding. A ring has no such
+ * ambiguity: the hotspot is the CENTRE of the circle, the circle is centred on
+ * the view, so the position the input layer knows and the pixels on screen
+ * cannot drift apart again.
  *
- * Now the view is 132 dp square, contains the arrow at a fixed local position,
- * and is animated with translation only. A translation is a compositor
- * operation: no layout, no redraw, no invalidation, no damage to the WebView's
- * layer. The arrow is rasterised once and simply moves. That is what "smooth"
- * actually is on this hardware.
+ * ─── WHY IT IS CHEAP ────────────────────────────────────────────────────────
  *
- * The frame loop is still here (Choreographer, vsync-aligned, stops when
- * parked), because the aim has to be advanced and the drawn position eased —
- * but its output is now two floats handed to setTranslationX/Y.
+ * The first version was a MATCH_PARENT view repainted every frame on top of the
+ * WebView. Every dirty rectangle punched a hole in the window and forced the
+ * page underneath to be recomposited: the page stuttered while the rest of the
+ * app looked fine, and a playing video dropped frames. Now the view is
+ * {@link #BOX_DP} square, has a hardware layer (the ring is rasterised once),
+ * and is moved with translation only — a compositor operation with no layout,
+ * no invalidation and no damage to the WebView's layer.
  */
 final class TvCursorView extends View {
 
     /** What the input layer gives the animation loop. */
     interface Driver {
+        /** Advance the aim by one frame. Runs before the ease. */
         void onFrame(long dtMs);
+
+        /**
+         * The arrow has just been placed for this frame. Hover events are sent
+         * here, after the move, so the page is told about the position that is
+         * actually on screen — not last frame's.
+         */
+        void onPlaced();
+
         boolean wantsFrames();
+
+        /** The loop is parking: the arrow is exactly on the aim. */
         void onRendered();
     }
 
-    private static final float TAU_MS = 32f;
-    private static final float SETTLED_PX = 0.4f;
+    /** Time constant of the arrow→aim easing. Slightly longer than a frame. */
+    private static final float TAU_MS = 42f;
+    private static final float SETTLED_PX = 0.35f;
     private static final long MAX_FRAME_MS = 34L;
-    private static final long CLICK_MS = 110;
+    /** The press: a quick shrink and a ring that leaves. */
+    private static final long CLICK_MS = 160L;
 
-    /** Arrow box (20 x 29 dp) plus room for the shadow and the click ring. */
-    private static final float BOX_DP = 132f;
-    /** Where the arrow's tip sits inside the box, in dp. */
-    private static final float PAD_DP = 44f;
+    /** Big enough for the ring plus the press ripple, and nothing more. */
+    private static final float BOX_DP = 120f;
+    /** Radius of the white ring. */
+    private static final float RING_DP = 11.5f;
+    private static final float STROKE_DP = 2.4f;
+    /** The dot in the middle: the actual point being pointed at. */
+    private static final float DOT_DP = 2.6f;
 
     private static final int INK = 0xFF0C0C10;
     private static final int BODY = 0xFFFFFFFF;
+    /** A dark edge behind the white, so the ring reads on a white page too. */
+    private static final int CONTRAST = 0x66000000;
 
     private final float dp;
-    private final float padPx;
-    private final Paint body = new Paint(Paint.ANTI_ALIAS_FLAG);
-    private final Paint edge = new Paint(Paint.ANTI_ALIAS_FLAG);
-    private final Paint shadowNear = new Paint(Paint.ANTI_ALIAS_FLAG);
-    private final Paint shadowFar = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private final float centre;
+    private final float ringPx;
+    private final float strokePx;
+    private final float dotPx;
+
+    private final Paint contrast = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint ring = new Paint(Paint.ANTI_ALIAS_FLAG);
-    private final Path arrow = new Path();
+    private final Paint dot = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private final Paint dotEdge = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private final Paint ripple = new Paint(Paint.ANTI_ALIAS_FLAG);
 
     /** Window coordinates: where the input wants to be, and where we are drawn. */
     private float aimX;
@@ -75,7 +93,7 @@ final class TvCursorView extends View {
     private Driver driver;
     private boolean running;
     private long lastFrameAt;
-    private boolean arrowVisible;
+    private boolean visible;
     private long clickAt = -1;
     private boolean clickDrawn;
 
@@ -103,6 +121,7 @@ final class TvCursorView extends View {
                     renderY = aimY;
                 }
                 place(renderX, renderY);
+                if (driver != null) driver.onPlaced();
 
                 boolean clicking = clickAt > 0 && now - clickAt < CLICK_MS;
                 if (clicking) invalidate();
@@ -125,8 +144,11 @@ final class TvCursorView extends View {
     TvCursorView(Context context) {
         super(context);
         dp = context.getResources().getDisplayMetrics().density;
-        padPx = PAD_DP * dp;
         float size = BOX_DP * dp;
+        centre = size / 2f;
+        ringPx = RING_DP * dp;
+        strokePx = STROKE_DP * dp;
+        dotPx = DOT_DP * dp;
 
         // Fixed, small, and never laid out again.
         setLayoutParams(
@@ -136,36 +158,26 @@ final class TvCursorView extends View {
         setClickable(false);
         setWillNotDraw(false);
 
-        // A hardware layer means the transform is done by the compositor and the
-        // arrow is rasterised once instead of per frame.
+        // A hardware layer means the transform is the compositor's job and the
+        // ring is rasterised once instead of per frame.
         setLayerType(LAYER_TYPE_HARDWARE, null);
 
-        body.setStyle(Paint.Style.FILL);
-        body.setColor(BODY);
-
-        edge.setStyle(Paint.Style.FILL_AND_STROKE);
-        edge.setColor(INK);
-        edge.setStrokeWidth(dp * 1.6f);
-        edge.setStrokeJoin(Paint.Join.ROUND);
-        edge.setStrokeCap(Paint.Cap.ROUND);
-
-        shadowNear.setStyle(Paint.Style.FILL);
-        shadowNear.setColor(0x55000000);
-        shadowFar.setStyle(Paint.Style.FILL);
-        shadowFar.setColor(0x26000000);
+        contrast.setStyle(Paint.Style.STROKE);
+        contrast.setColor(CONTRAST);
+        contrast.setStrokeWidth(strokePx + dp * 2f);
 
         ring.setStyle(Paint.Style.STROKE);
-        ring.setColor(0xB3FFFFFF);
+        ring.setColor(BODY);
+        ring.setStrokeWidth(strokePx);
 
-        // Tip at local (pad, pad), 20 x 29 dp.
-        arrow.moveTo(padPx, padPx);
-        arrow.lineTo(padPx + dp * 0.2f, padPx + dp * 27.4f);
-        arrow.lineTo(padPx + dp * 7.3f, padPx + dp * 20.8f);
-        arrow.lineTo(padPx + dp * 11.3f, padPx + dp * 29.0f);
-        arrow.lineTo(padPx + dp * 15.7f, padPx + dp * 27.1f);
-        arrow.lineTo(padPx + dp * 11.7f, padPx + dp * 19.0f);
-        arrow.lineTo(padPx + dp * 19.4f, padPx + dp * 18.4f);
-        arrow.close();
+        dot.setStyle(Paint.Style.FILL);
+        dot.setColor(BODY);
+
+        dotEdge.setStyle(Paint.Style.FILL);
+        dotEdge.setColor(INK);
+
+        ripple.setStyle(Paint.Style.STROKE);
+        ripple.setColor(BODY);
     }
 
     // ─── state, set from TvPointer ──────────────────────────────────────────
@@ -190,6 +202,7 @@ final class TvCursorView extends View {
         place(x, y);
     }
 
+    /** The point being pointed at, in window coordinates. */
     float viewX() {
         return renderX;
     }
@@ -198,22 +211,23 @@ final class TvCursorView extends View {
         return renderY;
     }
 
-    void setArrowVisible(boolean visible) {
-        arrowVisible = visible;
-        if (getVisibility() != (visible ? VISIBLE : GONE)) {
-            setVisibility(visible ? VISIBLE : GONE);
+    void setArrowVisible(boolean show) {
+        visible = show;
+        if (getVisibility() != (show ? VISIBLE : GONE)) {
+            setVisibility(show ? VISIBLE : GONE);
         }
     }
 
     boolean isArrowVisible() {
-        return arrowVisible;
+        return visible;
     }
 
+    /** The press: shrink now, the loop paints the ripple and stops when done. */
     void pulse() {
         clickAt = SystemClock.uptimeMillis();
         invalidate();
-        // The ring is an animation: without a running loop it would be one
-        // frozen frame. The loop keeps posting while clickAt is recent.
+        // The ripple is an animation: without the loop it would be one frozen
+        // frame on screen until the next key press.
         startGlide();
     }
 
@@ -228,10 +242,14 @@ final class TvCursorView extends View {
         }
     }
 
-    /** Translation only: no layout pass, no invalidate, no damage to the WebView. */
+    /**
+     * Translation only, and the hotspot is the centre: the ring is centred on
+     * the view, so the drawn centre IS (x, y) with no padding arithmetic to get
+     * wrong.
+     */
     private void place(float x, float y) {
-        float left = x - padPx;
-        float top = y - padPx;
+        float left = x - centre;
+        float top = y - centre;
         setTranslationX(left - getLeft());
         setTranslationY(top - getTop());
     }
@@ -253,48 +271,42 @@ final class TvCursorView extends View {
         super.onDetachedFromWindow();
     }
 
-    // ─── drawing (only for the click pulse) ────────────────────────────────
+    // ─── drawing (only for the press) ───────────────────────────────────────
 
     @Override
     protected void onDraw(Canvas canvas) {
         long now = SystemClock.uptimeMillis();
         float scale = 1f;
+        float t = -1f;
         if (clickAt > 0) {
-            float t = (now - clickAt) / (float) CLICK_MS;
+            t = (now - clickAt) / (float) CLICK_MS;
             if (t < 1f) {
-                scale = 1f - 0.07f * (float) Math.sin(t * Math.PI);
+                // A short dip, not a bounce: the ring reads as "pressed" and
+                // returns to exactly where it was.
+                scale = 1f - 0.16f * (float) Math.sin(Math.min(1f, t * 2f) * Math.PI);
                 clickDrawn = true;
             }
         }
 
         canvas.save();
-        canvas.translate(padPx, padPx);
+        canvas.translate(centre, centre);
         canvas.scale(scale, scale);
 
-        canvas.save();
-        canvas.translate(dp * 2.1f, dp * 3.9f);
-        canvas.scale(1.015f, 1.02f);
-        canvas.drawPath(arrow, shadowFar);
+        canvas.drawCircle(0f, 0f, ringPx, contrast);
+        canvas.drawCircle(0f, 0f, ringPx, ring);
+        canvas.drawCircle(0f, 0f, dotPx + dp * 0.9f, dotEdge);
+        canvas.drawCircle(0f, 0f, dotPx, dot);
+
         canvas.restore();
 
-        canvas.save();
-        canvas.translate(dp * 1.2f, dp * 2.2f);
-        canvas.drawPath(arrow, shadowNear);
-        canvas.restore();
-
-        canvas.drawPath(arrow, edge);
-        canvas.drawPath(arrow, body);
-        canvas.restore();
-
-        if (clickAt > 0) {
-            // Same window as the shrink: when the loop parks at CLICK_MS the
-            // ring is already gone, so no half-faded circle is left on screen.
-            float t = (now - clickAt) / (float) CLICK_MS;
-            if (t < 1f) {
-                ring.setAlpha((int) (170 * (1f - t)));
-                ring.setStrokeWidth(dp * (2.5f - 1.5f * t));
-                canvas.drawCircle(padPx, padPx + dp * 10f, dp * (12f + 34f * t), ring);
-            }
+        // The ripple is drawn unscaled and outside the shrink, so it travels
+        // from the ring's edge outward. Same 160 ms window as CLICK_MS: the
+        // frame the loop parks on is already clean, so no half-faded circle is
+        // ever left on screen.
+        if (t >= 0f && t < 1f) {
+            ripple.setAlpha((int) (120 * (1f - t) * (1f - t)));
+            ripple.setStrokeWidth(dp * (1.8f - 1.1f * t));
+            canvas.drawCircle(centre, centre, ringPx + dp * (2f + 16f * t), ripple);
         }
     }
 

@@ -31,17 +31,21 @@ import java.lang.ref.WeakReference;
  *
  * HOW THE MOTION WORKS (the part that decides whether this feels good).
  *
- *   A tap is predictable. One press moves the aim 18 dp — small enough to land
- *   on a 40 dp button, big enough to cross a card in three presses.
+ *   A tap is predictable. One press moves the aim 16 dp — a card's worth.
  *
- *   A hold accelerates. The FIRST press also starts a continuous advance whose
- *   speed ramps from 22 % to 100 % over about 0.4 s (smoothstep, so there is no
- *   jolt off the mark). Full speed crosses the screen in ~0.9 s, scaled to the
- *   screen so a 720p box and a 4K box feel the same.
+ *   A hold accelerates like a mouse: 28 % of full speed on the first frame,
+ *   full speed after ~0.4 s of holding, and full speed crosses the screen in
+ *   ~1.25 s. Slow enough that a stray press does not send the ring off the far
+ *   side (the "it drifts away" bug), fast enough that a deliberate move is one
+ *   sweep of the thumb.
  *
- *   The drawn arrow is always chasing the aim (TvCursorView, ~50 ms time
- *   constant), so there is no step, no jump, no notch — the motion is a stream of
- *   positions, 60 times a second.
+ *   The ring chases the aim (TvCursorView, ~42 ms time constant), so the motion
+ *   is a stream of positions 60 times a second, not a series of steps.
+ *
+ * HOVER. Every frame the ring is moving, a real hover motion event goes into the
+ * page, so the site's own hover styling and hover handlers behave exactly as
+ * they do under a mouse. See {@link #maybeHover}: that is the cheap half. The
+ * outline is the expensive half and is throttled separately.
  *
  *   At an edge the aim stops and the page scrolls continuously, the way a mouse
  *   at the edge of a screen behaves, so nothing below the fold is unreachable.
@@ -58,27 +62,37 @@ final class TvPointer {
 
     /** One tap of the D-pad, in dp. Precise, but not fiddly. */
     // ─── THE FEEL ────────────────────────────────────────────────────────────
-    // All of it is here. The first pass was tuned like a careful pointer for a
-    // desktop — 0.9 s to cross the screen with a 0.42 s ramp — which on a sofa
-    // reads as lag, not precision. A 10-foot screen is crossed in a glance, so
-    // the cursor has to move at the speed of a glance.
+    // A mouse, not a rocket. The previous numbers were a reaction to "it feels
+    // slow" and overshot: 0.40 s to cross the screen means one accidental
+    // second on the button launches the arrow off the far side, which is the
+    // "it drifts away" report. A desktop mouse crosses a 10-foot screen in
+    // roughly a second of deliberate movement; that is the target.
     //
-    // A single tap is still fine-grained; the speed is in the hold.
-    private static final float NUDGE_DP = 24f;
-    /** Time for a held direction to reach full speed. Short: no "spool-up". */
-    private static final float RAMP_MS = 190f;
+    // A tap is still the fine control — 16 dp, about one card — and the speed
+    // lives in the hold.
+    private static final float NUDGE_DP = 16f;
+    /** Time for a held direction to reach full speed. */
+    private static final float RAMP_MS = 420f;
     /** Full speed covers the screen width in this many seconds. */
-    private static final float CROSS_SECONDS = 0.40f;
+    private static final float CROSS_SECONDS = 1.25f;
     /** Speed the instant a hold starts, as a fraction of full speed. */
-    private static final float SLOW_FRACTION = 0.45f;
+    private static final float SLOW_FRACTION = 0.28f;
     /**
-     * Hover work is throttled in two tiers: the cheap native hover event follows
-     * the cursor at ~60 fps, while the JS target resolution (the outline) runs at
-     * 45 ms — a bridge call per frame would jitter the motion it is meant to
-     * decorate.
+     * HOVER is two different things and they must not be handled the same way.
+     *
+     *   The page's hover — `:hover`, mouseenter, the menu that opens when you
+     *   rest on a card — is a native motion event. Chromium turns it into
+     *   mousemove itself. It costs no bridge call, so it follows the arrow at
+     *   ~30 Hz with a 1 px dead zone, exactly like a mouse.
+     *
+     *   Our outline ("what will OK press?") needs the DOM, so it is a bridge
+     *   call. That one is throttled hard: a call per frame competed with input
+     *   on the UI thread and forced a style resolution in the page, which is
+     *   what made the cursor jitter.
      */
-    private static final long HOVER_MS = 55L;
-    private static final float HOVER_MIN_DP = 2f;
+    private static final long HOVER_MS = 28L;
+    private static final float HOVER_MIN_DP = 1f;
+    private static final long RESOLVE_MS = 150L;
     /** Continuous edge scrolling cadence. */
     private static final long SCROLL_MS = 80L;
     private static final long HINT_MS = 5200L;
@@ -96,13 +110,22 @@ final class TvPointer {
             }
 
             @Override
+            public void onPlaced() {
+                // Native hover, so the page's own hover styling follows the ring
+                // the way it follows a mouse. Throttled inside; no bridge call.
+                maybeHover(false);
+            }
+
+            @Override
             public boolean wantsFrames() {
                 return held != 0;
             }
 
             @Override
             public void onRendered() {
-                maybeHover(); // cheap native hover only
+                // Parked: the arrow is exactly on the aim, so the page and the
+                // outline both get their final, exact position.
+                maybeHover(true);
             }
         };
 
@@ -154,9 +177,16 @@ final class TvPointer {
     private static final long MIN_PRESS_MS = 70L;
     private static final long MAX_PRESS_MS = 1500L;
     private static long lastHoverAt;
+    private static long lastResolveAt;
     private static long lastScrollAt;
-    private static float hoverX;
-    private static float hoverY;
+    private static float lastHoverX;
+    private static float lastHoverY;
+    /** Has the page been told a mouse entered? It needs ENTER before MOVE. */
+    private static boolean hoverEntered;
+    /** Scratch, reused every frame: a 60 Hz loop should not allocate. */
+    private static final float[] BOUNDS = new float[4];
+    private static final int[] LOC_A = new int[2];
+    private static final int[] LOC_B = new int[2];
 
     private TvPointer() {}
 
@@ -174,6 +204,9 @@ final class TvPointer {
         target = new WeakReference<>(webView);
         held = 0;
         heldMs = 0;
+        // A new document has never been hovered: it needs ACTION_HOVER_ENTER
+        // before it will look at a hover move.
+        hoverEntered = false;
 
         int[] loc = new int[2];
         webView.getLocationInWindow(loc);
@@ -406,7 +439,7 @@ final class TvPointer {
         if (held == 0) heldMs = 0;
     }
 
-    /** The tap: an immediate, predictable 18 dp step. */
+    /** The tap: an immediate, predictable step (NUDGE_DP), no acceleration. */
     private static void nudge(WebView webView, int bit) {
         float density = webView.getResources().getDisplayMetrics().density;
         float step = NUDGE_DP * density;
@@ -416,7 +449,7 @@ final class TvPointer {
         if ((bit & HOLD_RIGHT) != 0) dx += step;
         if ((bit & HOLD_UP) != 0) dy -= step;
         if ((bit & HOLD_DOWN) != 0) dy += step;
-        float[] bounds = bounds(webView, density);
+        float[] bounds = bounds(webView, density, BOUNDS);
         aimX = clamp(aimX + dx, bounds[0], bounds[2]);
         aimY = clamp(aimY + dy, bounds[1], bounds[3]);
         if (cursor != null) cursor.setAim(aimX, aimY);
@@ -437,7 +470,9 @@ final class TvPointer {
         }
 
         float density = webView.getResources().getDisplayMetrics().density;
-        float[] bounds = bounds(webView, density);
+        // BOUNDS is a reused scratch array: this runs 60 times a second and a
+        // per-frame allocation is garbage that has to be collected mid-glide.
+        float[] bounds = bounds(webView, density, BOUNDS);
         float left = bounds[0];
         float top = bounds[1];
         float right = bounds[2];
@@ -479,7 +514,7 @@ final class TvPointer {
         boolean railX = false;
         boolean railY = false;
         if (scrollZone != null) {
-            int[] where = new int[2];
+            int[] where = LOC_B;
             webView.getLocationInWindow(where);
             float zl = where[0] + scrollZone[0] * webView.getWidth();
             float zt = where[1] + scrollZone[1] * webView.getHeight();
@@ -531,41 +566,87 @@ final class TvPointer {
     // ─── page interaction ───────────────────────────────────────────────────
 
     /**
-     * Called every animation frame by the view. It does the CHEAP thing only:
-     * a throttled native hover so the page's own :hover styling follows the
-     * arrow. The expensive part — asking the DOM what is under the cursor and
-     * outlining it — is deferred until the motion stops (see scheduleResolve).
+     * HOVER, the way a mouse does it.
      *
-     * That split is what fixed the jitter: a JS bridge call per frame was
-     * competing with input on the same thread, and each one forced a style
-     * resolution in the page.
+     * Two separate jobs, and the split is the whole trick:
+     *
+     *   • A real hover motion event, which is the only way a page's own hover
+     *     styling and hover handlers ever see the pointer. Chromium turns
+     *     ACTION_HOVER_MOVE into mousemove / mouseenter / mouseleave itself —
+     *     menus open, cards lift, the site's own tooltips appear, `:hover` CSS
+     *     applies. This costs NOTHING in the bridge; it is the same event a
+     *     physical mouse delivers. It is sent every frame (throttled, with a
+     *     1 px dead zone) so the page follows the ring continuously.
+     *
+     *   • The outline, which needs the DOM and is therefore a bridge call. That
+     *     one runs at {@link #RESOLVE_MS}, plus once at exact rest. A call per
+     *     frame competed with input on the UI thread and forced a style
+     *     resolution in the page; that is what used to make the arrow jitter.
+     *
+     * @param force final call of a glide: no throttle, land exactly on the aim.
      */
-    private static void maybeHover() {
-        if (cursor == null) return;
+    private static void maybeHover(boolean force) {
+        if (cursor == null || !cursor.isArrowVisible()) return;
         WebView webView = web();
         if (webView == null) return;
-        long now = SystemClock.uptimeMillis();
-        if (now - lastHoverAt < HOVER_MS) return;
-        lastHoverAt = now;
+        webView.getLocationInWindow(LOC_A);
+        float x = cursor.viewX() - LOC_A[0];
+        float y = cursor.viewY() - LOC_A[1];
 
-        float[] fractions = fractions(webView);
-        hoverX = cursor.viewX();
-        hoverY = cursor.viewY();
+        long now = SystemClock.uptimeMillis();
+        float minPx = HOVER_MIN_DP * webView.getResources().getDisplayMetrics().density;
+        if (!force) {
+            if (now - lastHoverAt < HOVER_MS) return;
+            if (
+                Math.abs(x - lastHoverX) < minPx &&
+                Math.abs(y - lastHoverY) < minPx
+            ) {
+                return;
+            }
+        }
+        lastHoverAt = now;
+        lastHoverX = x;
+        lastHoverY = y;
+
+        // ENTER first: until the page believes a mouse is over it, Chromium
+        // ignores hover moves — which is exactly what "hover does not work"
+        // looked like from the sofa.
+        if (!hoverEntered) {
+            hoverEntered = true;
+            sendHover(webView, MotionEvent.ACTION_HOVER_ENTER, x, y);
+        }
+        sendHover(webView, MotionEvent.ACTION_HOVER_MOVE, x, y);
+
+        // The outline: throttled, and dead-on at rest.
+        if (force || now - lastResolveAt >= RESOLVE_MS) {
+            lastResolveAt = now;
+            resolveTarget();
+        }
+    }
+
+    /** One hover event into the page, as a mouse would deliver it. */
+    private static void sendHover(WebView webView, int action, float x, float y) {
         try {
-            MotionEvent event = MotionEvent.obtain(
-                now, now, MotionEvent.ACTION_HOVER_MOVE,
-                fractions[0] * webView.getWidth() + webView.getScrollX(),
-                fractions[1] * webView.getHeight() + webView.getScrollY(),
-                0
-            );
+            long now = SystemClock.uptimeMillis();
+            MotionEvent event = MotionEvent.obtain(now, now, action, x, y, 0);
             event.setSource(InputDevice.SOURCE_MOUSE);
-            webView.onHoverEvent(event);
+            // dispatchHoverEvent is the real entry point: it updates the view's
+            // hovered state, then calls onHoverEvent, which is where Chromium
+            // reads it. Calling onHoverEvent alone skipped that bookkeeping.
+            if (!webView.dispatchHoverEvent(event)) webView.onHoverEvent(event);
             event.recycle();
         } catch (Exception ignored) {
-            /* hover is a nicety */
+            /* hover is a nicety, never a crash */
         }
-        // The outline follows a beat later, when the viewer has stopped aiming.
-        scheduleResolve(90);
+    }
+
+    /** The arrow is gone or the page changed: the page must stop hovering. */
+    private static void exitHover() {
+        if (!hoverEntered) return;
+        hoverEntered = false;
+        WebView webView = web();
+        if (webView == null) return;
+        sendHover(webView, MotionEvent.ACTION_HOVER_EXIT, lastHoverX, lastHoverY);
     }
 
     /** Resolve + outline once the arrow has been still for {@code delay} ms. */
@@ -634,8 +715,12 @@ final class TvPointer {
             scheduleResolve(0); // and refresh it for the key-up that follows
         }
 
-        pressX = clamp(fx, 0f, 1f) * webView.getWidth() + webView.getScrollX();
-        pressY = clamp(fy, 0f, 1f) * webView.getHeight() + webView.getScrollY();
+        // View coordinates, and NOTHING else: dispatchTouchEvent does not take
+        // the view's scroll offset (a WebView scrolls its content in the layer,
+        // it does not move the view), and adding it — as this used to — throws
+        // the press off by the scroll position.
+        pressX = clamp(fx, 0f, 1f) * webView.getWidth();
+        pressY = clamp(fy, 0f, 1f) * webView.getHeight();
         pressAt = SystemClock.uptimeMillis();
         pressDown = true;
         final int generation = ++pressGeneration;
@@ -781,6 +866,7 @@ final class TvPointer {
      * non-null with a parent and never gets an overlay of its own. Dropped here.
      */
     static void release() {
+        exitHover();
         try {
             if (pendingResolve != null) UI.removeCallbacks(pendingResolve);
         } catch (Exception ignored) {
@@ -817,9 +903,11 @@ final class TvPointer {
     /** The browse page is back in front: point the pointer at it again. */
     static void retarget(WebView webView) {
         if (webView == null) return;
+        exitHover();
         target = new WeakReference<>(webView);
         tapTarget = null;
         scrollZone = null;
+        hoverEntered = false;
         pressedCancel();
     }
 
@@ -860,15 +948,17 @@ final class TvPointer {
     // ─── helpers ────────────────────────────────────────────────────────────
 
     /** The usable rectangle inside the WebView, in window coordinates. */
-    private static float[] bounds(WebView webView, float density) {
-        int[] loc = new int[2];
+    private static float[] bounds(WebView webView, float density, float[] out) {
+        int[] loc = LOC_A;
         webView.getLocationInWindow(loc);
         float margin = 6f * density;
         float left = loc[0] + margin;
         float top = loc[1] + margin;
-        float right = Math.max(left, loc[0] + webView.getWidth() - margin);
-        float bottom = Math.max(top, loc[1] + webView.getHeight() - margin);
-        return new float[] { left, top, right, bottom };
+        out[0] = left;
+        out[1] = top;
+        out[2] = Math.max(left, loc[0] + webView.getWidth() - margin);
+        out[3] = Math.max(top, loc[1] + webView.getHeight() - margin);
+        return out;
     }
 
     /**
@@ -892,7 +982,7 @@ final class TvPointer {
      * view), page scroll, text zoom and density — see the note in tv-cursor.js.
      */
     private static float[] fractions(WebView webView) {
-        int[] loc = new int[2];
+        int[] loc = LOC_A;
         webView.getLocationInWindow(loc);
         float viewX = cursor != null ? cursor.viewX() : aimX;
         float viewY = cursor != null ? cursor.viewY() : aimY;

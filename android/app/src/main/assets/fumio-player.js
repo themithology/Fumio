@@ -43,13 +43,40 @@
       }
       return null;
     };
+    function stripFrom(node) {
+      try {
+        if (!node || node.nodeType !== 1) return;
+        if (node.hasAttribute && node.hasAttribute("data-smartlink")) {
+          node.removeAttribute("data-smartlink");
+        }
+        if (node.querySelectorAll) {
+          var inner = node.querySelectorAll("[data-smartlink]");
+          for (var i = 0; i < inner.length; i += 1) inner[i].removeAttribute("data-smartlink");
+        }
+      } catch (e) {
+        /* a detached node mid-render */
+      }
+    }
     function stripSmartlink() {
-      var nodes = document.querySelectorAll("[data-smartlink]");
-      for (var i = 0; i < nodes.length; i += 1) nodes[i].removeAttribute("data-smartlink");
+      stripFrom(document.documentElement);
     }
     stripSmartlink();
     try {
-      new MutationObserver(stripSmartlink).observe(document.documentElement, {
+      new MutationObserver(function (records) {
+        // Only the nodes that CHANGED. The old callback re-queried the entire
+        // document on every mutation, and on a React page that is every frame:
+        // a full-document selector run 60 times a second is a large part of why
+        // this app felt slower than the same site in a browser.
+        for (var i = 0; i < records.length; i += 1) {
+          var record = records[i];
+          if (record.type === "attributes") {
+            stripFrom(record.target);
+            continue;
+          }
+          var added = record.addedNodes;
+          for (var j = 0; j < added.length; j += 1) stripFrom(added[j]);
+        }
+      }).observe(document.documentElement, {
         childList: true,
         subtree: true,
         attributes: true,
@@ -74,7 +101,11 @@
     function isJoinOverlay(el) {
       if (!el || el === document.body || el === document.documentElement) return false;
       if (el.closest && el.closest("header,nav,footer")) return false;
-      var text = (el.innerText || el.textContent || "").toLowerCase();
+      // textContent, never innerText: innerText asks Blink for the laid-out
+      // text, which forces a synchronous layout of that subtree. This runs over
+      // a list of candidates, so the old version re-laid-out the page it was
+      // scanning — the single most expensive thing in this file.
+      var text = (el.textContent || "").toLowerCase();
       if (text.indexOf("discord") < 0) return false;
       if (text.indexOf("join") < 0 && text.indexOf("community") < 0) return false;
       var pos = "";
@@ -87,11 +118,14 @@
       var role = (el.getAttribute && el.getAttribute("role")) || "";
       return role === "dialog" || role === "alertdialog";
     }
-    function sweep() {
+    function sweepNow() {
       var nodes = document.querySelectorAll(
         '[role="dialog"],[role="alertdialog"],.fixed.inset-0,[class*="modal"],[class*="Modal"],[class*="popup"],[class*="Popup"],body > .fixed,body > [class*="fixed"]'
       );
-      for (var i = 0; i < nodes.length; i += 1) {
+      // A page with hundreds of matches is not showing hundreds of modals; the
+      // ones that matter are on top and near the end of the document.
+      var limit = Math.min(nodes.length, 60);
+      for (var i = 0; i < limit; i += 1) {
         if (!isJoinOverlay(nodes[i])) continue;
         try {
           nodes[i].remove();
@@ -100,9 +134,15 @@
         }
       }
     }
-    sweep();
+    // Debounced: the sweep is a document-wide query and the page mutates far
+    // more often than a popup can appear. 400 ms is invisible to a viewer and
+    // turns a per-frame cost into a per-second one.
+    var sweep = debounce(sweepNow, 400);
+    sweepNow();
     try {
-      new MutationObserver(sweep).observe(document.documentElement, { childList: true, subtree: true });
+      new MutationObserver(function () {
+        sweep();
+      }).observe(document.documentElement, { childList: true, subtree: true });
     } catch (e) {
       /* optional */
     }
@@ -587,16 +627,26 @@
     }
   }
 
+  // Mutations: the DOM-only jobs. Cheap, idempotent, and they only look at the
+  // document.
   var onDom = debounce(function () {
     hideAppOnlyChrome();
     stealFrames();
     patchContinueRail();
-    fitScreen();
-  }, 180);
+  }, 250);
   onDom();
+
+  // fitScreen is NOT a mutation job. It reads getComputedStyle() on every
+  // nav/footer/[class*=fixed] element and then WRITES inline styles on them, so
+  // running it per mutation is a read→write→recalc loop that janks the very
+  // page it is fitting. Once now, once per resize, once per route change.
+  var fitNow = debounce(fitScreen, 200);
+  fitNow();
+  window.addEventListener("resize", fitNow);
+  window.addEventListener("history-updated", fitNow);
+
   window.addEventListener("history-updated", patchContinueRail);
   window.addEventListener("fumio-cw-updated", patchContinueRail);
-  window.addEventListener("resize", debounce(fitScreen, 120));
   try {
     new MutationObserver(onDom).observe(document.documentElement, { childList: true, subtree: true });
   } catch (e) {
