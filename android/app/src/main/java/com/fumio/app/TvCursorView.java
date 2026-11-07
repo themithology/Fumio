@@ -52,8 +52,16 @@ final class TvCursorView extends View {
         void onRendered();
     }
 
-    /** Time constant of the arrow→aim easing. Slightly longer than a frame. */
-    private static final float TAU_MS = 42f;
+    /**
+     * Time constant of the easing, used for a TAP only.
+     *
+     * During a HOLD the ring is placed exactly on the aim every frame and this
+     * is not used at all: the aim is already a continuous 60 Hz curve, so easing
+     * it as well is a filter on top of a filter — pure added latency, and it is
+     * what made the pointer feel mushy next to a real mouse. A tap is a jump, so
+     * that one still gets a short ease to take the edge off.
+     */
+    private static final float TAU_MS = 30f;
     private static final float SETTLED_PX = 0.35f;
     private static final long MAX_FRAME_MS = 34L;
     /** The press: a quick shrink and a ring that leaves. */
@@ -186,11 +194,27 @@ final class TvCursorView extends View {
         driver = value;
     }
 
-    /** Move the target. The view follows on its next frame; nothing is redrawn. */
+    /** Move the target; the view eases onto it (a tap). Nothing is redrawn. */
     void setAim(float x, float y) {
         aimX = x;
         aimY = y;
         startGlide();
+    }
+
+    /**
+     * Move the target AND the ring together (a hold).
+     *
+     * 1:1, no easing: the aim already advances every frame, so this is the
+     * shortest possible path from "the input says here" to "the pixels are
+     * here". A mouse has no easing either — that is the whole reason it feels
+     * different from an app-drawn pointer.
+     */
+    void setAimNow(float x, float y) {
+        aimX = x;
+        aimY = y;
+        renderX = x;
+        renderY = y;
+        place(x, y);
     }
 
     /** Place aim and view at once (first appearance, page change). */

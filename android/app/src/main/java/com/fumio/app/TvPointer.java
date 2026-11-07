@@ -91,6 +91,8 @@ final class TvPointer {
      *   what made the cursor jitter.
      */
     private static final long HOVER_MS = 28L;
+    /** Cadence while sweeping — sparse on purpose, see {@link #maybeHover}. */
+    private static final long SWEEP_HOVER_MS = 110L;
     private static final float HOVER_MIN_DP = 1f;
     private static final long RESOLVE_MS = 150L;
     /** Continuous edge scrolling cadence. */
@@ -142,6 +144,13 @@ final class TvPointer {
 
     private static int held;
     private static long heldMs;
+    /** When the last direction key arrived — the hold watchdog's clock. */
+    private static long lastKeyAt;
+    /**
+     * Longer than any key-repeat interval, short enough that a stuck button
+     * lets go while the viewer is still looking at it.
+     */
+    private static final long HOLD_TIMEOUT_MS = 1200L;
 
     /** The tap point the page published for the outlined target ("fx,fy"). */
     private static float[] tapTarget;
@@ -450,6 +459,7 @@ final class TvPointer {
         // frame, and stacking key-repeat jumps on top of it is exactly the
         // notchy motion this replaces. The press we act on is the first one.
         if (event.getRepeatCount() == 0) press(webView, bit);
+        else lastKeyAt = SystemClock.uptimeMillis(); // still held: keep the watchdog fed
         return true;
     }
 
@@ -469,6 +479,7 @@ final class TvPointer {
     }
 
     private static void press(WebView webView, int bit) {
+        lastKeyAt = SystemClock.uptimeMillis();
         boolean idle = held == 0;
         held |= bit;
         if (idle) {
@@ -484,6 +495,7 @@ final class TvPointer {
     }
 
     private static void release(int bit) {
+        lastKeyAt = SystemClock.uptimeMillis();
         held &= ~bit;
         if (held == 0) heldMs = 0;
     }
@@ -509,6 +521,18 @@ final class TvPointer {
     /** One frame of held-direction movement. Called from the view's loop. */
     private static void advance(long dt) {
         if (held == 0) return;
+        // IR and Bluetooth remotes DO lose a key-up: a handful of milliseconds of
+        // interference and the release never arrives, the hold is never cleared,
+        // and the ring glides across the screen on its own. That is one of the
+        // "it drifts away by itself" reports, and no amount of tuning fixes it —
+        // it needs a watchdog. No key event at all for this long means the
+        // button is not being held any more.
+        long nowMs = SystemClock.uptimeMillis();
+        if (nowMs - lastKeyAt > HOLD_TIMEOUT_MS) {
+            held = 0;
+            heldMs = 0;
+            return;
+        }
         WebView webView = web();
         if (webView == null) {
             // The page is gone: stop gliding, or the Choreographer loop would
@@ -596,7 +620,10 @@ final class TvPointer {
         if (clampedX != aimX || clampedY != aimY) {
             aimX = clampedX;
             aimY = clampedY;
-            if (cursor != null) cursor.setAim(aimX, aimY);
+            // 1:1, not eased. The aim is already a per-frame curve; easing it
+            // again is a filter on a filter — added latency, and the reason the
+            // ring felt like it was dragging behind the remote.
+            if (cursor != null) cursor.setAimNow(aimX, aimY);
         }
 
         // Holding into an edge scrolls continuously — the strip under the cursor
@@ -638,20 +665,30 @@ final class TvPointer {
         if (cursor == null || !cursor.isArrowVisible()) return;
         WebView webView = web();
         if (webView == null) return;
+
+        long now = SystemClock.uptimeMillis();
+        // A hover event is not free: it crosses into the WebView, which hit-tests
+        // it in the renderer and re-styles whatever is under it. While the ring
+        // is SWEEPING across the screen that work is invisible — nobody reads a
+        // hover state at 500 dp/s — and it competes for the same thread that
+        // draws the ring. So: full cadence when aiming slowly, sparse while
+        // sweeping, and always one exact event the moment it stops.
+        boolean sweeping = !force && held != 0 && heldMs > 110;
+        long gap = sweeping ? SWEEP_HOVER_MS : HOVER_MS;
+        if (!force && now - lastHoverAt < gap) return;
+
         webView.getLocationInWindow(LOC_A);
         float x = cursor.viewX() - LOC_A[0];
         float y = cursor.viewY() - LOC_A[1];
-
-        long now = SystemClock.uptimeMillis();
         float minPx = HOVER_MIN_DP * webView.getResources().getDisplayMetrics().density;
-        if (!force) {
-            if (now - lastHoverAt < HOVER_MS) return;
-            if (
-                Math.abs(x - lastHoverX) < minPx &&
-                Math.abs(y - lastHoverY) < minPx
-            ) {
-                return;
-            }
+        if (!force && sweeping) {
+            // One event per gap is enough while crossing the page.
+        } else if (
+            !force &&
+            Math.abs(x - lastHoverX) < minPx &&
+            Math.abs(y - lastHoverY) < minPx
+        ) {
+            return;
         }
         lastHoverAt = now;
         lastHoverX = x;
@@ -666,8 +703,9 @@ final class TvPointer {
         }
         sendHover(webView, MotionEvent.ACTION_HOVER_MOVE, x, y);
 
-        // The outline: throttled, and dead-on at rest.
-        if (force || now - lastResolveAt >= RESOLVE_MS) {
+        // The outline: not during a sweep (it would strobe over every card on
+        // the way past), throttled while aiming, dead-on at rest.
+        if (!sweeping && (force || now - lastResolveAt >= RESOLVE_MS)) {
             lastResolveAt = now;
             resolveTarget();
         }
@@ -961,6 +999,17 @@ final class TvPointer {
         pressDown = false;
         held = 0;
         heldMs = 0;
+    }
+
+    /** The app left the foreground: nothing may still be held or hovered. */
+    static void onPause() {
+        pressedCancel();
+        lastKeyAt = 0;
+        hoverEntered = false;
+        if (pendingResolve != null) {
+            UI.removeCallbacks(pendingResolve);
+            pendingResolve = null;
+        }
     }
 
     /** The browse page is back in front: point the pointer at it again. */

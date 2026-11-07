@@ -143,6 +143,19 @@ public class MainActivity extends BridgeActivity {
         handleAuthIntent(intent);
     }
 
+    @Override
+    protected void onPause() {
+        super.onPause();
+        try {
+            // A held direction or an open hover menu must not survive the app
+            // going to the background: the key-up would arrive at a screen that
+            // is not there, and the ring would keep gliding on return.
+            TvPointer.onPause();
+        } catch (Throwable ignored) {
+            // Never let the TV layer break a normal lifecycle call.
+        }
+    }
+
     /** The update prompt is shown once the window really exists. */
     private boolean updateChecked;
 
