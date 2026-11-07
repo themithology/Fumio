@@ -144,12 +144,15 @@ public class MainActivity extends BridgeActivity {
     }
 
     @Override
-    protected void onPause() {
-        super.onPause();
+    public void onWindowFocusChanged(boolean hasFocus) {
+        super.onWindowFocusChanged(hasFocus);
+        if (hasFocus) return;
         try {
-            // A held direction or an open hover menu must not survive the app
-            // going to the background: the key-up would arrive at a screen that
-            // is not there, and the ring would keep gliding on return.
+            // Losing the window means the app is behind something — another app,
+            // the launcher, a system dialog. A held direction or an open hover
+            // menu must not survive that: its key-up arrives at a screen that is
+            // not there, and the ring glides on its own when the app returns.
+            // (onPause is final in BridgeActivity, so this is the hook.)
             TvPointer.onPause();
         } catch (Throwable ignored) {
             // Never let the TV layer break a normal lifecycle call.
