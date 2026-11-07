@@ -194,6 +194,22 @@ final class Updater {
 
     // ─── the dialogs ─────────────────────────────────────────────────────────
 
+    /**
+     * A dialog is the most dangerous thing in this class: shown too early (no
+     * window token) or too late (activity finishing) it throws
+     * BadTokenException from show(). Every dialog goes through here.
+     */
+    private static void safeShow(Activity activity, AlertDialog dialog) {
+        try {
+            if (activity == null || activity.isFinishing() || activity.isDestroyed()) return;
+            if (activity.getWindow() == null) return;
+            if (activity.getWindow().getDecorView().getWindowToken() == null) return;
+            dialog.show();
+        } catch (Throwable ignored) {
+            // A prompt that cannot be shown is not worth a crash.
+        }
+    }
+
     private static void promptUpdate(final Activity activity, final Release release, int current) {
         AlertDialog dialog = new AlertDialog.Builder(activity, DIALOG_THEME)
             .setTitle("Update available")
@@ -210,17 +226,16 @@ final class Updater {
             })
             .setNegativeButton("Not now", null)
             .create();
-        dialog.show();
+        safeShow(activity, dialog);
     }
 
     private static void promptInstall(final Activity activity, final File apk, String title, String message) {
-        new AlertDialog.Builder(activity, DIALOG_THEME)
+        safeShow(activity, new AlertDialog.Builder(activity, DIALOG_THEME)
             .setTitle(title)
             .setMessage(message)
             .setPositiveButton("Install", (d, w) -> install(activity, apk))
             .setNegativeButton("Later", null)
-            .create()
-            .show();
+            .create());
     }
 
     // ─── download + hand-off ─────────────────────────────────────────────────
@@ -231,7 +246,7 @@ final class Updater {
             .setMessage("Starting…")
             .setCancelable(false)
             .create();
-        progress.show();
+        safeShow(activity, progress);
 
         new Thread(
             () -> {
@@ -270,14 +285,18 @@ final class Updater {
                 }
                 final boolean success = ok;
                 MAIN.post(() -> {
-                    progress.dismiss();
+                    try {
+                        progress.dismiss();
+                    } catch (Throwable ignored) {
+                        // already gone
+                    }
                     if (activity.isFinishing() || activity.isDestroyed()) return;
                     if (!success) {
-                        new AlertDialog.Builder(activity, DIALOG_THEME)
+                        safeShow(activity, new AlertDialog.Builder(activity, DIALOG_THEME)
                             .setTitle("Update failed")
                             .setMessage("The download did not finish. Try again later.")
                             .setPositiveButton("OK", null)
-                            .show();
+                            .create());
                         return;
                     }
                     prefs(activity)

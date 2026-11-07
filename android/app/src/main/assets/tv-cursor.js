@@ -56,32 +56,53 @@
     document.documentElement.classList.add("fumio-tv");
   }
 
+  /**
+   * `getComputedStyle` forces a style resolution, and on a React page the same
+   * ancestors are walked over and over as the cursor moves. The cursor value of
+   * an element almost never changes, so it is cached per element: the walk
+   * costs nothing after the first pass over a rail.
+   */
+  var cursorCache = null;
+  function cursorOf(el) {
+    try {
+      if (!cursorCache) cursorCache = new WeakMap();
+      var cached = cursorCache.get(el);
+      if (cached !== undefined) return cached;
+      var value = getComputedStyle(el).cursor;
+      cursorCache.set(el, value);
+      return value;
+    } catch (e) {
+      return "auto";
+    }
+  }
+
+  var MAX_DEPTH = 12;
+
   function actionable(from) {
     // PASS 1 — real controls, nearest ancestor first. This runs before the
     // cursor heuristic on purpose: `cursor` is an INHERITED property, so every
     // child of a link computes `pointer` too. Testing the cursor first would
     // make the poster image its own target instead of the card around it.
     var el = from;
-    while (el && el.nodeType === 1) {
+    var depth = 0;
+    while (el && el.nodeType === 1 && depth < MAX_DEPTH) {
       try {
         if (el.matches && el.matches(ACTIONABLE)) return el;
       } catch (e) {
         /* a detached node mid-render */
       }
       el = el.parentElement;
+      depth += 1;
     }
     // PASS 2 — a card the site built as a plain div. Only reached when no real
     // control is anywhere above the hit, so the pointer cursor here really is
     // the page saying "this is clickable".
     el = from;
-    while (el && el.nodeType === 1 && el !== document.documentElement) {
-      try {
-        var cs = getComputedStyle(el);
-        if (cs && cs.cursor === "pointer") return el;
-      } catch (e) {
-        /* ignore */
-      }
+    depth = 0;
+    while (el && el.nodeType === 1 && el !== document.documentElement && depth < MAX_DEPTH) {
+      if (cursorOf(el) === "pointer") return el;
       el = el.parentElement;
+      depth += 1;
     }
     return null;
   }
@@ -276,6 +297,10 @@
 
   window.FumioTvHoverF = function (fx, fy) {
     try {
+      // A fresh resolve means a fresh answer: the page may have swapped a
+      // stylesheet or re-rendered a rail since the last one. Within one resolve
+      // the cache still saves every repeated ancestor walk.
+      cursorCache = null;
       style();
       var point = toClient(fx, fy);
       var hit = document.elementFromPoint(point.x, point.y);

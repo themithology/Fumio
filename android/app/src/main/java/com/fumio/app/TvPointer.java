@@ -6,9 +6,17 @@ import android.util.Log;
 import android.view.InputDevice;
 import android.view.KeyEvent;
 import android.view.MotionEvent;
+import android.graphics.Color;
+import android.graphics.drawable.GradientDrawable;
+import android.os.Handler;
+import android.os.Looper;
+import android.util.TypedValue;
+import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
 import android.webkit.WebView;
+import android.widget.FrameLayout;
+import android.widget.TextView;
 
 import java.lang.ref.WeakReference;
 
@@ -49,18 +57,30 @@ final class TvPointer {
     private static final String TAG = "FumioTvPointer";
 
     /** One tap of the D-pad, in dp. Precise, but not fiddly. */
-    private static final float NUDGE_DP = 18f;
-    /** Time for a held direction to reach full speed. */
-    private static final float RAMP_MS = 420f;
+    // ─── THE FEEL ────────────────────────────────────────────────────────────
+    // All of it is here. The first pass was tuned like a careful pointer for a
+    // desktop — 0.9 s to cross the screen with a 0.42 s ramp — which on a sofa
+    // reads as lag, not precision. A 10-foot screen is crossed in a glance, so
+    // the cursor has to move at the speed of a glance.
+    //
+    // A single tap is still fine-grained; the speed is in the hold.
+    private static final float NUDGE_DP = 24f;
+    /** Time for a held direction to reach full speed. Short: no "spool-up". */
+    private static final float RAMP_MS = 190f;
     /** Full speed covers the screen width in this many seconds. */
-    private static final float CROSS_SECONDS = 0.9f;
-    /** Slowest hold speed, as a fraction of full speed (fine aim). */
-    private static final float SLOW_FRACTION = 0.22f;
-    /** Hover work: at most this often, and only after moving this far. */
-    private static final long HOVER_MS = 60L;
-    private static final float HOVER_MIN_DP = 2.5f;
+    private static final float CROSS_SECONDS = 0.40f;
+    /** Speed the instant a hold starts, as a fraction of full speed. */
+    private static final float SLOW_FRACTION = 0.45f;
+    /**
+     * Hover work is throttled in two tiers: the cheap native hover event follows
+     * the cursor at ~60 fps, while the JS target resolution (the outline) runs at
+     * 45 ms — a bridge call per frame would jitter the motion it is meant to
+     * decorate.
+     */
+    private static final long HOVER_MS = 55L;
+    private static final float HOVER_MIN_DP = 2f;
     /** Continuous edge scrolling cadence. */
-    private static final long SCROLL_MS = 110L;
+    private static final long SCROLL_MS = 80L;
     private static final long HINT_MS = 5200L;
 
     private static final int HOLD_LEFT = 1;
@@ -82,12 +102,15 @@ final class TvPointer {
 
             @Override
             public void onRendered() {
-                maybeHover();
+                maybeHover(); // cheap native hover only
             }
         };
 
     private static TvCursorView cursor;
+    private static TextView hintView;
     private static WeakReference<WebView> target;
+    private static final Handler UI = new Handler(Looper.getMainLooper());
+    private static Runnable pendingResolve;
 
     /** The aim, in window coordinates. The arrow eases toward this. */
     private static float aimX;
@@ -99,6 +122,16 @@ final class TvPointer {
 
     /** The tap point the page published for the outlined target ("fx,fy"). */
     private static float[] tapTarget;
+    /**
+     * Where the arrow was when that point was measured. The point belongs to one
+     * scroll position and one target, so it is only trustworthy while the arrow
+     * is still on that target — the classic bug here is a tap landing on the
+     * card you left two presses ago.
+     */
+    private static float tapTargetX;
+    private static float tapTargetY;
+    /** Generous: a target is a card, not a pixel. */
+    private static final float TAP_TARGET_SLOP_DP = 90f;
 
     /**
      * The strip under the cursor, as fractions of the WebView, and whether it
@@ -155,11 +188,24 @@ final class TvPointer {
         } else if (cursor != null) {
             cursor.snapTo(aimX, aimY);
         }
-        if (cursor != null) {
-            cursor.setArrowVisible(true);
-            cursor.bringToFront();
+        if (cursor != null) cursor.setArrowVisible(true);
+        bringCursorToFront();
+        scheduleResolve(140);
+    }
+
+    /**
+     * bringToFront() triggers a layout pass on the whole host, so it runs only
+     * when the cursor is not already on top — not on every key press.
+     */
+    private static void bringCursorToFront() {
+        if (cursor == null) return;
+        try {
+            ViewGroup parent = (ViewGroup) cursor.getParent();
+            if (parent == null) return;
+            if (parent.getChildAt(parent.getChildCount() - 1) != cursor) cursor.bringToFront();
+        } catch (Exception ignored) {
+            /* not worth a crash */
         }
-        hover(webView, true);
     }
 
     private static void ensureView(Activity activity) {
@@ -169,20 +215,79 @@ final class TvPointer {
             if (root == null) return;
             cursor = new TvCursorView(activity);
             cursor.setDriver(DRIVER);
-            root.addView(
-                cursor,
-                new ViewGroup.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT,
-                    ViewGroup.LayoutParams.MATCH_PARENT
-                )
-            );
-            cursor.setVisibility(View.VISIBLE);
+            // SMALL view, moved by translation — never a full-screen overlay.
+            // The view supplies its own LayoutParams.
+            root.addView(cursor);
+            cursor.setVisibility(View.GONE);
             cursor.setArrowVisible(false);
+            ensureHintView(activity, root);
         } catch (Exception error) {
             Log.w(TAG, "cursor overlay unavailable: " + error.getMessage());
             cursor = null;
         }
     }
+
+    /**
+     * A real TextView for the hint, not something we paint. It only exists while
+     * it is being read, and its fade is a ViewPropertyAnimator (compositor), so
+     * showing it never makes the cursor's own view dirty.
+     */
+    private static void ensureHintView(Activity activity, ViewGroup root) {
+        if (hintView != null && hintView.getParent() == root) return;
+        try {
+            TextView view = new TextView(activity);
+            view.setTextColor(Color.WHITE);
+            view.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f);
+            view.setGravity(Gravity.CENTER);
+            int padH = (int) (18 * activity.getResources().getDisplayMetrics().density);
+            int padV = (int) (10 * activity.getResources().getDisplayMetrics().density);
+            view.setPadding(padH, padV, padH, padV);
+            GradientDrawable background = new GradientDrawable();
+            background.setColor(0xE6121216);
+            background.setCornerRadius(24 * activity.getResources().getDisplayMetrics().density);
+            view.setBackground(background);
+            FrameLayout.LayoutParams params = new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            );
+            params.gravity = Gravity.TOP | Gravity.CENTER_HORIZONTAL;
+            params.topMargin = (int) (24 * activity.getResources().getDisplayMetrics().density);
+            view.setLayoutParams(params);
+            view.setAlpha(0f);
+            view.setVisibility(View.GONE);
+            root.addView(view);
+            hintView = view;
+        } catch (Exception ignored) {
+            hintView = null;
+        }
+    }
+
+    private static void showHint(String text, long millis) {
+        if (hintView == null) return;
+        hintView.setText(text);
+        hintView.setVisibility(View.VISIBLE);
+        hintView.animate().cancel();
+        hintView.animate().alpha(1f).setDuration(120).start();
+        UI.removeCallbacks(hideHint);
+        UI.postDelayed(hideHint, millis);
+    }
+
+    private static final Runnable hideHint =
+        new Runnable() {
+            @Override
+            public void run() {
+                if (hintView == null) return;
+                hintView.animate().cancel();
+                hintView
+                    .animate()
+                    .alpha(0f)
+                    .setDuration(220)
+                    .withEndAction(() -> {
+                        if (hintView != null) hintView.setVisibility(View.GONE);
+                    })
+                    .start();
+            }
+        };
 
     /** First key press of the session: put the arrow on screen, with a hint. */
     private static void ensureAimed(Activity activity, WebView webView) {
@@ -195,10 +300,10 @@ final class TvPointer {
         aimY = loc[1] + webView.getHeight() / 2f;
         placed = true;
         if (cursor != null) {
-            cursor.bringToFront();
             cursor.setArrowVisible(true);
             cursor.snapTo(aimX, aimY);
-            cursor.showHint("Arrows glide  ·  OK selects  ·  BACK goes back", HINT_MS);
+            bringCursorToFront();
+            showHint("Arrows glide  ·  OK selects  ·  BACK goes back", HINT_MS);
         }
     }
 
@@ -218,10 +323,8 @@ final class TvPointer {
         if (code == KeyEvent.KEYCODE_MENU || code == KeyEvent.KEYCODE_INFO) {
             if (up) {
                 ensureAimed(activity, webView);
-                if (cursor != null) {
-                    cursor.setArrowVisible(true);
-                    cursor.showHint("Arrows glide  ·  OK selects  ·  BACK goes back", HINT_MS);
-                }
+                if (cursor != null) cursor.setArrowVisible(true);
+                showHint("Arrows glide  ·  OK selects  ·  BACK goes back", HINT_MS);
             }
             return true;
         }
@@ -428,53 +531,58 @@ final class TvPointer {
     // ─── page interaction ───────────────────────────────────────────────────
 
     /**
-     * Ask the page what is under the arrow and outline it, but only when the
-     * arrow has actually gone somewhere — this runs on every animation frame,
-     * and a page does not need to be interrogated 60 times a second.
+     * Called every animation frame by the view. It does the CHEAP thing only:
+     * a throttled native hover so the page's own :hover styling follows the
+     * arrow. The expensive part — asking the DOM what is under the cursor and
+     * outlining it — is deferred until the motion stops (see scheduleResolve).
+     *
+     * That split is what fixed the jitter: a JS bridge call per frame was
+     * competing with input on the same thread, and each one forced a style
+     * resolution in the page.
      */
     private static void maybeHover() {
         if (cursor == null) return;
-        long now = SystemClock.uptimeMillis();
-        float density = cursor.getResources().getDisplayMetrics().density;
-        float moved = Math.abs(cursor.viewX() - hoverX) + Math.abs(cursor.viewY() - hoverY);
-        if (now - lastHoverAt < HOVER_MS) return;
-        if (moved < HOVER_MIN_DP * density) return;
         WebView webView = web();
         if (webView == null) return;
-        hover(webView, false);
-    }
+        long now = SystemClock.uptimeMillis();
+        if (now - lastHoverAt < HOVER_MS) return;
+        lastHoverAt = now;
 
-    /**
-     * Tell the page where the arrow is (as a fraction of the WebView) so it can
-     * outline the target, and forward a real mouse-hover so the site's own
-     * :hover rules fire.
-     */
-    private static void hover(WebView webView, boolean force) {
         float[] fractions = fractions(webView);
-        lastHoverAt = SystemClock.uptimeMillis();
-        if (cursor != null) {
-            hoverX = cursor.viewX();
-            hoverY = cursor.viewY();
-        } else {
-            hoverX = aimX;
-            hoverY = aimY;
-        }
-
-        float x = fractions[0] * webView.getWidth();
-        float y = fractions[1] * webView.getHeight();
-
-        // Real hover first: the DOM event gives the page its hover styling.
+        hoverX = cursor.viewX();
+        hoverY = cursor.viewY();
         try {
-            MotionEvent event =
-                MotionEvent.obtain(SystemClock.uptimeMillis(), SystemClock.uptimeMillis(),
-                    MotionEvent.ACTION_HOVER_MOVE, x + webView.getScrollX(), y + webView.getScrollY(), 0);
+            MotionEvent event = MotionEvent.obtain(
+                now, now, MotionEvent.ACTION_HOVER_MOVE,
+                fractions[0] * webView.getWidth() + webView.getScrollX(),
+                fractions[1] * webView.getHeight() + webView.getScrollY(),
+                0
+            );
             event.setSource(InputDevice.SOURCE_MOUSE);
             webView.onHoverEvent(event);
             event.recycle();
         } catch (Exception ignored) {
             /* hover is a nicety */
         }
-        // And our own resolution, which is what OK will act on.
+        // The outline follows a beat later, when the viewer has stopped aiming.
+        scheduleResolve(90);
+    }
+
+    /** Resolve + outline once the arrow has been still for {@code delay} ms. */
+    private static void scheduleResolve(long delay) {
+        if (pendingResolve != null) UI.removeCallbacks(pendingResolve);
+        pendingResolve = () -> {
+            pendingResolve = null;
+            resolveTarget();
+        };
+        UI.postDelayed(pendingResolve, delay);
+    }
+
+    /** Ask the page what is under the arrow, now. Only on stop, and on click. */
+    static void resolveTarget() {
+        WebView webView = web();
+        if (webView == null) return;
+        float[] fractions = fractions(webView);
         try {
             webView.evaluateJavascript(
                 "window.FumioTvHoverF&&window.FumioTvHoverF(" + fmt(fractions[0]) + "," + fmt(fractions[1]) + ");",
@@ -502,18 +610,28 @@ final class TvPointer {
      *      scroll.
      */
     private static void click(final WebView webView) {
-        if (cursor != null) hover(webView, true); // refresh the target outline
-
-        // Where: the published target centre if there is one, else the arrow.
+        // No bridge round trip before the tap: the page has already published the
+        // target's centre on every hover tick, so a press responds on the frame it
+        // happens. Refreshing the outline first cost 20–50 ms of dead time, which
+        // is exactly what makes a remote feel laggy.
         float fx;
         float fy;
-        if (tapTarget != null) {
+        float slop = TAP_TARGET_SLOP_DP * webView.getResources().getDisplayMetrics().density;
+        boolean targetIsCurrent =
+            tapTarget != null &&
+            Math.abs(aimX - tapTargetX) <= slop &&
+            Math.abs(aimY - tapTargetY) <= slop;
+        if (targetIsCurrent) {
             fx = tapTarget[0];
             fy = tapTarget[1];
         } else {
+            // No target yet, or the arrow has moved off the one it describes: tap
+            // where the arrow actually is. A stale centre is worse than the pixel
+            // under the cursor — it presses something the viewer is not on.
             float[] at = fractions(webView);
             fx = at[0];
             fy = at[1];
+            scheduleResolve(0); // and refresh it for the key-up that follows
         }
 
         pressX = clamp(fx, 0f, 1f) * webView.getWidth() + webView.getScrollX();
@@ -636,6 +754,8 @@ final class TvPointer {
     static void setTapTarget(String point) {
         float[] parsed = parseFractions(point);
         tapTarget = parsed;
+        tapTargetX = aimX;
+        tapTargetY = aimY;
     }
 
     /**
@@ -652,6 +772,46 @@ final class TvPointer {
         WebView currentTarget = web();
         if (currentTarget == webView) return;
         retarget(webView);
+    }
+
+    /**
+     * The activity is going away. The cursor and the hint are REAL views parented
+     * to its content frame, so a static reference to them outlives the activity:
+     * that is an Activity leak, and worse, the next activity finds `cursor`
+     * non-null with a parent and never gets an overlay of its own. Dropped here.
+     */
+    static void release() {
+        try {
+            if (pendingResolve != null) UI.removeCallbacks(pendingResolve);
+        } catch (Exception ignored) {
+            /* the looper is gone */
+        }
+        pendingResolve = null;
+        try {
+            if (hintView != null) {
+                ViewGroup parent = (ViewGroup) hintView.getParent();
+                if (parent != null) parent.removeView(hintView);
+            }
+        } catch (Exception ignored) {
+            /* already detached */
+        }
+        hintView = null;
+        try {
+            if (cursor != null) {
+                ViewGroup parent = (ViewGroup) cursor.getParent();
+                if (parent != null) parent.removeView(cursor);
+            }
+        } catch (Exception ignored) {
+            /* already detached */
+        }
+        cursor = null;
+        target = null;
+        tapTarget = null;
+        scrollZone = null;
+        placed = false;
+        pressDown = false;
+        held = 0;
+        heldMs = 0;
     }
 
     /** The browse page is back in front: point the pointer at it again. */

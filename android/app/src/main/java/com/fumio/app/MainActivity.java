@@ -126,10 +126,10 @@ public class MainActivity extends BridgeActivity {
             webView.post(() -> SystemBars.browse(getWindow(), webView));
             installBackHandler();
             handleAuthIntent(getIntent());
-            // Sideloaded app, so the update has to come from inside: the
-            // releases CI publishes ARE the version feed. Cheap (once per 6 h),
-            // silent on failure, and it never blocks a launch.
-            Updater.checkAndPrompt(this);
+            // The update check itself is cheap and silent, but its DIALOG must
+            // not be shown from onCreate: the window has no token yet and
+            // AlertDialog.show() then throws BadTokenException — one of the
+            // reported crash types. It waits for the first resume instead.
         } catch (Exception ignored) {
             // Prefer a running Capacitor shell over a crash loop.
         }
@@ -142,9 +142,23 @@ public class MainActivity extends BridgeActivity {
         handleAuthIntent(intent);
     }
 
+    /** The update prompt is shown once the window really exists. */
+    private boolean updateChecked;
+
     @Override
     public void onResume() {
         super.onResume();
+        if (!updateChecked && !isFinishing() && !isDestroyed()) {
+            updateChecked = true;
+            // One frame after the window is attached, so the dialog has a token.
+            getWindow().getDecorView().post(() -> {
+                try {
+                    Updater.checkAndPrompt(MainActivity.this);
+                } catch (Throwable ignored) {
+                    // An update check must never be able to crash a launch.
+                }
+            });
+        }
         if (pipOpen) return;
         if (!playerActive) {
             Bridge bridge = getBridge();
@@ -1723,6 +1737,12 @@ public class MainActivity extends BridgeActivity {
             verifyWall.hide();
         } catch (Exception ignored) {
             // Activity is already going away.
+        }
+        try {
+            // The TV cursor is a real View on this activity's content frame.
+            TvPointer.release();
+        } catch (Throwable ignored) {
+            // Nothing to release, or no TV overlay at all.
         }
         super.onDestroy();
     }
