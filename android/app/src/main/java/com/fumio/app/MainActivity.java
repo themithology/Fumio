@@ -126,6 +126,7 @@ public class MainActivity extends BridgeActivity {
             webView.post(() -> SystemBars.browse(getWindow(), webView));
             installBackHandler();
             handleAuthIntent(getIntent());
+            armLoadWatchdog();
             // The update check itself is cheap and silent, but its DIALOG must
             // not be shown from onCreate: the window has no token yet and
             // AlertDialog.show() then throws BadTokenException — one of the
@@ -202,8 +203,73 @@ public class MainActivity extends BridgeActivity {
         return super.dispatchKeyEvent(event);
     }
 
+    // ─── when the site will not load ─────────────────────────────────────────
+
+    /** How long the live site gets to paint before we stop waiting politely. */
+    private static final long LOAD_TIMEOUT_MS = 30000L;
+
+    private Runnable loadWatchdog;
+
+    private void showOfflineScreen() {
+        if (isFinishing() || isDestroyed()) return;
+        if (playerActive) return; // a video is playing: never cover it
+        OfflineScreen.show(
+            this,
+            liveWebView(),
+            this::retryLiveSite,
+            this::browseBundledCopy,
+            localAppUrl != null && !localAppUrl.isEmpty()
+        );
+    }
+
+    /** "Try again": the live site, from the top, with a fresh clock. */
+    private void retryLiveSite() {
+        liveFailed = false;
+        openedLive = true;
+        armLoadWatchdog();
+        WebView page = liveWebView();
+        if (page != null) page.loadUrl(LIVE_ORIGIN + "/");
+    }
+
+    /** "Browse offline": the copy of the site that ships inside the app. */
+    private void browseBundledCopy() {
+        WebView page = liveWebView();
+        if (page == null || localAppUrl == null || localAppUrl.isEmpty()) return;
+        liveFailed = true; // do not bounce straight back to the live site
+        openedLive = true;
+        page.loadUrl(localAppUrl + "/");
+    }
+
+    private void armLoadWatchdog() {
+        cancelLoadWatchdog();
+        WebView page = liveWebView();
+        if (page == null) return;
+        loadWatchdog = () -> {
+            loadWatchdog = null;
+            if (playerActive) return;
+            if (OfflineScreen.isShowing()) return;
+            liveFailed = true;
+            openedLive = true;
+            showOfflineScreen();
+        };
+        page.postDelayed(loadWatchdog, LOAD_TIMEOUT_MS);
+    }
+
+    private void cancelLoadWatchdog() {
+        if (loadWatchdog == null) return;
+        WebView page = liveWebView();
+        if (page != null) page.removeCallbacks(loadWatchdog);
+        loadWatchdog = null;
+    }
+
     /** Whichever WebView the viewer is actually looking at. */
     private WebView keyTarget() {
+        if (OfflineScreen.isShowing()) {
+            // The "join our socials" screen is a page too: the arrow must press
+            // ITS buttons instead of tapping the dead site behind it.
+            WebView offline = OfflineScreen.webView();
+            if (offline != null) return offline;
+        }
         if (playerActive && playerOverlay != null) {
             WebView player = playerOverlay.playerWebView();
             if (player != null) return player;
@@ -616,6 +682,10 @@ public class MainActivity extends BridgeActivity {
             if (isOwnOrigin(uri)) rememberLocalAppUrl();
             if (!openedLive && !liveFailed && isOwnOrigin(uri)) {
                 openedLive = true;
+                // The live site gets 30 s to show something. If it cannot, the
+                // viewer gets a page with the socials instead of a blank white
+                // window that never explains itself.
+                armLoadWatchdog();
                 view.post(() -> view.loadUrl(LIVE_ORIGIN + "/"));
                 return;
             }
@@ -629,6 +699,8 @@ public class MainActivity extends BridgeActivity {
             }
             if (isLiveSite(uri)) {
                 liveFailed = false;
+                cancelLoadWatchdog();
+                OfflineScreen.onPageLoaded();
                 noteBrowsePage(uri);
                 if (!liveHistoryCleared) {
                     liveHistoryCleared = true;
@@ -643,21 +715,56 @@ public class MainActivity extends BridgeActivity {
 
         @Override
         public void onReceivedError(WebView view, WebResourceRequest request, WebResourceError error) {
-            if (
-                !playerActive &&
-                !liveFailed &&
-                request != null &&
-                request.isForMainFrame() &&
-                isLiveSite(request.getUrl())
-            ) {
-                liveFailed = true;
-                openedLive = true;
-                rememberLocalAppUrl();
-                if (localAppUrl != null && !localAppUrl.isEmpty()) {
-                    view.post(() -> view.loadUrl(localAppUrl + "/"));
+            if (!playerActive && request != null && request.isForMainFrame()) {
+                Uri failed = request.getUrl();
+                if (isLiveSite(failed)) {
+                    liveFailed = true;
+                    openedLive = true;
+                    rememberLocalAppUrl();
+                    cancelLoadWatchdog();
+                    // The site is down. The bundled copy used to load silently
+                    // here, which on a dead network is a worse lie than saying
+                    // so: the API is unreachable and every rail is empty. The
+                    // screen says what happened and offers the copy as a choice.
+                    view.post(MainActivity.this::showOfflineScreen);
+                } else if (openedLive && isOwnOrigin(failed)) {
+                    // Even the built-in copy did not paint.
+                    cancelLoadWatchdog();
+                    view.post(MainActivity.this::showOfflineScreen);
                 }
             }
             super.onReceivedError(view, request, error);
+        }
+
+        /**
+         * The site answered, and the answer was "I am broken" (502/503/504 from
+         * a dead backend is the common one). onReceivedError never fires for
+         * that — the load succeeded — so it is caught here.
+         */
+        @Override
+        public void onReceivedHttpError(
+            WebView view,
+            WebResourceRequest request,
+            WebResourceResponse response
+        ) {
+            try {
+                if (
+                    !playerActive &&
+                    request != null &&
+                    request.isForMainFrame() &&
+                    isLiveSite(request.getUrl()) &&
+                    response != null &&
+                    response.getStatusCode() >= 500
+                ) {
+                    liveFailed = true;
+                    openedLive = true;
+                    cancelLoadWatchdog();
+                    view.post(MainActivity.this::showOfflineScreen);
+                }
+            } catch (Exception ignored) {
+                // A status code is not worth a crash.
+            }
+            super.onReceivedHttpError(view, request, response);
         }
     }
 
@@ -1392,6 +1499,10 @@ public class MainActivity extends BridgeActivity {
             new OnBackPressedCallback(true) {
                 @Override
                 public void handleOnBackPressed() {
+                    if (OfflineScreen.isShowing()) {
+                        OfflineScreen.hide();
+                        return;
+                    }
                     if (verifyWall.isShowing()) {
                         hideVerifyWall();
                         return;
@@ -1737,6 +1848,11 @@ public class MainActivity extends BridgeActivity {
             verifyWall.hide();
         } catch (Exception ignored) {
             // Activity is already going away.
+        }
+        try {
+            OfflineScreen.hide();
+        } catch (Throwable ignored) {
+            // Nothing on screen.
         }
         try {
             // The TV cursor is a real View on this activity's content frame.
