@@ -1,4 +1,8 @@
-# TV audit — 2026-11-05
+# TV audit — 2026-11-05 onwards
+
+**This is history, not instructions.** What the TV build does *now* is
+[docs/TV.md](TV.md); this file is the record of every bug found and why it
+happened, round by round.
 
 A full pass over everything the television build touches, done the way the bug
 reports came in: read the code, find what is wrong with it, fix it, and say
@@ -90,7 +94,7 @@ proves it; **unverified** = needs the television.
 
 ## Verified here
 
-- `docs/tv-ui.test.cjs` — **32 checks**, including: the live-site viewport rewrite
+- `docs/tv-ui.test.cjs` — **45 checks**, including: the live-site viewport rewrite
   and both of its guards (localhost, overflow revert), fractions → client
   coordinates, the target's centre published and republished after a scroll,
   iframes as targets, body never a target, the field/keyboard handover.
@@ -99,8 +103,10 @@ proves it; **unverified** = needs the television.
 
 ## Not verified — needs the television
 
-- Anything about **feel**: glide time constant (`TAU_MS = 50`), hold ramp
-  (`RAMP_MS = 420`), tap step (`NUDGE_DP = 18`), scroll cadence.
+- Anything about **feel**: hold ramp (`RAMP_MS = 420`), tap step
+  (`NUDGE_DP = 16`), full-speed crossing (`CROSS_SECONDS = 1.25`), scroll
+  cadence. The ring is no longer eased during a hold at all (`TAU_MS = 30`
+  applies to a tap only) — see [TV.md](TV.md#feel).
 - The press/hold gesture against the real season rail. If a rail still ignores
   the click, the next lever is a longer minimum press (300–400 ms) which defeats
   most drag thresholds — one constant.

@@ -31,6 +31,23 @@ network that copy loads its shell but every rail is empty, because the API is
 unreachable; saying so and offering the copy as a *choice* is the honest version.
 "Browse offline" is exactly that old path (`localAppUrl`).
 
+## It says why
+
+The screen prints the failure in small type under the subtitle — *"DNS lookup
+failed"*, *"Connection refused"*, *"Timed out"*, *"Server returned HTTP 502"*,
+*"No answer within 30 seconds"*. A user's screenshot then **is** a usable bug
+report, which matters because that is the only diagnostic we ever get.
+
+`MainActivity.describeError()` maps the WebView error code to plain words;
+`OfflineScreen` passes it to the page through `window.FumioOfflineReason()`.
+
+## It retries by itself
+
+`MainActivity` registers a default-network callback. If the screen is up because
+there was no connection, the app retries the live site the moment the connection
+returns, instead of waiting for someone to press **Try again**. The callback does
+nothing unless the screen is showing.
+
 ## Behaviour
 
 * Page: `file:///android_asset/offline.html`, JavaScript enabled, **network loads

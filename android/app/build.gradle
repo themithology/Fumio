@@ -43,7 +43,7 @@ android {
      * fumio-release.p12 is a dedicated key committed to the repo on purpose:
      * this project ships as a direct APK, there is no store identity to
      * protect, and a key that lives in a CI secret is a key somebody forgets to
-     * set. The trade-off is stated plainly in docs/PLAN-android-tv.md §7: anyone
+     * set. The trade-off is stated plainly in docs/ANDROID.md (signing) and SETUP.md: anyone
      * with the repo can sign an APK that installs over ours. For a sideloaded
      * build that risk is the same as "anyone can build the app", and it is
      * worth paying to make updates keep people's downloads.
