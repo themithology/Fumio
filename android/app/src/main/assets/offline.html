@@ -72,6 +72,13 @@
     line-height: 1.5;
     color: var(--muted);
   }
+  .reason {
+    margin: clamp(8px, 1.2vmin, 16px) auto 0;
+    max-width: 52ch;
+    font-size: clamp(10px, 1.2vmin, 15px);
+    line-height: 1.45;
+    color: #6d7080;
+  }
   .socials {
     display: flex;
     gap: clamp(10px, 1.8vmin, 24px);
@@ -154,6 +161,7 @@
     <div class="mark" aria-hidden="true">!</div>
     <h1>Something went wrong</h1>
     <p class="sub">TheOGPirateBot could not be reached. Join our socials for updates, or try again in a moment.</p>
+    <p class="reason" id="reason" hidden></p>
 
     <div class="socials">
       <button class="tile" data-url="https://discord.gg/t6tjszp5eb">
@@ -204,6 +212,16 @@
     browse.addEventListener("click", function () {
       if (bridge && bridge.browse) bridge.browse();
     });
+
+    // The failure in plain words (DNS / TLS / timeout / HTTP 5xx), so a
+    // screenshot of this screen is a usable bug report instead of "it did not
+    // work". Hidden until native has something to say.
+    window.FumioOfflineReason = function (text) {
+      var el = document.getElementById("reason");
+      if (!el || !text) return;
+      el.textContent = "Reason: " + text;
+      el.hidden = false;
+    };
 
     // Long-press and text-drag are noise on a TV remote.
     document.addEventListener("contextmenu", function (e) { e.preventDefault(); });

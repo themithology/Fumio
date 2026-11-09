@@ -50,6 +50,8 @@ final class OfflineScreen {
     private static Runnable onRetry;
     private static Runnable onBrowse;
     private static boolean canBrowse;
+    /** What actually failed, shown in small type for the next bug report. */
+    private static String reason = "";
 
     private OfflineScreen() {}
 
@@ -67,21 +69,28 @@ final class OfflineScreen {
      * @param retryAction   called when the viewer presses "Try again".
      * @param browseAction  called when the viewer presses "Browse offline".
      * @param bundleExists  whether the built-in copy of the site is available.
+     * @param why           the failure in plain words (DNS, TLS, timeout, HTTP 5xx).
      */
     static void show(
         Activity activity,
         WebView browseWebView,
         Runnable retryAction,
         Runnable browseAction,
-        boolean bundleExists
+        boolean bundleExists,
+        String why
     ) {
         if (activity == null || activity.isFinishing() || activity.isDestroyed()) return;
         onRetry = retryAction;
         onBrowse = browseAction;
         canBrowse = bundleExists;
+        reason = why == null ? "" : why;
         if (browseWebView != null) browse = new WeakReference<>(browseWebView);
         if (isShowing()) {
-            // Already up: the new callbacks are enough, no need to reload it.
+            // Already up: the new callbacks and reason are enough, no reload.
+            if (web != null && !reason.isEmpty()) {
+                final String script = reasonScript(reason);
+                web.post(() -> web.evaluateJavascript(script, null));
+            }
             return;
         }
         try {
@@ -126,6 +135,9 @@ final class OfflineScreen {
                         // and retarget() makes the remote press THIS page.
                         TvUi.onOwnPageFinished(activity, v);
                         TvPointer.retarget(v);
+                        if (!reason.isEmpty()) {
+                            v.evaluateJavascript(reasonScript(reason), null);
+                        }
                     }
                 }
             );
@@ -153,6 +165,21 @@ final class OfflineScreen {
         }
     }
 
+    /** The page's hook for the diagnosis line; the reason is escaped for JS. */
+    private static String reasonScript(String text) {
+        StringBuilder out = new StringBuilder("window.FumioOfflineReason&&window.FumioOfflineReason(\"");
+        for (int i = 0; i < text.length(); i += 1) {
+            char c = text.charAt(i);
+            if (c == '"') out.append("\\\"");
+            else if (c == '\\') out.append("\\\\");
+            else if (c == '\n') out.append("\\n");
+            else if (c == '\r') continue;
+            else if (c < 0x20) out.append(' ');
+            else out.append(c);
+        }
+        return out.append("\");").toString();
+    }
+
     /** Take the screen down. Safe to call when it is not up. */
     static void hide() {
         boolean wasShowing = layer != null;
@@ -162,6 +189,7 @@ final class OfflineScreen {
         web = null;
         onRetry = null;
         onBrowse = null;
+        reason = "";
 
         if (frame != null) {
             try {

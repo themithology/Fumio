@@ -30,4 +30,15 @@ console.log('calls', JSON.stringify(calls));
 if (tiles.length !== 3) throw new Error('expected 3 social cards');
 if (calls.length !== 3) throw new Error('expected 3 bridge calls, got ' + calls.length);
 if (calls[0][1] !== 'https://discord.gg/t6tjszp5eb') throw new Error('discord url');
+// The diagnosis line: a screenshot must be a usable bug report.
+const reasonEl = d.getElementById('reason');
+if (!reasonEl) throw new Error('no #reason element');
+if (!reasonEl.hidden) throw new Error('#reason must start hidden');
+dom.window.FumioOfflineReason('DNS lookup failed - the domain did not resolve');
+if (reasonEl.hidden) throw new Error('#reason did not appear');
+if (!/Reason: DNS lookup failed/.test(reasonEl.textContent)) {
+  throw new Error('reason text wrong: ' + reasonEl.textContent);
+}
+console.log('reason line:', reasonEl.textContent);
+
 console.log('offline.html OK');

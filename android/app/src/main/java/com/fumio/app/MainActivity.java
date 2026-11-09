@@ -3,6 +3,8 @@ package com.fumio.app;
 import android.app.Dialog;
 import android.app.PictureInPictureParams;
 import android.content.Intent;
+import android.net.ConnectivityManager;
+import android.net.Network;
 import android.content.pm.ActivityInfo;
 import android.content.res.Configuration;
 import android.net.Uri;
@@ -127,6 +129,7 @@ public class MainActivity extends BridgeActivity {
             installBackHandler();
             handleAuthIntent(getIntent());
             armLoadWatchdog();
+            watchNetwork();
             // The update check itself is cheap and silent, but its DIALOG must
             // not be shown from onCreate: the window has no token yet and
             // AlertDialog.show() then throws BadTokenException — one of the
@@ -141,6 +144,50 @@ public class MainActivity extends BridgeActivity {
         super.onNewIntent(intent);
         setIntent(intent);
         handleAuthIntent(intent);
+    }
+
+    /**
+     * The network came back. If the offline screen is up because there was no
+     * connection, waiting for someone to press "Try again" is silly — the app
+     * can see the connection return. Costs nothing while all is well: the
+     * callback only does work while that screen is showing.
+     */
+    private ConnectivityManager.NetworkCallback networkCallback;
+
+    private void watchNetwork() {
+        try {
+            ConnectivityManager manager =
+                (ConnectivityManager) getSystemService(CONNECTIVITY_SERVICE);
+            if (manager == null) return;
+            networkCallback =
+                new ConnectivityManager.NetworkCallback() {
+                    @Override
+                    public void onAvailable(Network network) {
+                        runOnUiThread(
+                            () -> {
+                                if (!OfflineScreen.isShowing()) return;
+                                if (playerActive) return;
+                                retryLiveSite();
+                            }
+                        );
+                    }
+                };
+            manager.registerDefaultNetworkCallback(networkCallback);
+        } catch (Throwable ignored) {
+            // A missing callback is an inconvenience, not a failure.
+        }
+    }
+
+    private void stopWatchingNetwork() {
+        if (networkCallback == null) return;
+        try {
+            ConnectivityManager manager =
+                (ConnectivityManager) getSystemService(CONNECTIVITY_SERVICE);
+            if (manager != null) manager.unregisterNetworkCallback(networkCallback);
+        } catch (Throwable ignored) {
+            // already gone
+        }
+        networkCallback = null;
     }
 
     @Override
@@ -226,6 +273,9 @@ public class MainActivity extends BridgeActivity {
 
     private Runnable loadWatchdog;
 
+    /** The last thing that went wrong, verbatim — shown small on the screen. */
+    private String failureReason = "";
+
     private void showOfflineScreen() {
         if (isFinishing() || isDestroyed()) return;
         if (playerActive) return; // a video is playing: never cover it
@@ -234,8 +284,54 @@ public class MainActivity extends BridgeActivity {
             liveWebView(),
             this::retryLiveSite,
             this::browseBundledCopy,
-            localAppUrl != null && !localAppUrl.isEmpty()
+            localAppUrl != null && !localAppUrl.isEmpty(),
+            failureReason
         );
+    }
+
+    /**
+     * A user's screenshot is the only diagnostic we ever get, and "can't connect"
+     * tells us nothing: DNS, TLS, a captive portal, an ISP block, a 502 and a
+     * timeout all look identical on a black screen. The reason is printed on the
+     * offline screen, so the next screenshot IS the bug report.
+     */
+    private void noteFailure(String reason) {
+        failureReason = reason == null ? "" : reason;
+    }
+
+    /** Turn a WebResourceError into something a human can act on. */
+    private static String describeError(WebResourceError error) {
+        if (error == null) return "Load failed";
+        String text = "";
+        try {
+            CharSequence description = error.getDescription();
+            text = description == null ? "" : description.toString();
+        } catch (Exception ignored) {
+            // an old WebView without getDescription
+        }
+        int code = 0;
+        try {
+            code = error.getErrorCode();
+        } catch (Exception ignored) {
+            // same
+        }
+        // The ones that actually happen, named plainly.
+        switch (code) {
+            case WebViewClient.ERROR_HOST_LOOKUP:
+                return "DNS lookup failed - the domain did not resolve";
+            case WebViewClient.ERROR_CONNECT:
+                return "Connection refused - nothing answered at that address";
+            case WebViewClient.ERROR_TIMEOUT:
+                return "Timed out - the server did not answer";
+            case WebViewClient.ERROR_FAILED_SSL_HANDSHAKE:
+                return "TLS handshake failed";
+            case WebViewClient.ERROR_UNSUPPORTED_SCHEME:
+                return "Unsupported URL scheme";
+            default:
+                break;
+        }
+        if (text.isEmpty()) return "Load failed (error " + code + ")";
+        return text + " (" + code + ")";
     }
 
     /** "Try again": the live site, from the top, with a fresh clock. */
@@ -266,6 +362,7 @@ public class MainActivity extends BridgeActivity {
             if (OfflineScreen.isShowing()) return;
             liveFailed = true;
             openedLive = true;
+            noteFailure("No answer within 30 seconds");
             showOfflineScreen();
         };
         page.postDelayed(loadWatchdog, LOAD_TIMEOUT_MS);
@@ -738,6 +835,7 @@ public class MainActivity extends BridgeActivity {
                     openedLive = true;
                     rememberLocalAppUrl();
                     cancelLoadWatchdog();
+                    noteFailure(describeError(error));
                     // The site is down. The bundled copy used to load silently
                     // here, which on a dead network is a worse lie than saying
                     // so: the API is unreachable and every rail is empty. The
@@ -746,6 +844,7 @@ public class MainActivity extends BridgeActivity {
                 } else if (openedLive && isOwnOrigin(failed)) {
                     // Even the built-in copy did not paint.
                     cancelLoadWatchdog();
+                    noteFailure(describeError(error) + " (bundled copy)");
                     view.post(MainActivity.this::showOfflineScreen);
                 }
             }
@@ -775,6 +874,7 @@ public class MainActivity extends BridgeActivity {
                     liveFailed = true;
                     openedLive = true;
                     cancelLoadWatchdog();
+                    noteFailure("Server returned HTTP " + response.getStatusCode());
                     view.post(MainActivity.this::showOfflineScreen);
                 }
             } catch (Exception ignored) {
@@ -1887,6 +1987,11 @@ public class MainActivity extends BridgeActivity {
             verifyWall.hide();
         } catch (Exception ignored) {
             // Activity is already going away.
+        }
+        try {
+            stopWatchingNetwork();
+        } catch (Throwable ignored) {
+            // nothing registered
         }
         try {
             OfflineScreen.hide();
