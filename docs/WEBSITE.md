@@ -70,6 +70,17 @@ release. That is what `LiveSourceSync` in the Android shell depends on.
 - Caps: **My List 100**, **continue-watching 10**. Progress is pushed at most
   once a minute; list changes are debounced 2.5 s.
 
+## Build target (why it is pinned)
+
+`vite.config.js` sets `build.target: ["chrome64", "safari12"]`. The bundle is not
+only a website: it is the app's **player** and its **offline copy**, running inside
+whatever WebView the device has. Vite 6's default target leaves `??` and `?.` in
+the output, and a cheap Android TV box on a Chrome 60–80 WebView cannot *parse*
+that — the failure is a blank player on a television, with no error to see.
+Downlevelling changes grammar only, never behaviour. Verified after build: the
+emitted bundles contain **0** occurrences of `??` or `?.` (except `hls.js`, which
+is only loaded for live TV and requires a modern engine of its own).
+
 ## The proxy ladder (`src/lib/proxyTiers.js`)
 
 TMDB requests try, in order: same-origin (a local Worker in dev, a co-deployed
