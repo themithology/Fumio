@@ -325,6 +325,14 @@ export default function Player() {
 
     const readIframeEpisode = () => {
       if (type !== "tv") return;
+      // When the server list came from the WEBSITE (the app's dynamic list),
+      // the episode numbers inside those embed URLs are the SITE's numbering —
+      // anime arcs, TMDB/AniList bridges, its own season mapping. Following
+      // them would move the app to a season it never asked for ("Now tracking
+      // S2 E50" on a S1E1 click). Playback tracking stays with the player's own
+      // progress messages, and the embed URL is what the site would play.
+      const liveList = typeof window !== "undefined" && Boolean(window.__fumioLiveSources);
+      if (liveList) return;
       document.querySelectorAll("iframe").forEach((frame) => {
         const src = frame.getAttribute("src") || "";
         const match = src.match(/\/(?:embed\/)?tv\/(\d+)\/(\d+)\/(\d+)/i);
@@ -365,7 +373,11 @@ export default function Player() {
   }, [navigate, type, id]);
 
   return (
-    <div className="fixed inset-0 z-50 h-[100dvh] w-[100dvw] max-h-[100dvh] max-w-[100vw] overflow-hidden bg-black">
+    // `inset-0` + full width/height, not 100dvw/100dvh: on a television the
+    // dynamic-viewport units can disagree with the layout viewport the WebView
+    // actually has, and the player then overflows its own screen. Pinning to the
+    // containing block is exact everywhere.
+    <div className="fixed inset-0 z-50 h-full w-full overflow-hidden bg-black">
       <PlayerStage
         tmdbId={id}
         mediaType={type}

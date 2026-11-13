@@ -43,13 +43,40 @@
       }
       return null;
     };
+    function stripFrom(node) {
+      try {
+        if (!node || node.nodeType !== 1) return;
+        if (node.hasAttribute && node.hasAttribute("data-smartlink")) {
+          node.removeAttribute("data-smartlink");
+        }
+        if (node.querySelectorAll) {
+          var inner = node.querySelectorAll("[data-smartlink]");
+          for (var i = 0; i < inner.length; i += 1) inner[i].removeAttribute("data-smartlink");
+        }
+      } catch (e) {
+        /* a detached node mid-render */
+      }
+    }
     function stripSmartlink() {
-      var nodes = document.querySelectorAll("[data-smartlink]");
-      for (var i = 0; i < nodes.length; i += 1) nodes[i].removeAttribute("data-smartlink");
+      stripFrom(document.documentElement);
     }
     stripSmartlink();
     try {
-      new MutationObserver(stripSmartlink).observe(document.documentElement, {
+      new MutationObserver(function (records) {
+        // Only the nodes that CHANGED. The old callback re-queried the entire
+        // document on every mutation, and on a React page that is every frame:
+        // a full-document selector run 60 times a second is a large part of why
+        // this app felt slower than the same site in a browser.
+        for (var i = 0; i < records.length; i += 1) {
+          var record = records[i];
+          if (record.type === "attributes") {
+            stripFrom(record.target);
+            continue;
+          }
+          var added = record.addedNodes;
+          for (var j = 0; j < added.length; j += 1) stripFrom(added[j]);
+        }
+      }).observe(document.documentElement, {
         childList: true,
         subtree: true,
         attributes: true,
@@ -74,7 +101,11 @@
     function isJoinOverlay(el) {
       if (!el || el === document.body || el === document.documentElement) return false;
       if (el.closest && el.closest("header,nav,footer")) return false;
-      var text = (el.innerText || el.textContent || "").toLowerCase();
+      // textContent, never innerText: innerText asks Blink for the laid-out
+      // text, which forces a synchronous layout of that subtree. This runs over
+      // a list of candidates, so the old version re-laid-out the page it was
+      // scanning — the single most expensive thing in this file.
+      var text = (el.textContent || "").toLowerCase();
       if (text.indexOf("discord") < 0) return false;
       if (text.indexOf("join") < 0 && text.indexOf("community") < 0) return false;
       var pos = "";
@@ -87,11 +118,14 @@
       var role = (el.getAttribute && el.getAttribute("role")) || "";
       return role === "dialog" || role === "alertdialog";
     }
-    function sweep() {
+    function sweepNow() {
       var nodes = document.querySelectorAll(
         '[role="dialog"],[role="alertdialog"],.fixed.inset-0,[class*="modal"],[class*="Modal"],[class*="popup"],[class*="Popup"],body > .fixed,body > [class*="fixed"]'
       );
-      for (var i = 0; i < nodes.length; i += 1) {
+      // A page with hundreds of matches is not showing hundreds of modals; the
+      // ones that matter are on top and near the end of the document.
+      var limit = Math.min(nodes.length, 60);
+      for (var i = 0; i < limit; i += 1) {
         if (!isJoinOverlay(nodes[i])) continue;
         try {
           nodes[i].remove();
@@ -100,9 +134,15 @@
         }
       }
     }
-    sweep();
+    // Debounced: the sweep is a document-wide query and the page mutates far
+    // more often than a popup can appear. 400 ms is invisible to a viewer and
+    // turns a per-frame cost into a per-second one.
+    var sweep = debounce(sweepNow, 400);
+    sweepNow();
     try {
-      new MutationObserver(sweep).observe(document.documentElement, { childList: true, subtree: true });
+      new MutationObserver(function () {
+        sweep();
+      }).observe(document.documentElement, { childList: true, subtree: true });
     } catch (e) {
       /* optional */
     }
@@ -117,49 +157,28 @@
     "img,video,canvas{max-width:100%}" +
     'html:not([data-fumio-download]) iframe[src*="vidsrc"]:not([src*="vidsrc.party"]),iframe[src*="videasy"],iframe[src*="vidfast"],iframe[src*="vidstuck"],iframe[src*="bingr"],iframe[src*="zxcstream"],iframe[src*="2embed"],iframe[src*="multiembed"],iframe[src*="autoembed"],iframe[src*="smashy"],iframe[src*="vidlink"],iframe[src*="embed.su"],iframe[src*="tgvid.lovable"],iframe[src*="megaplay"],iframe[src*="zoko"],iframe[src*="4animo"]{display:none!important}' +
     'a[href*="watch-party"],a[href*="watchparty"],[data-nav="watch-party"]{display:none!important}' +
-    'a[href*="/download"],a[href*="download?"]{display:none!important}' +
     ".fixed,[class*=\"fixed\"]{max-width:100vw;box-sizing:border-box}" +
     ".fixed.bottom-0,.fixed.inset-x-0,[class*=\"bottom-3\"],[class*=\"bottom-4\"],[class*=\"bottom-5\"],[class*=\"bottom-6\"]{left:0!important;right:0!important;width:auto!important;max-width:calc(100vw - 16px)!important;margin-left:auto!important;margin-right:auto!important;overflow-x:auto!important;-webkit-overflow-scrolling:touch;padding-left:max(8px,env(safe-area-inset-left))!important;padding-right:max(8px,env(safe-area-inset-right))!important;padding-bottom:max(8px,env(safe-area-inset-bottom))!important}" +
     "body{padding-bottom:calc(84px + env(safe-area-inset-bottom,0px))}" +
     "[role=\"tablist\"], [class*=\"chip\"]{max-width:100%;overflow-x:auto;-webkit-overflow-scrolling:touch}";
   document.documentElement.appendChild(style);
 
-  function isDownloadHref(href) {
-    try {
-      return /^\/download\b/i.test(new URL(href, location.origin).pathname || "");
-    } catch (e) {
-      return /download/i.test(String(href || ""));
-    }
-  }
-
+  // Downloads are NOT hidden any more (2026-10-28). The shell used to hide
+  // every download entry point and bounce /download back to /, because
+  // MainActivity answered the download listener with a no-op. Downloader.java
+  // now hands file links to Android's DownloadManager, so the site's own
+  // /download window is simply part of the app — no exception, no redirect.
+  /** The one page the native shell still owns instead of the WebView. */
   function hideAppOnlyChrome() {
     var nodes = document.querySelectorAll(
-      'a[href*="watch-party"],a[href*="watchparty"],a[href*="/download"],[data-nav="watch-party"]',
+      'a[href*="watch-party"],a[href*="watchparty"],[data-nav="watch-party"]',
     );
     for (var i = 0; i < nodes.length; i += 1) {
       var el = nodes[i].closest("a,button,li") || nodes[i];
       el.style.display = "none";
     }
-    var chrome = document.querySelectorAll("a,button,[role='button']");
-    for (var n = 0; n < chrome.length; n += 1) {
-      var label = (
-        (chrome[n].getAttribute("aria-label") || "") +
-        " " +
-        (chrome[n].textContent || "")
-      ).toLowerCase();
-      if (!/\bdownload\b/.test(label)) continue;
-      if (/email|mail|donate|support/.test(label)) continue;
-      chrome[n].style.display = "none";
-    }
   }
   hideAppOnlyChrome();
-  if (/^\/download\b/i.test(location.pathname || "")) {
-    try {
-      location.replace("/");
-    } catch (e) {
-      /* stay */
-    }
-  }
 
   function parseWatch(href) {
     if (!href) return null;
@@ -180,6 +199,9 @@
         id: String(playerId),
         season: String(Number(url.searchParams.get("season") || url.searchParams.get("s") || 1) || 1),
         episode: String(Number(url.searchParams.get("episode") || url.searchParams.get("e") || 1) || 1),
+        // The site's own ?server= (slot index or stable key) — the viewer's
+        // choice, carried into the in-app player instead of being dropped.
+        server: url.searchParams.get("server") || "",
       };
     }
     var match = path.match(/\/watch\/(movie|tv|anime)\/(\d+)(?:\/(\d+)(?:\/(\d+))?)?/i);
@@ -277,8 +299,15 @@
   function openWatch(info) {
     if (!info || !info.id) return false;
     saveContinue(info);
+    var type = info.type || "tv";
+    var season = info.season || "1";
+    var episode = info.episode || "1";
     try {
-      native.openWatch(info.type || "tv", info.id, info.season || "1", info.episode || "1");
+      if (info.server && native.openWatchServer) {
+        native.openWatchServer(type, info.id, season, episode, String(info.server));
+        return true;
+      }
+      native.openWatch(type, info.id, season, episode);
       return true;
     } catch (e) {
       return false;
@@ -305,13 +334,13 @@
 
   var push = history.pushState;
   var replace = history.replaceState;
+  // parseWatch() already returns null for /download and /live-tv, so the SPA
+  // keeps those routes to itself and the app renders them in the WebView.
   history.pushState = function (state, title, url) {
-    if (url && isDownloadHref(url)) return;
     if (url && openWatch(parseWatch(url))) return;
     return push.apply(this, arguments);
   };
   history.replaceState = function (state, title, url) {
-    if (url && isDownloadHref(url)) return;
     if (url && openWatch(parseWatch(url))) return;
     return replace.apply(this, arguments);
   };
@@ -340,16 +369,6 @@
         return;
       }
       if (nested && nested.tagName === "BUTTON" && link && nested !== link) return;
-      if (link && isDownloadHref(link.href)) {
-        event.preventDefault();
-        event.stopPropagation();
-        return;
-      }
-      if (btn && /\bdownload\b/.test(label) && !/email|mail|donate|support/i.test(label)) {
-        event.preventDefault();
-        event.stopPropagation();
-        return;
-      }
       if (link) {
         var href = "";
         try {
@@ -608,16 +627,26 @@
     }
   }
 
+  // Mutations: the DOM-only jobs. Cheap, idempotent, and they only look at the
+  // document.
   var onDom = debounce(function () {
     hideAppOnlyChrome();
     stealFrames();
     patchContinueRail();
-    fitScreen();
-  }, 180);
+  }, 250);
   onDom();
+
+  // fitScreen is NOT a mutation job. It reads getComputedStyle() on every
+  // nav/footer/[class*=fixed] element and then WRITES inline styles on them, so
+  // running it per mutation is a read→write→recalc loop that janks the very
+  // page it is fitting. Once now, once per resize, once per route change.
+  var fitNow = debounce(fitScreen, 200);
+  fitNow();
+  window.addEventListener("resize", fitNow);
+  window.addEventListener("history-updated", fitNow);
+
   window.addEventListener("history-updated", patchContinueRail);
   window.addEventListener("fumio-cw-updated", patchContinueRail);
-  window.addEventListener("resize", debounce(fitScreen, 120));
   try {
     new MutationObserver(onDom).observe(document.documentElement, { childList: true, subtree: true });
   } catch (e) {

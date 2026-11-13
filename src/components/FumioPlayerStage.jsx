@@ -26,6 +26,7 @@ export default function FumioPlayerStage({
   initialSourceId = null,
   primarySource = null,
   onSelectPrimary = null,
+  onDeadEnd = null,
 }) {
   const availableSources = sources?.length ? sources : FUMIO_SOURCES;
   const initialIndex = Math.max(
@@ -76,10 +77,16 @@ export default function FumioPlayerStage({
   // Only a frame that never loads gets an error state. A loaded source is not
   // replaced later by a timer; the viewer decides when to change servers.
   useEffect(() => {
-    if (!source || phase !== "checking") return undefined;
-    timeoutRef.current = setTimeout(() => setPhase("error"), LOAD_TIMEOUT_MS);
+    if (!src || phase !== "checking") return undefined;
+    // Keyed on the URL, never on the source OBJECT: a new object with the same
+    // URL must not restart the clock, or the player can sit on "checking"
+    // forever (each restart outlived the timeout).
+    clearTimeout(timeoutRef.current);
+    timeoutRef.current = setTimeout(() => {
+      if (!loadedRef.current) setPhase("error");
+    }, LOAD_TIMEOUT_MS);
     return () => clearTimeout(timeoutRef.current);
-  }, [phase, source, src]);
+  }, [phase, src]);
 
   const selectSource = (candidate) => {
     if (!candidate) return;
@@ -110,6 +117,16 @@ export default function FumioPlayerStage({
     setPhase("playing");
   };
 
+  // A live (site-sourced) list that cannot play is a dead end: report it so the
+  // caller can fall back to the bundled servers instead of leaving the viewer
+  // on a spinner or an error screen.
+  const deadEndReported = useRef(false);
+  useEffect(() => {
+    if (phase !== "error" || !source?.live || deadEndReported.current) return;
+    deadEndReported.current = true;
+    onDeadEnd?.();
+  }, [phase, source, onDeadEnd]);
+
   if (phase === "exhausted") {
     return (
       <div className="flex h-full w-full flex-col items-center justify-center gap-2 bg-black text-center text-zinc-400">
@@ -138,7 +155,7 @@ export default function FumioPlayerStage({
 
         {source && (
           <iframe
-            key={`${src}-${candidateIndex}-${retryNonce}`}
+            key={`${src}-${retryNonce}`}
             src={src}
             onLoad={handleLoad}
             onError={() => setPhase("error")}

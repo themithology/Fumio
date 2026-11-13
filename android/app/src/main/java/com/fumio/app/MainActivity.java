@@ -3,6 +3,8 @@ package com.fumio.app;
 import android.app.Dialog;
 import android.app.PictureInPictureParams;
 import android.content.Intent;
+import android.net.ConnectivityManager;
+import android.net.Network;
 import android.content.pm.ActivityInfo;
 import android.content.res.Configuration;
 import android.net.Uri;
@@ -11,6 +13,7 @@ import android.os.Bundle;
 import android.os.Message;
 import android.util.Rational;
 import android.view.View;
+import android.view.KeyEvent;
 import android.view.ViewGroup;
 import android.webkit.ConsoleMessage;
 import android.webkit.JavascriptInterface;
@@ -71,6 +74,8 @@ public class MainActivity extends BridgeActivity {
     private String pendingPlayId;
     private String pendingPlaySeason;
     private String pendingPlayEpisode;
+    private String pendingPlayServer;
+    private String pendingPlayQuery;
     private static final Pattern EMBED_TITLE = Pattern.compile(
         "(?i)/(movie|tv|anime)/(\\d+)(?:/(\\d+)(?:/(\\d+))?)?"
     );
@@ -84,6 +89,8 @@ public class MainActivity extends BridgeActivity {
     private boolean pipOpen;
     private volatile boolean suppressEmbedOpen = true;
     private long lastPlayerOpenAt;
+    /** Polls the browse WebView for the site's SPA player route. */
+    private Runnable playerRouteWatcher;
     private View fullscreenView;
     private WebChromeClient.CustomViewCallback fullscreenCallback;
 
@@ -98,23 +105,35 @@ public class MainActivity extends BridgeActivity {
             playerScript = readAsset("fumio-player.js");
             playerOverlay = new FumioPlayerOverlay(this, this::onOverlayClosed);
             verifyClient = new VerifyClient(this);
-            new Thread(
-                () -> {
-                    try {
-                        verifyClient.entitlement();
-                    } catch (Exception ignored) {
-                        // Prefetch only — Play will retry.
-                    }
-                },
-                "ogpb-verify"
-            ).start();
+            if (!TvMode.isTv(this)) {
+                // A television never shows the wall (ensureUnlocked), so this
+                // prefetch is a wasted request there.
+                new Thread(
+                    () -> {
+                        try {
+                            verifyClient.entitlement();
+                        } catch (Exception ignored) {
+                            // Prefetch only — Play will retry.
+                        }
+                    },
+                    "ogpb-verify"
+                ).start();
+            }
             installClients(webView, bridge);
+            // TELEVISION ONLY. On a phone this call returns immediately.
+            TvUi.install(this, webView);
             LiveServers.load(this);
             LiveServers.refresh(this, webView);
             SystemBars.browse(getWindow(), webView);
             webView.post(() -> SystemBars.browse(getWindow(), webView));
             installBackHandler();
             handleAuthIntent(getIntent());
+            armLoadWatchdog();
+            watchNetwork();
+            // The update check itself is cheap and silent, but its DIALOG must
+            // not be shown from onCreate: the window has no token yet and
+            // AlertDialog.show() then throws BadTokenException — one of the
+            // reported crash types. It waits for the first resume instead.
         } catch (Exception ignored) {
             // Prefer a running Capacitor shell over a crash loop.
         }
@@ -127,9 +146,83 @@ public class MainActivity extends BridgeActivity {
         handleAuthIntent(intent);
     }
 
+    /**
+     * The network came back. If the offline screen is up because there was no
+     * connection, waiting for someone to press "Try again" is silly — the app
+     * can see the connection return. Costs nothing while all is well: the
+     * callback only does work while that screen is showing.
+     */
+    private ConnectivityManager.NetworkCallback networkCallback;
+
+    private void watchNetwork() {
+        try {
+            ConnectivityManager manager =
+                (ConnectivityManager) getSystemService(CONNECTIVITY_SERVICE);
+            if (manager == null) return;
+            networkCallback =
+                new ConnectivityManager.NetworkCallback() {
+                    @Override
+                    public void onAvailable(Network network) {
+                        runOnUiThread(
+                            () -> {
+                                if (!OfflineScreen.isShowing()) return;
+                                if (playerActive) return;
+                                retryLiveSite();
+                            }
+                        );
+                    }
+                };
+            manager.registerDefaultNetworkCallback(networkCallback);
+        } catch (Throwable ignored) {
+            // A missing callback is an inconvenience, not a failure.
+        }
+    }
+
+    private void stopWatchingNetwork() {
+        if (networkCallback == null) return;
+        try {
+            ConnectivityManager manager =
+                (ConnectivityManager) getSystemService(CONNECTIVITY_SERVICE);
+            if (manager != null) manager.unregisterNetworkCallback(networkCallback);
+        } catch (Throwable ignored) {
+            // already gone
+        }
+        networkCallback = null;
+    }
+
+    @Override
+    public void onWindowFocusChanged(boolean hasFocus) {
+        super.onWindowFocusChanged(hasFocus);
+        if (hasFocus) return;
+        try {
+            // Losing the window means the app is behind something — another app,
+            // the launcher, a system dialog. A held direction or an open hover
+            // menu must not survive that: its key-up arrives at a screen that is
+            // not there, and the ring glides on its own when the app returns.
+            // (onPause is final in BridgeActivity, so this is the hook.)
+            TvPointer.onPause();
+        } catch (Throwable ignored) {
+            // Never let the TV layer break a normal lifecycle call.
+        }
+    }
+
+    /** The update prompt is shown once the window really exists. */
+    private boolean updateChecked;
+
     @Override
     public void onResume() {
         super.onResume();
+        if (!updateChecked && !isFinishing() && !isDestroyed()) {
+            updateChecked = true;
+            // One frame after the window is attached, so the dialog has a token.
+            getWindow().getDecorView().post(() -> {
+                try {
+                    Updater.checkAndPrompt(MainActivity.this);
+                } catch (Throwable ignored) {
+                    // An update check must never be able to crash a launch.
+                }
+            });
+        }
         if (pipOpen) return;
         if (!playerActive) {
             Bridge bridge = getBridge();
@@ -157,6 +250,146 @@ public class MainActivity extends BridgeActivity {
         }
     }
 
+    /**
+     * The remote, on a TV. Dialogs (verify wall, updater) live in their own
+     * window and never reach this method, so a D-pad press inside a dialog
+     * stays a dialog press.
+     */
+    @Override
+    public boolean dispatchKeyEvent(KeyEvent event) {
+        try {
+            if (TvUi.handleKey(this, keyTarget(), event)) return true;
+        } catch (Exception ignored) {
+            // Fall through to the normal dispatch: a broken key path must not
+            // make the remote dead.
+        }
+        return super.dispatchKeyEvent(event);
+    }
+
+    // ─── when the site will not load ─────────────────────────────────────────
+
+    /** How long the live site gets to paint before we stop waiting politely. */
+    private static final long LOAD_TIMEOUT_MS = 30000L;
+
+    private Runnable loadWatchdog;
+
+    /** The last thing that went wrong, verbatim — shown small on the screen. */
+    private String failureReason = "";
+
+    private void showOfflineScreen() {
+        if (isFinishing() || isDestroyed()) return;
+        if (playerActive) return; // a video is playing: never cover it
+        OfflineScreen.show(
+            this,
+            liveWebView(),
+            this::retryLiveSite,
+            this::browseBundledCopy,
+            localAppUrl != null && !localAppUrl.isEmpty(),
+            failureReason
+        );
+    }
+
+    /**
+     * A user's screenshot is the only diagnostic we ever get, and "can't connect"
+     * tells us nothing: DNS, TLS, a captive portal, an ISP block, a 502 and a
+     * timeout all look identical on a black screen. The reason is printed on the
+     * offline screen, so the next screenshot IS the bug report.
+     */
+    private void noteFailure(String reason) {
+        failureReason = reason == null ? "" : reason;
+    }
+
+    /** Turn a WebResourceError into something a human can act on. */
+    private static String describeError(WebResourceError error) {
+        if (error == null) return "Load failed";
+        String text = "";
+        try {
+            CharSequence description = error.getDescription();
+            text = description == null ? "" : description.toString();
+        } catch (Exception ignored) {
+            // an old WebView without getDescription
+        }
+        int code = 0;
+        try {
+            code = error.getErrorCode();
+        } catch (Exception ignored) {
+            // same
+        }
+        // The ones that actually happen, named plainly.
+        switch (code) {
+            case WebViewClient.ERROR_HOST_LOOKUP:
+                return "DNS lookup failed - the domain did not resolve";
+            case WebViewClient.ERROR_CONNECT:
+                return "Connection refused - nothing answered at that address";
+            case WebViewClient.ERROR_TIMEOUT:
+                return "Timed out - the server did not answer";
+            case WebViewClient.ERROR_FAILED_SSL_HANDSHAKE:
+                return "TLS handshake failed";
+            case WebViewClient.ERROR_UNSUPPORTED_SCHEME:
+                return "Unsupported URL scheme";
+            default:
+                break;
+        }
+        if (text.isEmpty()) return "Load failed (error " + code + ")";
+        return text + " (" + code + ")";
+    }
+
+    /** "Try again": the live site, from the top, with a fresh clock. */
+    private void retryLiveSite() {
+        liveFailed = false;
+        openedLive = true;
+        armLoadWatchdog();
+        WebView page = liveWebView();
+        if (page != null) page.loadUrl(LIVE_ORIGIN + "/");
+    }
+
+    /** "Browse offline": the copy of the site that ships inside the app. */
+    private void browseBundledCopy() {
+        WebView page = liveWebView();
+        if (page == null || localAppUrl == null || localAppUrl.isEmpty()) return;
+        liveFailed = true; // do not bounce straight back to the live site
+        openedLive = true;
+        page.loadUrl(localAppUrl + "/");
+    }
+
+    private void armLoadWatchdog() {
+        cancelLoadWatchdog();
+        WebView page = liveWebView();
+        if (page == null) return;
+        loadWatchdog = () -> {
+            loadWatchdog = null;
+            if (playerActive) return;
+            if (OfflineScreen.isShowing()) return;
+            liveFailed = true;
+            openedLive = true;
+            noteFailure("No answer within 30 seconds");
+            showOfflineScreen();
+        };
+        page.postDelayed(loadWatchdog, LOAD_TIMEOUT_MS);
+    }
+
+    private void cancelLoadWatchdog() {
+        if (loadWatchdog == null) return;
+        WebView page = liveWebView();
+        if (page != null) page.removeCallbacks(loadWatchdog);
+        loadWatchdog = null;
+    }
+
+    /** Whichever WebView the viewer is actually looking at. */
+    private WebView keyTarget() {
+        if (OfflineScreen.isShowing()) {
+            // The "join our socials" screen is a page too: the arrow must press
+            // ITS buttons instead of tapping the dead site behind it.
+            WebView offline = OfflineScreen.webView();
+            if (offline != null) return offline;
+        }
+        if (playerActive && playerOverlay != null) {
+            WebView player = playerOverlay.playerWebView();
+            if (player != null) return player;
+        }
+        return liveWebView();
+    }
+
     private void installClients(WebView webView, Bridge bridge) {
         CookieManager.getInstance().setAcceptCookie(true);
         CookieManager.getInstance().setAcceptThirdPartyCookies(webView, true);
@@ -175,9 +408,9 @@ public class MainActivity extends BridgeActivity {
         settings.setJavaScriptEnabled(true);
         settings.setDomStorageEnabled(true);
         settings.setMediaPlaybackRequiresUserGesture(false);
-        webView.setDownloadListener((url, userAgent, contentDisposition, mimeType, contentLength) -> {
-            /* Downloads are disabled in the Android app. */
-        });
+        webView.setDownloadListener((url, userAgent, contentDisposition, mimeType, contentLength) ->
+            Downloader.start(this, webView, url, userAgent, contentDisposition, mimeType)
+        );
         String ua = settings.getUserAgentString();
         if (ua != null) {
             settings.setUserAgentString(ua.replace("; wv", "").replace("Version/4.0 ", ""));
@@ -185,6 +418,30 @@ public class MainActivity extends BridgeActivity {
     }
 
     public class NativeBridge {
+        /** tv-cursor.js publishes the scrollable strip under the cursor. */
+        @JavascriptInterface
+        public void tvScrollZone(String payload) {
+            TvPointer.setScrollZone(payload);
+        }
+
+        /**
+         * tv-cursor.js publishes where a tap should land (the outlined target's
+         * centre, as fractions of the viewport) every time the target changes —
+         * so a click needs no round trip and can never use a stale point.
+         */
+        @JavascriptInterface
+        public void tvTarget(String point) {
+            TvPointer.setTapTarget(point);
+        }
+
+        /** tv-cursor.js tells us when the remote belongs to a text field. */
+        @JavascriptInterface
+        public void tvInputFocused(boolean typing) {
+            TvUi.setInputFocused(typing);
+        }
+
+
+
         @JavascriptInterface
         public void openBrowser(String url) {
             if (url == null) return;
@@ -238,8 +495,46 @@ public class MainActivity extends BridgeActivity {
         }
 
         @JavascriptInterface
+        public void openDownloads() {
+            runOnUiThread(
+                () -> {
+                    try {
+                        startActivity(new Intent(MainActivity.this, DownloadsActivity.class));
+                    } catch (Exception ignored) {
+                        // Nothing to show if the activity cannot start.
+                    }
+                }
+            );
+        }
+
+        @JavascriptInterface
+        public void playDownloaded(String uri, String title) {
+            if (uri == null || uri.isEmpty()) return;
+            runOnUiThread(
+                () -> {
+                    try {
+                        startActivity(
+                            OfflinePlayerActivity.intentFor(
+                                MainActivity.this,
+                                Uri.parse(uri),
+                                title == null ? "" : title
+                            )
+                        );
+                    } catch (Exception ignored) {
+                        // Unplayable file: the list stays as it was.
+                    }
+                }
+            );
+        }
+
+        @JavascriptInterface
         public void openWatch(String type, String id, String season, String episode) {
             runOnUiThread(() -> openAppPlayer(type, id, season, episode));
+        }
+
+        @JavascriptInterface
+        public void openWatchServer(String type, String id, String season, String episode, String server) {
+            runOnUiThread(() -> openAppPlayer(type, id, season, episode, server));
         }
 
         @JavascriptInterface
@@ -372,12 +667,50 @@ public class MainActivity extends BridgeActivity {
             if (!mainFrame && (playerActive || isOwnOrigin(currentUri()) || isLiveTvPage(currentUri()))) {
                 return false;
             }
-            if (isDownloadPath(url)) return true;
+            if (isDownloadPath(url)) {
+                // The site's /download window is a real page (TG + vidsrc
+                // pools). It used to be swallowed here, which is exactly why
+                // the download button did nothing in the app; the file links
+                // inside it now reach DownloadManager through the listener
+                // installed in installClients().
+                return !(isLiveSite(url) || isOwnOrigin(url));
+            }
+            if (mainFrame && Downloader.looksLikeFile(url.toString())) {
+                // A direct file link (the download pools' final hop). Hand it
+                // to DownloadManager instead of letting the WebView try to
+                // render an .mkv.
+                Bridge bridge = getBridge();
+                Downloader.start(
+                    MainActivity.this,
+                    bridge == null ? null : bridge.getWebView(),
+                    url.toString(),
+                    null,
+                    null,
+                    null
+                );
+                return true;
+            }
             if (isPlayerEmbed(url)) {
                 openAppPlayerFromEmbed(url);
                 return true;
             }
             if (isLiveSite(url)) {
+                // The app's offline library. The website has no /my-downloads
+                // route, so this URL is the portable way to reach the files
+                // already on the phone (and a link the site can point at).
+                String livePathRaw = url.getPath();
+                if (livePathRaw != null && livePathRaw.toLowerCase(Locale.US).startsWith("/my-downloads")) {
+                    runOnUiThread(
+                        () -> {
+                            try {
+                                startActivity(new Intent(MainActivity.this, DownloadsActivity.class));
+                            } catch (Exception ignored) {
+                                // Stay where we are.
+                            }
+                        }
+                    );
+                    return true;
+                }
                 if (isVerifyPath(url)) {
                     openVerifyInChrome(url.toString());
                     return true;
@@ -462,41 +795,92 @@ public class MainActivity extends BridgeActivity {
             if (isOwnOrigin(uri)) rememberLocalAppUrl();
             if (!openedLive && !liveFailed && isOwnOrigin(uri)) {
                 openedLive = true;
+                // The live site gets 30 s to show something. If it cannot, the
+                // viewer gets a page with the socials instead of a blank white
+                // window that never explains itself.
+                armLoadWatchdog();
                 view.post(() -> view.loadUrl(LIVE_ORIGIN + "/"));
                 return;
             }
             if (isOwnOrigin(uri) && openedLive) {
+                // The bundled build (the fallback when the site is down) is our
+                // own page: pointer helper only, no viewport rewrite. Without
+                // this the cursor had no target resolution on the fallback and
+                // every press landed blind.
+                TvUi.onOwnPageFinished(MainActivity.this, view);
                 return;
             }
             if (isLiveSite(uri)) {
                 liveFailed = false;
+                cancelLoadWatchdog();
+                OfflineScreen.onPageLoaded();
                 noteBrowsePage(uri);
                 if (!liveHistoryCleared) {
                     liveHistoryCleared = true;
                     view.clearHistory();
                 }
                 injectPlayerScript(view);
+                TvUi.onLivePageFinished(MainActivity.this, view);
+                startPlayerRouteWatcher(view);
             }
             deliverPendingAuthToken();
         }
 
         @Override
         public void onReceivedError(WebView view, WebResourceRequest request, WebResourceError error) {
-            if (
-                !playerActive &&
-                !liveFailed &&
-                request != null &&
-                request.isForMainFrame() &&
-                isLiveSite(request.getUrl())
-            ) {
-                liveFailed = true;
-                openedLive = true;
-                rememberLocalAppUrl();
-                if (localAppUrl != null && !localAppUrl.isEmpty()) {
-                    view.post(() -> view.loadUrl(localAppUrl + "/"));
+            if (!playerActive && request != null && request.isForMainFrame()) {
+                Uri failed = request.getUrl();
+                if (isLiveSite(failed)) {
+                    liveFailed = true;
+                    openedLive = true;
+                    rememberLocalAppUrl();
+                    cancelLoadWatchdog();
+                    noteFailure(describeError(error));
+                    // The site is down. The bundled copy used to load silently
+                    // here, which on a dead network is a worse lie than saying
+                    // so: the API is unreachable and every rail is empty. The
+                    // screen says what happened and offers the copy as a choice.
+                    view.post(MainActivity.this::showOfflineScreen);
+                } else if (openedLive && isOwnOrigin(failed)) {
+                    // Even the built-in copy did not paint.
+                    cancelLoadWatchdog();
+                    noteFailure(describeError(error) + " (bundled copy)");
+                    view.post(MainActivity.this::showOfflineScreen);
                 }
             }
             super.onReceivedError(view, request, error);
+        }
+
+        /**
+         * The site answered, and the answer was "I am broken" (502/503/504 from
+         * a dead backend is the common one). onReceivedError never fires for
+         * that — the load succeeded — so it is caught here.
+         */
+        @Override
+        public void onReceivedHttpError(
+            WebView view,
+            WebResourceRequest request,
+            WebResourceResponse response
+        ) {
+            try {
+                if (
+                    !playerActive &&
+                    request != null &&
+                    request.isForMainFrame() &&
+                    isLiveSite(request.getUrl()) &&
+                    response != null &&
+                    response.getStatusCode() >= 500
+                ) {
+                    liveFailed = true;
+                    openedLive = true;
+                    cancelLoadWatchdog();
+                    noteFailure("Server returned HTTP " + response.getStatusCode());
+                    view.post(MainActivity.this::showOfflineScreen);
+                }
+            } catch (Exception ignored) {
+                // A status code is not worth a crash.
+            }
+            super.onReceivedHttpError(view, request, response);
         }
     }
 
@@ -623,6 +1007,9 @@ public class MainActivity extends BridgeActivity {
             settings.setUserAgentString(ua.replace("; wv", "").replace("Version/4.0 ", ""));
         }
         CookieManager.getInstance().setAcceptThirdPartyCookies(popup, true);
+        popup.setDownloadListener((url, userAgent, contentDisposition, mimeType, contentLength) ->
+            Downloader.start(this, popup, url, userAgent, contentDisposition, mimeType)
+        );
         popup.setWebChromeClient(
             new WebChromeClient() {
                 @Override
@@ -660,8 +1047,17 @@ public class MainActivity extends BridgeActivity {
         if (url == null) return true;
         // Google sign-in on the live site uses window.open(). Keep that popup
         // in-app: accounts.google.com, Firebase handler, then back to the site.
-        if (isDownloadPath(url)) {
+        if (isDownloadPath(url) || isDownloadHost(url)) {
+            // A download portal (TG / vidsrc pools, file hosts) is a real
+            // page. Keep it inside the app: its own file links are handed to
+            // DownloadManager by the popup's listener.
+            return false;
+        }
+        if (isLiveSite(url) && isWatchPath(url) && !playerActive) {
+            // A Play button that opens the site's player in a new window:
+            // hand it to the APP's player instead of showing a web page.
             dismissPopup();
+            openAppPlayerFromWatch(url);
             return true;
         }
         if (isBenignPopupUrl(url) || isAuthProvider(url) || isLiveSite(url)) return false;
@@ -775,6 +1171,85 @@ public class MainActivity extends BridgeActivity {
             appScheme.equalsIgnoreCase(url.getScheme());
     }
 
+    /**
+     * The site is a single-page app: its Play button calls history.pushState,
+     * which the WebView never reports through shouldOverrideUrlLoading —
+     * so the site's /player page used to load INSIDE the browse WebView.
+     *
+     * This watches the live WebView's location while the app player is closed
+     * and, the moment it lands on the player route, opens the APP's player and
+     * puts the browse page back where the viewer was. Deterministic: it does
+     * not depend on our injected script winning a race with the site's bundle.
+     */
+    /**
+     * The route watcher is a safety net for SPA navigation our injected
+     * pushState/replaceState patch did not see (older WebViews, a framework that
+     * keeps its own history object). It is an evaluateJavascript round trip on
+     * the UI thread, so it runs at 400 ms only just after a page load and then
+     * backs off to 2.5 s: fast where a click is about to happen, quiet after.
+     */
+    private static final long ROUTE_POLL_FAST_MS = 400L;
+    private static final long ROUTE_POLL_SLOW_MS = 2500L;
+    private int routePolls;
+
+    private void startPlayerRouteWatcher(WebView view) {
+        if (view == null) return;
+        stopPlayerRouteWatcher();
+        routePolls = 0;
+        playerRouteWatcher =
+            new Runnable() {
+                @Override
+                public void run() {
+                    Bridge bridge = getBridge();
+                    WebView live = bridge == null ? null : bridge.getWebView();
+                    if (live == null || playerActive || isFinishing() || isDestroyed()) return;
+                    live.evaluateJavascript(
+                        "(function(){try{return location.pathname+location.search;}catch(e){return '';}})()",
+                        value -> {
+                            String raw = value == null ? "" : value;
+                            if (raw.startsWith("\"") && raw.endsWith("\"") && raw.length() > 1) {
+                                raw = raw.substring(1, raw.length() - 1);
+                            }
+                            raw = raw.replace("\\/", "/");
+                            if (raw.isEmpty() || playerActive) return;
+                            Uri target = Uri.parse(LIVE_ORIGIN + (raw.startsWith("/") ? raw : "/" + raw));
+                            if (!isWatchPath(target)) return;
+                            stopPlayerRouteWatcher();
+                            openAppPlayerFromWatch(target);
+                            // Put the browse page back so closing the player
+                            // lands on the details page, not on /player.
+                            live.post(
+                                () ->
+                                    live.evaluateJavascript(
+                                        "(function(){try{history.back();}catch(e){}})()",
+                                        null
+                                    )
+                            );
+                        }
+                    );
+                    routePolls += 1;
+                    view.postDelayed(
+                        this,
+                        routePolls > 50 ? ROUTE_POLL_SLOW_MS : ROUTE_POLL_FAST_MS
+                    );
+                }
+            };
+        view.postDelayed(playerRouteWatcher, 400);
+    }
+
+    private void stopPlayerRouteWatcher() {
+        Runnable watcher = playerRouteWatcher;
+        playerRouteWatcher = null;
+        if (watcher == null) return;
+        try {
+            Bridge bridge = getBridge();
+            WebView live = bridge == null ? null : bridge.getWebView();
+            if (live != null) live.removeCallbacks(watcher);
+        } catch (Exception ignored) {
+            /* activity going away */
+        }
+    }
+
     private void injectPlayerScript(WebView view) {
         if (view == null || playerScript == null || playerScript.isEmpty()) return;
         view.evaluateJavascript(playerScript, null);
@@ -791,12 +1266,22 @@ public class MainActivity extends BridgeActivity {
     private void openAppPlayerFromWatch(Uri url) {
         if (url == null) return;
         String path = url.getPath() == null ? "" : url.getPath();
+        // The site's player is /player?id=…&type=…&season=…&episode=…&server=…
+        // `server` (slot index or stable key) is the viewer's choice and must
+        // survive the hand-off to the in-app player.
+        String server = firstQuery(url, "server", null);
+        // The whole query travels with the link: whatever the site puts in a
+        // /player URL reaches the live player untouched, so a new parameter
+        // never needs an app release again.
+        String query = url.getEncodedQuery();
         if (path.toLowerCase(Locale.US).startsWith("/player")) {
             openAppPlayer(
                 firstQuery(url, "type", "movie"),
                 firstQuery(url, "id", null),
                 firstQuery(url, "season", "1"),
-                firstQuery(url, "episode", "1")
+                firstQuery(url, "episode", "1"),
+                server,
+                query
             );
             return;
         }
@@ -806,7 +1291,9 @@ public class MainActivity extends BridgeActivity {
             match.group(1),
             match.group(2),
             firstQuery(url, "season", match.group(3)),
-            firstQuery(url, "episode", match.group(4))
+            firstQuery(url, "episode", match.group(4)),
+            server,
+            query
         );
     }
 
@@ -825,12 +1312,29 @@ public class MainActivity extends BridgeActivity {
     }
 
     private void openAppPlayer(String type, String id, String season, String episode) {
+        openAppPlayer(type, id, season, episode, null);
+    }
+
+    private void openAppPlayer(String type, String id, String season, String episode, String server) {
+        openAppPlayer(type, id, season, episode, server, null);
+    }
+
+    private void openAppPlayer(
+        String type,
+        String id,
+        String season,
+        String episode,
+        String server,
+        String sourceQuery
+    ) {
         if (id == null || id.isEmpty()) return;
         if (playerActive) return;
         pendingPlayType = type;
         pendingPlayId = id;
         pendingPlaySeason = season;
         pendingPlayEpisode = episode;
+        pendingPlayServer = server;
+        pendingPlayQuery = sourceQuery;
         pendingPlay = true;
         ensureUnlocked(this::openPendingPlayer);
     }
@@ -841,10 +1345,15 @@ public class MainActivity extends BridgeActivity {
         String id = pendingPlayId;
         String season = pendingPlaySeason;
         String episode = pendingPlayEpisode;
+        String server = pendingPlayServer;
+        String sourceQuery = pendingPlayQuery;
+        pendingPlayServer = null;
+        pendingPlayQuery = null;
         pendingPlay = false;
         if (id == null || id.isEmpty()) return;
         if (playerActive) return;
         playerActive = true;
+        stopPlayerRouteWatcher();
         lastPlayerOpenAt = System.currentTimeMillis();
         freezeLiveWebView(true, true);
         SystemBars.hide(getWindow(), liveWebView());
@@ -857,7 +1366,11 @@ public class MainActivity extends BridgeActivity {
                 onOverlayClosed(null);
                 return;
             }
-            playerOverlay.open(type, id, season, episode, seed);
+            playerOverlay.open(type, id, season, episode, seed, server, sourceQuery);
+            // The overlay is a new child of the same content frame, so it is
+            // above the cursor view: without this the ring vanishes the moment
+            // a video starts, while every press still goes to the player.
+            if (TvMode.isTv(this)) TvPointer.raise();
         });
     }
 
@@ -868,6 +1381,17 @@ public class MainActivity extends BridgeActivity {
 
     private void onOverlayClosed(String continueWatching) {
         playerActive = false;
+        // The cursor was talking to the player's WebView; the viewer is back on
+        // the browse page, so the target must follow them or every click and
+        // hover would go to a hidden view.
+        if (TvMode.isTv(this)) {
+            TvPointer.retarget(liveWebView());
+            TvPointer.raise();
+        }
+        Bridge afterBridge = getBridge();
+        if (afterBridge != null && afterBridge.getWebView() != null) {
+            startPlayerRouteWatcher(afterBridge.getWebView());
+        }
         pipOpen = false;
         setPipAutoEnter(false);
         freezeLiveWebView(false, true);
@@ -1114,6 +1638,10 @@ public class MainActivity extends BridgeActivity {
             new OnBackPressedCallback(true) {
                 @Override
                 public void handleOnBackPressed() {
+                    if (OfflineScreen.isShowing()) {
+                        OfflineScreen.hide();
+                        return;
+                    }
                     if (verifyWall.isShowing()) {
                         hideVerifyWall();
                         return;
@@ -1238,6 +1766,15 @@ public class MainActivity extends BridgeActivity {
     }
 
     private void ensureUnlocked(Runnable onUnlocked) {
+        // TELEVISION: no ad wall. A 10-foot screen is a family screen — a
+        // 12-hour unlock card in front of a film is the worst thing we could
+        // put on it. This is the ONLY place the decision is made, so the phone
+        // path is byte-for-byte what it was: verify wall, desktop Chrome
+        // hand-off and entitlement cache all still run there.
+        if (TvMode.isTv(this)) {
+            onUnlocked.run();
+            return;
+        }
         if (verifyClient != null && verifyClient.isLocallyUnlocked()) {
             onUnlocked.run();
             return;
@@ -1450,6 +1987,22 @@ public class MainActivity extends BridgeActivity {
             verifyWall.hide();
         } catch (Exception ignored) {
             // Activity is already going away.
+        }
+        try {
+            stopWatchingNetwork();
+        } catch (Throwable ignored) {
+            // nothing registered
+        }
+        try {
+            OfflineScreen.hide();
+        } catch (Throwable ignored) {
+            // Nothing on screen.
+        }
+        try {
+            // The TV cursor is a real View on this activity's content frame.
+            TvPointer.release();
+        } catch (Throwable ignored) {
+            // Nothing to release, or no TV overlay at all.
         }
         super.onDestroy();
     }

@@ -6,6 +6,11 @@ import {
 } from "../providers/sources.js";
 import { buildPlayerServerSlots } from "../providers/serverSlots.js";
 import { subscribeLiveHosts } from "../providers/liveHosts.js";
+import {
+  livePreferredKey,
+  liveSourcesAsPlayerSources,
+  subscribeLiveSources,
+} from "../providers/liveSources.js";
 import { checkStreamAlive } from "../lib/streamCheck.js";
 import ServerPickerBar from "./ServerPickerBar.jsx";
 import FumioPlayerStage from "./FumioPlayerStage.jsx";
@@ -15,6 +20,22 @@ import FumioPlayerStage from "./FumioPlayerStage.jsx";
 // the server bar below the video. This prevents a stream that briefly renders
 // and then disappears from unexpectedly jumping to VidStuck.
 const TG_LOAD_TIMEOUT_MS = 12000;
+
+/**
+ * The live list is re-read whenever the shell re-injects it — but its ARRAY
+ * identity must stay stable, or FumioPlayerStage remounts its iframe and
+ * restarts the "checking" phase on every render (infinite spinner).
+ */
+const fingerprint = (list) => {
+  if (!list?.length) return { key: "", list: null };
+  const key = list.map((source) => `${source.id}|${source.name}|${source.url()}`).join("~");
+  return { key, list };
+};
+
+const keepIfSame = (current, next) => {
+  const fresh = fingerprint(next);
+  return current.key === fresh.key ? current : fresh;
+};
 
 const rememberServer = (serverKey, titleId) => {
   try {
@@ -39,6 +60,11 @@ export default function PlayerStage({
   const [phase, setPhase] = useState("checking"); // checking | playing | error
   const [fallbackSourceId, setFallbackSourceId] = useState(null);
   const [hostsTick, setHostsTick] = useState(0);
+  // The APK shell fetches the site's CURRENT server list and injects it here.
+  // Present only inside the app; on the website this stays null and every
+  // branch below keeps using the bundled list.
+  const [liveLists, setLiveLists] = useState(() => fingerprint(liveSourcesAsPlayerSources()));
+  const liveSources = liveLists.list;
   const timeoutRef = useRef(null);
   const tgLoadedRef = useRef(false);
 
@@ -49,6 +75,7 @@ export default function PlayerStage({
   const { fallbackSources, pickerSources } = slots;
 
   useEffect(() => {
+    setLiveLists((current) => keepIfSame(current, liveSourcesAsPlayerSources()));
     setUseFumioPlayer(false);
     setPhase("checking");
     setFallbackSourceId(null);
@@ -56,6 +83,16 @@ export default function PlayerStage({
   }, [tmdbId, mediaType, season, episode]);
 
   useEffect(() => subscribeLiveHosts(() => setHostsTick((tick) => tick + 1)), []);
+
+  // A fetch that lands after the player opened (or a cached list priming it)
+  // replaces the bundled list in place — same player, same picker, new names.
+  useEffect(
+    () =>
+      subscribeLiveSources(() =>
+        setLiveLists((current) => keepIfSame(current, liveSourcesAsPlayerSources())),
+      ),
+    [tmdbId, mediaType, season, episode],
+  );
 
   // A deliberately chosen/persisted stable key is still honored, but only a
   // viewer choice can move to a fallback after this player has opened.
@@ -114,6 +151,29 @@ export default function PlayerStage({
   };
 
   const returnToPrimary = () => chooseServer(TG_VID_SOURCE);
+
+  // The site's list wins in BOTH lanes: it is the thing the owner edits. Anime
+  // included — see liveSources.js (the site also re-numbers episodes for arcs,
+  // which the envelope reports back).
+  // Everything about the surface stays ours — FumioPlayerStage is this app's
+  // player, it is only being handed a different set of servers.
+  if (liveSources?.length) {
+    return (
+      <FumioPlayerStage
+        tmdbId={tmdbId}
+        mediaType={mediaType}
+        season={season}
+        episode={episode}
+        sources={liveSources}
+        initialSourceId={livePreferredKey() || liveSources[0].id}
+        onDeadEnd={() => {
+          // Nothing in the site's list could play here (host blocked, moved,
+          // wrong episode). Drop to the bundled lane instead of a dead screen.
+          setLiveLists({ key: "", list: null });
+        }}
+      />
+    );
+  }
 
   if (useFumioPlayer) {
     return (

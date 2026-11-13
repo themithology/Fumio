@@ -17,11 +17,29 @@ import android.webkit.WebViewClient;
 import android.widget.FrameLayout;
 import androidx.webkit.WebViewAssetLoader;
 import java.io.InputStream;
+import java.util.Locale;
 import org.json.JSONArray;
 import org.json.JSONObject;
 import org.json.JSONTokener;
 
-/** Fullscreen copy of the bundled TheOGPirateBot player — the live site WebView stays put. */
+/**
+ * The app's own fullscreen player.
+ *
+ * ─── What is ours, and what comes from the website ─────────────────────────
+ * OURS: this is the bundled player build ({@code https://localhost}), with its
+ * own iframe surface, its own server picker, its own theme and its own ad
+ * behaviour. The website's player page is never embedded here — that was a
+ * mistake on 2026-10-28 and is gone.
+ *
+ * THE WEBSITE'S: the server LIST. Names, order, count and embed URLs are
+ * fetched live by {@link LiveSourceSync} (a /api/players answer when the site
+ * offers one, otherwise a harvest of the site's own player page) and pushed
+ * into the page as {@code window.__fumioLiveSources}. Rename, reorder, add or
+ * retire a server on the site and the app shows it with no APK release.
+ *
+ * If the fetch fails (offline, site down), the bundled list stays in place, so
+ * playback never depends on the network call succeeding.
+ */
 final class FumioPlayerOverlay {
 
     interface Host {
@@ -30,20 +48,36 @@ final class FumioPlayerOverlay {
 
     private static final String AUTH_KEY = "firebase:authUser:AIzaSyDapNgnKdO8l_t7BJPCO8IsbL73aILA1cI:[DEFAULT]";
 
+    /** The app's own player build, served out of the APK. */
+    private static final String LOCAL_ORIGIN = "https://localhost";
+
     private final Activity activity;
     private final Host host;
     private FrameLayout root;
     private WebView webView;
+
+    /** The player surface, for the TV key router (TvUi.keyTarget). */
+    WebView playerWebView() {
+        return webView;
+    }
     private View customView;
     private WebChromeClient.CustomViewCallback customCallback;
     private int previousOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED;
     private String pendingSeed;
+    private String pendingServer;
+    /** Raw `?…` of the link that opened the player; forwarded untouched. */
+    private String pendingSourceQuery;
     private boolean closing;
     private boolean closedOut;
     private volatile String lastType = "tv";
     private volatile String lastId = "";
     private volatile String lastSeason = "1";
     private volatile String lastEpisode = "1";
+
+    /** Bundled-build route (/watch/…) — what the offline fallback replays. */
+    private String playerPath = "";
+    /** Live server list from the website as JSON; null until it is fetched. */
+    private String pendingSourcesJson;
 
     FumioPlayerOverlay(Activity activity, Host host) {
         this.activity = activity;
@@ -59,20 +93,50 @@ final class FumioPlayerOverlay {
     }
 
     void open(String type, String id, String season, String episode, String seed) {
+        open(type, id, season, episode, seed, null);
+    }
+
+    /**
+     * @param server the site's `?server=` value (slot index or stable key) when
+     *               the player was reached from a link that carried one — the
+     *               website honours it, so the app must not strip it.
+     */
+    void open(String type, String id, String season, String episode, String seed, String server) {
+        open(type, id, season, episode, seed, server, null);
+    }
+
+    /**
+     * @param sourceQuery the ORIGINAL encoded query string of the link that
+     *                    started playback. It is forwarded verbatim (see
+     *                    mergeQuery), so a parameter the site adds tomorrow —
+     *                    an `anilist` anchor, a UI season, anything — reaches
+     *                    the live player without the app knowing its name.
+     */
+    void open(
+        String type,
+        String id,
+        String season,
+        String episode,
+        String seed,
+        String server,
+        String sourceQuery
+    ) {
         if (id == null || id.isEmpty()) return;
         closing = false;
         closedOut = false;
         pendingSeed = seed;
+        pendingServer = empty(server) ? null : server;
+        pendingSourceQuery = empty(sourceQuery) ? null : sourceQuery;
         String media = "movie".equalsIgnoreCase(type) ? "movie" : "tv";
         lastType = media;
         lastId = id;
         lastSeason = empty(season) ? "1" : season;
         lastEpisode = empty(episode) ? "1" : episode;
-        StringBuilder path = new StringBuilder("/watch/").append(media).append("/").append(id);
-        if (!"movie".equals(media)) {
-            path.append("?season=").append(empty(season) ? "1" : season);
-            path.append("&episode=").append(empty(episode) ? "1" : episode);
-        }
+        // The player UI is OURS — this bundled page, its iframe, its picker,
+        // its theme. Only the server LIST comes from the website: LiveSourceSync
+        // fetches it and injects it as window.__fumioLiveSources. If that fetch
+        // fails the page keeps its bundled list, exactly as before.
+        playerPath = localPathFor(media, id, season, episode);
         previousOrientation = activity.getRequestedOrientation();
         activity.setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE);
         if (webView == null) webView = buildPlayerView();
@@ -80,7 +144,70 @@ final class FumioPlayerOverlay {
         root.setVisibility(View.VISIBLE);
         root.bringToFront();
         hideSystemUi();
-        webView.loadUrl("https://localhost" + path);
+        loadLocal(playerPath);
+        primeLiveSources();
+    }
+
+    /**
+     * Give the player page the live server list: the cached copy immediately
+     * (zero delay), then the freshly fetched one when it lands.
+     */
+    private void primeLiveSources() {
+        pendingSourcesJson = LiveSourceSync.cachedFor(activity, lastId, lastType, lastSeason, lastEpisode);
+        applyLiveSources();
+        LiveSourceSync.fetch(
+            activity,
+            lastId,
+            lastType,
+            lastSeason,
+            lastEpisode,
+            json -> {
+                if (json == null) return;
+                pendingSourcesJson = json;
+                applyLiveSources();
+            }
+        );
+    }
+
+    /** Injects the list into the player page (no-op while it is loading). */
+    private void applyLiveSources() {
+        if (webView == null || pendingSourcesJson == null) return;
+        try {
+            final String raw = pendingSourcesJson;
+            String quoted = JSONObject.quote(raw);
+            webView.evaluateJavascript(
+                "(function(raw){try{window.__fumioLiveSources=JSON.parse(raw);"
+                    + "window.dispatchEvent(new Event('fumio-live-sources'));}catch(e){}})" + "(" + quoted + ")",
+                null
+            );
+        } catch (Exception ignored) {
+            /* the bundled list stays in place */
+        }
+    }
+
+    /**
+     * The BUNDLED build's route (/watch/{type}/{id}), used by the offline copy.
+     * A numeric `server=` means a different slot in the two lanes, so only a
+     * stable key is carried across; the offline player then falls back to its
+     * own default rather than opening the wrong host.
+     */
+    private String localPathFor(String media, String id, String season, String episode) {
+        StringBuilder local = new StringBuilder("/watch/").append(media).append("/").append(id);
+        if (!"movie".equals(media)) {
+            local.append("?season=").append(empty(season) ? "1" : season);
+            local.append("&episode=").append(empty(episode) ? "1" : episode);
+        }
+        if (!empty(pendingServer) && !pendingServer.matches("\\d+")) {
+            local.append(local.indexOf("?") >= 0 ? "&" : "?");
+            local.append("server=").append(Uri.encode(pendingServer));
+        }
+        return local.toString();
+    }
+
+    /** The build frozen in the APK — offline, or the site did not answer. */
+    private void loadLocal(String path) {
+        if (webView == null) return;
+        webView.loadUrl(LOCAL_ORIGIN + path);
     }
 
     private void attachToActivity() {
@@ -225,13 +352,16 @@ final class FumioPlayerOverlay {
 
                 @Override
                 public boolean shouldOverrideUrlLoading(WebView v, WebResourceRequest request) {
+                    if (openOfflineLibrary(request.getUrl())) return true;
                     return blockPlayerPopunder(request.getUrl(), request.isForMainFrame());
                 }
 
                 @Override
                 @SuppressWarnings("deprecation")
                 public boolean shouldOverrideUrlLoading(WebView v, String url) {
-                    return blockPlayerPopunder(url == null ? null : Uri.parse(url), true);
+                    Uri uri = url == null ? null : Uri.parse(url);
+                    if (openOfflineLibrary(uri)) return true;
+                    return blockPlayerPopunder(uri, true);
                 }
 
                 @Override
@@ -243,7 +373,15 @@ final class FumioPlayerOverlay {
                     LiveServers.bindPlayer(v);
                     applySeed();
                     injectTrail(v);
+                    // Our own page: the pointer helper only. The viewport
+                    // rewrite is for the live site alone — applying it here is
+                    // what cut the player in half on 2026-11-05.
+                    TvUi.onOwnPageFinished(activity, v);
+                    // The player page must never lose the live list: re-apply
+                    // it after every render (episode change, server switch).
+                    applyLiveSources();
                 }
+
             }
         );
         view.setWebChromeClient(
@@ -269,6 +407,10 @@ final class FumioPlayerOverlay {
                     hideCustomView();
                 }
             }
+        );
+        view.setDownloadListener(
+            (url, userAgent, contentDisposition, mimeType, contentLength) ->
+                Downloader.start(activity, view, url, userAgent, contentDisposition, mimeType)
         );
         view.addJavascriptInterface(new Bridge(), "FumioNative");
         root.addView(view);
@@ -307,9 +449,10 @@ final class FumioPlayerOverlay {
                 + "var info=inner.player_info&&typeof inner.player_info==='object'?inner.player_info:inner;"
                 + "var s=info.season||info.season_number||info.seasonNumber;"
                 + "var e=info.episode||info.episode_number||info.episodeNumber;"
-                + "if(s==null||e==null)return;var m=(location.pathname||'').match(/\\/watch\\/(movie|tv)\\/(\\d+)/);"
-                + "if(!m||m[1]==='movie')return;if(window.FumioNative&&FumioNative.trackWatch)"
-                + "FumioNative.trackWatch(m[1],m[2],String(s),String(e));"
+                + "if(s==null||e==null)return;var t='',i='';var m=(location.pathname||'').match(/\\/watch\\/(movie|tv)\\/(\\d+)/);"
+                + "if(m){t=m[1];i=m[2];}else{try{var q=new URLSearchParams(location.search||'');i=q.get('id')||'';t=(q.get('type')||'movie').toLowerCase();}catch(e2){}}"
+                + "if(!i||t==='movie')return;if(window.FumioNative&&FumioNative.trackWatch)"
+                + "FumioNative.trackWatch(t,i,String(s),String(e));"
                 + "}catch(err){}},true);})()",
             null
         );
@@ -420,11 +563,33 @@ final class FumioPlayerOverlay {
         }
     }
 
+    /**
+     * Popunders stay blocked, but the player now lives on the real site, so
+     * its own origin is allowed to own the main frame. Anything else in the
+     * top frame is still an ad.
+     */
     private static boolean blockPlayerPopunder(Uri url, boolean mainFrame) {
         if (url == null) return true;
         if (!mainFrame) return false;
         String host = url.getHost();
-        return host == null || !"localhost".equalsIgnoreCase(host);
+        if (host == null) return true;
+        String clean = host.toLowerCase(Locale.US);
+        return !(clean.equals("localhost")
+            || clean.equals("theogpiratebot.online")
+            || clean.endsWith(".theogpiratebot.online"));
+    }
+
+    /** /my-downloads belongs to the app, not to the site's router. */
+    private boolean openOfflineLibrary(Uri url) {
+        if (url == null) return false;
+        String path = url.getPath();
+        if (path == null || !path.toLowerCase(Locale.US).startsWith("/my-downloads")) return false;
+        try {
+            activity.startActivity(new android.content.Intent(activity, DownloadsActivity.class));
+        } catch (Exception ignored) {
+            /* nothing to show */
+        }
+        return true;
     }
 
     private static boolean isSpaRoute(String path) {
@@ -462,6 +627,18 @@ final class FumioPlayerOverlay {
     }
 
     private class Bridge {
+        @JavascriptInterface
+        public void openWatchServer(String type, String id, String season, String episode, String server) {
+            activity.runOnUiThread(
+                () -> open(type, id, season, episode, null, server)
+            );
+        }
+
+        @JavascriptInterface
+        public void openDownloads() {
+            activity.runOnUiThread(() -> openOfflineLibrary(Uri.parse(LOCAL_ORIGIN + "/my-downloads")));
+        }
+
         @JavascriptInterface
         public void trackWatch(String type, String id, String season, String episode) {
             if (id == null || id.isEmpty()) return;

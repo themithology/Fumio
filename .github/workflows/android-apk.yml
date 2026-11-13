@@ -40,11 +40,58 @@ jobs:
       - name: Sync web build into the Android project
         run: npx cap sync android
 
+      # If this key cannot be read, the build must say so in one line instead of
+      # failing somewhere inside the packaging task.
+      - name: Verify signing key
+        run: |
+          keytool -list -storetype PKCS12 \
+            -keystore android/app/fumio-release.p12 \
+            -storepass fumioTv2026 2>&1 | head -12
+
+      # The in-app updater compares this integer with the number in the release
+      # tag (theogpiratebot-apk-<run_number>), so every published APK knows how
+      # old it is without parsing semver or dates. Same number in both places.
       - name: Build debug APK
         working-directory: android
+        env:
+          OGPB_VERSION_CODE: ${{ github.run_number }}
         run: |
           chmod +x ./gradlew
-          ./gradlew assembleDebug --no-daemon
+          set -o pipefail
+          ./gradlew assembleDebug --no-daemon 2>&1 | tee /tmp/gradle.log || {
+            echo "### Gradle failure" >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+            sed -n '/What went wrong/,/^\* Try/p' /tmp/gradle.log | head -70 >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+            # Compile errors first (the useful ones), then whatever else broke.
+            grep -nE "^e: |error:|Caused by:|What went wrong" /tmp/gradle.log | head -20 \
+              | while IFS= read -r line; do echo "::error::$line"; done
+            # The workflow log is not always reachable from the API, but
+            # annotations are — so the tail travels as annotations too.
+            tail -25 /tmp/gradle.log | while IFS= read -r line; do
+              [ -n "$line" ] && echo "::error::tail: $line"
+            done
+            exit 1
+          }
+
+      # The job summary is not always enough (some failures are only visible in
+      # the raw log), so the log travels with the run when the build breaks.
+      - name: Upload gradle log
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gradle-log
+          path: /tmp/gradle.log
+          if-no-files-found: ignore
+
+      # The "Something went wrong" screen only works if it is really in the
+      # APK: it is the one page that cannot be fetched when it is needed. A
+      # missing asset must break the build here, not the app offline.
+      - name: Verify the offline screen is packaged
+        run: |
+          unzip -l android/app/build/outputs/apk/debug/app-debug.apk \
+            | grep -q "assets/offline.html" \
+            || { echo "::error::assets/offline.html is missing from the APK"; exit 1; }
 
       - uses: actions/upload-artifact@v4
         with:
@@ -58,7 +105,7 @@ jobs:
         with:
           tag_name: theogpiratebot-apk-${{ github.run_number }}
           name: "TheOGPirateBot debug APK #${{ github.run_number }} (${{ github.ref_name }}@${{ github.sha }})"
-          body: "TheOGPirateBot debug APK. Commit ${{ github.sha }}."
+          body: "TheOGPirateBot debug APK. Commit ${{ github.sha }}. versionCode ${{ github.run_number }}\n\nInstalls over the previous build (keeping downloads and settings), and the app offers this update by itself."
           prerelease: true
           files: android/app/build/outputs/apk/debug/app-debug.apk
         env:
