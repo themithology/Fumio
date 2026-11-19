@@ -13,6 +13,7 @@ import android.os.Bundle;
 import android.os.Message;
 import android.util.Rational;
 import android.view.View;
+import android.view.Gravity;
 import android.view.KeyEvent;
 import android.view.ViewGroup;
 import android.webkit.ConsoleMessage;
@@ -921,10 +922,31 @@ public class MainActivity extends BridgeActivity {
                 return false;
             }
             try {
-                WebView popup = createPopupWebView();
+                final WebView popup = createPopupWebView();
+                // Attached, but 2x2 and INVISIBLE: a WebView can only load a
+                // popup once it is in a window, and nothing may appear on
+                // screen before we know what the window is FOR. An ad popunder
+                // that never navigates would otherwise leave a blank black
+                // dialog over the whole app with no way out.
+                ViewGroup root = findViewById(android.R.id.content);
+                if (root != null) {
+                    FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(2, 2);
+                    lp.gravity = Gravity.BOTTOM | Gravity.END;
+                    popup.setLayoutParams(lp);
+                    popup.setVisibility(View.INVISIBLE);
+                    root.addView(popup);
+                }
+                popupView = popup;
                 ((WebView.WebViewTransport) resultMsg.obj).setWebView(popup);
                 resultMsg.sendToTarget();
-                showPopup(popup);
+                // Nothing decided in a second and a half: it was an ad that
+                // never went anywhere. Drop it.
+                popup.postDelayed(
+                    () -> {
+                        if (popupView == popup && popupDialog == null) dismissPopup();
+                    },
+                    1500
+                );
                 return true;
             } catch (Exception ignored) {
                 return false;
@@ -1052,39 +1074,73 @@ public class MainActivity extends BridgeActivity {
         }
     }
 
+    /**
+     * What the popup turned out to be. Runs on the popup's FIRST navigation,
+     * which is the first moment a URL exists at all.
+     *
+     * @return true to keep the navigation out of the popup (we handled it),
+     *         false to let the popup load the URL.
+     */
     private boolean handlePopupUrl(Uri url) {
-        if (url == null) return true;
-        // Google sign-in on the live site uses window.open(). Keep that popup
-        // in-app: accounts.google.com, Firebase handler, then back to the site.
-        if (isDownloadPath(url) || isDownloadHost(url)) {
-            // A download portal (TG / vidsrc pools, file hosts) is a real
-            // page. Keep it inside the app: its own file links are handed to
-            // DownloadManager by the popup's listener.
-            return false;
-        }
-        if (Downloader.looksLikeFile(url.toString())) {
-            // The last hop of a download pool is a direct file. The popup's own
-            // DownloadManager listener never sees it because nothing loads — it
-            // is a navigation, not a download from a page.
-            Downloader.start(this, liveWebView(), url.toString(), null, null, null);
+        if (url == null) {
             dismissPopup();
             return true;
         }
-        if (isLiveSite(url) && isWatchPath(url) && !playerActive) {
-            // A Play button that opens the site's player in a new window:
-            // hand it to the APP's player instead of showing a web page.
-            dismissPopup();
-            openAppPlayerFromWatch(url);
-            return true;
-        }
-        if (isBenignPopupUrl(url) || isAuthProvider(url) || isLiveSite(url)) return false;
+
+        // A link the site means to open: the browser, not the app.
         if (isSocial(url)) {
             openExternal(url);
             dismissPopup();
             return true;
         }
-        // Smartlink / extra ad tabs: drop them. File hosts still open from the
-        // main WebView via handleExternalUrl.
+
+        // The last hop of a download pool is a direct file, not a page: nothing
+        // loads it, so the popup's DownloadManager listener would never fire.
+        if (Downloader.looksLikeFile(url.toString())) {
+            Downloader.start(this, liveWebView(), url.toString(), null, null, null);
+            dismissPopup();
+            return true;
+        }
+
+        // The app's own download library is a native screen, not a web route.
+        String path = url.getPath() == null ? "" : url.getPath().toLowerCase(Locale.US);
+        if (isLiveSite(url) && path.startsWith("/my-downloads")) {
+            dismissPopup();
+            try {
+                startActivity(new Intent(this, DownloadsActivity.class));
+            } catch (Exception ignored) {
+                // Stay where we are.
+            }
+            return true;
+        }
+
+        // A Play button that opens the site's player in a new window: hand it
+        // to the APP's player instead of showing a web page.
+        if (isLiveSite(url) && isWatchPath(url) && !playerActive) {
+            dismissPopup();
+            openAppPlayerFromWatch(url);
+            return true;
+        }
+
+        // A download portal — or any page of our own site. It is a real page,
+        // so it belongs in the main window, where BACK and the site's own
+        // header work. This is the fix for "downloads won't open": it used to
+        // be dropped here because there was no anchor to ask.
+        if (isDownloadPath(url) || isDownloadHost(url) || isLiveSite(url)) {
+            dismissPopup();
+            WebView live = liveWebView();
+            if (live != null) live.loadUrl(url.toString());
+            return true;
+        }
+
+        // Sign-in keeps its own window and never goes to Chrome.
+        if (isAuthProvider(url) || isBenignPopupUrl(url)) {
+            if (popupDialog == null && popupView != null) showPopup(popupView);
+            return false;
+        }
+
+        // Smartlink, ad tab, popunder: gone. This is the ad block, and it sits
+        // on every server's play button because every server uses this path.
         dismissPopup();
         return true;
     }
@@ -1094,7 +1150,15 @@ public class MainActivity extends BridgeActivity {
             popup.destroy();
             return;
         }
+        // A popup is created as a 2x2 invisible probe (see onCreateWindow), so
+        // detach it before the dialog adopts it, and clear popupView first or
+        // dismissPopup() would destroy the very view we are about to show.
+        if (popup.getParent() instanceof ViewGroup) {
+            ((ViewGroup) popup.getParent()).removeView(popup);
+        }
+        popupView = null;
         dismissPopup();
+        popup.setVisibility(View.VISIBLE);
         popupView = popup;
         popupDialog = new Dialog(this, android.R.style.Theme_Black_NoTitleBar_Fullscreen);
         popupDialog.setContentView(popup);
