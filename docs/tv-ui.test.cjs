@@ -160,8 +160,12 @@ function viewportOf(dom) {
   check("a scrolled page cannot shift the probe", askLog.length, 1);
 
   checkThat("a poster resolves to its link", w.FumioTvHoverF(0.5, 0.05));
-  check("the link is outlined, not the image", doc.getElementById("card").classList.contains("fumio-tv-target"), true);
-  check("the image is not", doc.getElementById("poster").classList.contains("fumio-tv-target"), false);
+  check("the link is published, not the image", w.FumioTvTarget(), true);
+  check("and the image was never published", doc.getElementById("poster").classList.contains("fumio-tv-target"), false);
+  // The outline that used to be painted around the target is GONE: it looked
+  // like D-pad focus and cost a style recalculation per card.
+  check("nothing is outlined any more", doc.getElementById("card").classList.contains("fumio-tv-target"), false);
+  check("no outline rule is injected", /outline:3px solid/.test(doc.getElementById("fumio-tv-css").textContent), false);
 
   // The tap point is the TARGET's centre, as fractions of the viewport.
   doc.getElementById("card").getBoundingClientRect = () => ({
@@ -199,7 +203,8 @@ function viewportOf(dom) {
   check("the site's handler ran", clicked, 1);
 
   w.FumioTvHoverF(0.5, 0.55); // y ≈ 422 → inside the button's band
-  check("a <button> is a target", doc.getElementById("button").classList.contains("fumio-tv-target"), true);
+  check("a <button> is a target", w.FumioTvTarget(), true);
+  check("the button is not given a class", doc.getElementById("button").classList.contains("fumio-tv-target"), false);
 
   // Backwards-compatible pixel API maps through the same fractions.
   w.FumioTvHover(512, 384);

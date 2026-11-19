@@ -60,7 +60,6 @@ final class TvPointer {
 
     private static final String TAG = "FumioTvPointer";
 
-    /** One tap of the D-pad, in dp. Precise, but not fiddly. */
     // ─── THE FEEL ────────────────────────────────────────────────────────────
     // A mouse, not a rocket. The previous numbers were a reaction to "it feels
     // slow" and overshot: 0.40 s to cross the screen means one accidental
@@ -70,13 +69,25 @@ final class TvPointer {
     //
     // A tap is still the fine control — 16 dp, about one card — and the speed
     // lives in the hold.
-    private static final float NUDGE_DP = 16f;
+    /**
+     * THERE IS NO STEP ANY MORE.
+     *
+     * The old model moved the aim 16 dp the instant a direction was pressed and
+     * then glided from there. That first jump is what a D-pad does, and on a TV
+     * it is the whole difference between "a pointer" and "focus navigation that
+     * lags": the ring appeared to snap, pause, then catch up. One motion now —
+     * the hold ramps from rest, and a short press is simply a short hold.
+     */
     /** Time for a held direction to reach full speed. */
-    private static final float RAMP_MS = 420f;
+    private static final float RAMP_MS = 240f;
     /** Full speed covers the screen width in this many seconds. */
-    private static final float CROSS_SECONDS = 1.25f;
-    /** Speed the instant a hold starts, as a fraction of full speed. */
-    private static final float SLOW_FRACTION = 0.28f;
+    private static final float CROSS_SECONDS = 1.05f;
+    /**
+     * Speed the instant a hold starts, as a fraction of full speed. This is the
+     * one number that makes a TAP usable: a 120 ms press has to cross roughly a
+     * card, so the start cannot be gentler than this.
+     */
+    private static final float SLOW_FRACTION = 0.45f;
     /**
      * HOVER is two different things and they must not be handled the same way.
      *
@@ -90,11 +101,11 @@ final class TvPointer {
      *   on the UI thread and forced a style resolution in the page, which is
      *   what made the cursor jitter.
      */
-    private static final long HOVER_MS = 28L;
+    private static final long HOVER_MS = 55L;
     /** Cadence while sweeping — sparse on purpose, see {@link #maybeHover}. */
-    private static final long SWEEP_HOVER_MS = 110L;
+    private static final long SWEEP_HOVER_MS = 170L;
     private static final float HOVER_MIN_DP = 1f;
-    private static final long RESOLVE_MS = 150L;
+    private static final long RESOLVE_MS = 260L;
     /** Continuous edge scrolling cadence. */
     private static final long SCROLL_MS = 80L;
     private static final long HINT_MS = 5200L;
@@ -243,19 +254,12 @@ final class TvPointer {
      * and returns when that is already us.
      */
     static void raise() {
+        // Only ever a reference comparison: if the ring is already the last
+        // child this returns without touching the hierarchy. Re-ordering the
+        // hint here used to remove and re-add a sibling on EVERY key press,
+        // which forces a layout pass of the whole content frame — a stutter on
+        // the exact frame the viewer pressed the button.
         bringCursorToFront();
-        try {
-            if (hintView != null && hintView.getParent() instanceof ViewGroup) {
-                ViewGroup parent = (ViewGroup) hintView.getParent();
-                // Keep the hint BELOW the ring so it can never cover the point.
-                if (parent.getChildAt(parent.getChildCount() - 1) == hintView) {
-                    parent.removeView(hintView);
-                    parent.addView(hintView, 0);
-                }
-            }
-        } catch (Exception ignored) {
-            /* a hint out of order is not worth a crash */
-        }
     }
 
     /**
@@ -483,10 +487,9 @@ final class TvPointer {
         boolean idle = held == 0;
         held |= bit;
         if (idle) {
-            // A fresh hold always starts slow: the first frames are the fine
-            // aiming, and the ramp is what makes long moves feel effortless.
+            // A fresh hold always starts from rest and ramps. Nothing jumps:
+            // see the FEEL block at the top of the class.
             heldMs = 0;
-            nudge(webView, bit);
         }
         if (cursor != null) {
             cursor.setArrowVisible(true);
@@ -498,22 +501,6 @@ final class TvPointer {
         lastKeyAt = SystemClock.uptimeMillis();
         held &= ~bit;
         if (held == 0) heldMs = 0;
-    }
-
-    /** The tap: an immediate, predictable step (NUDGE_DP), no acceleration. */
-    private static void nudge(WebView webView, int bit) {
-        float density = webView.getResources().getDisplayMetrics().density;
-        float step = NUDGE_DP * density;
-        float dx = 0;
-        float dy = 0;
-        if ((bit & HOLD_LEFT) != 0) dx -= step;
-        if ((bit & HOLD_RIGHT) != 0) dx += step;
-        if ((bit & HOLD_UP) != 0) dy -= step;
-        if ((bit & HOLD_DOWN) != 0) dy += step;
-        float[] bounds = bounds(webView, density, BOUNDS);
-        aimX = clamp(aimX + dx, bounds[0], bounds[2]);
-        aimY = clamp(aimY + dy, bounds[1], bounds[3]);
-        if (cursor != null) cursor.setAim(aimX, aimY);
     }
 
     // ─── the glide ──────────────────────────────────────────────────────────
@@ -779,29 +766,17 @@ final class TvPointer {
      *      scroll.
      */
     private static void click(final WebView webView) {
-        // No bridge round trip before the tap: the page has already published the
-        // target's centre on every hover tick, so a press responds on the frame it
-        // happens. Refreshing the outline first cost 20–50 ms of dead time, which
-        // is exactly what makes a remote feel laggy.
-        float fx;
-        float fy;
-        float slop = TAP_TARGET_SLOP_DP * webView.getResources().getDisplayMetrics().density;
-        boolean targetIsCurrent =
-            tapTarget != null &&
-            Math.abs(aimX - tapTargetX) <= slop &&
-            Math.abs(aimY - tapTargetY) <= slop;
-        if (targetIsCurrent) {
-            fx = tapTarget[0];
-            fy = tapTarget[1];
-        } else {
-            // No target yet, or the arrow has moved off the one it describes: tap
-            // where the arrow actually is. A stale centre is worse than the pixel
-            // under the cursor — it presses something the viewer is not on.
-            float[] at = fractions(webView);
-            fx = at[0];
-            fy = at[1];
-            scheduleResolve(0); // and refresh it for the key-up that follows
-        }
+        // No bridge round trip before the tap: OK responds on the frame it is
+        // pressed. Asking the page first cost 20–50 ms of dead time, which is
+        // exactly what makes a remote feel slow.
+        //
+        // THE PIXEL UNDER THE RING, always. This used to prefer the centre of
+        // the highlighted element, which pressed the right card but not the
+        // right spot — on a rail it moved the click up to half a card away from
+        // the pointer. A viewer judges a pointer by where it lands.
+        float[] at = fractions(webView);
+        float fx = at[0];
+        float fy = at[1];
 
         // View coordinates, and NOTHING else: dispatchTouchEvent does not take
         // the view's scroll offset (a WebView scrolls its content in the layer,

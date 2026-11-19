@@ -54,7 +54,7 @@ are packaged, and the APK installs as an update of the previous one.
 
 | Needs a device | Why |
 |---|---|
-| Pointer **feel** (1.25 s cross, 420 ms ramp, 16 dp tap) | a matter of taste measured in a hand, not an assertion |
+| Pointer **feel** (1.05 s cross, 240 ms ramp, no step on press) | a matter of taste measured in a hand, not an assertion |
 | Whether the site's hover menus open at ~30 Hz on your SoC | Chromium's hit-testing speed on that hardware |
 | `TEXT_ZOOM = 115` | can clip tight components; it is one constant |
 | Real season-rail drag thresholds | the min press (70 ms) is the lever if a rail ignores a tap |

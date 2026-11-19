@@ -26,20 +26,20 @@ Two exceptions, both deliberate:
 
 | Function | Arguments | Returns | Meaning |
 |---|---|---|---|
-| `FumioTvHoverF(fx, fy)` | fractions | `bool` (a target exists) | Resolve what is under the point, outline it, publish tap centre |
-| `FumioTvTapPoint()` | — | `"fx,fy"` or `""` | The outlined target's centre, for a forgiving tap |
-| `FumioTvClick()` | — | `bool` | DOM click on the outlined target (legacy path) |
-| `FumioTvPress()` | — | `bool` | Full pointer/mouse/click sequence on the outlined target |
+| `FumioTvHoverF(fx, fy)` | fractions | `bool` (a target exists) | Resolve what is under the point and publish the rail under it (no outline, no class write) |
+| `FumioTvTapPoint()` | — | `"fx,fy"` or `""` | The target's centre (no longer used for pressing: a press lands on the ring) |
+| `FumioTvClick()` | — | `bool` | DOM click on the resolved target (legacy path) |
+| `FumioTvPress()` | — | `bool` | Pointer/mouse/click sequence at the resolved target (fallback only) |
 | `FumioTvSawPress()` | — | `bool` | Did the last touch become a click? Resets on read |
 | `FumioTvScroll(dx, dy)` | `-1\|0\|1` | `bool` | Scroll the strip under the cursor; page second |
 | `FumioTvScrollable()` | — | JSON `{x,y}` | Diagnostics: can the page scroll each way |
-| `FumioTvTarget()` / `FumioTvVisibleTarget()` | — | `bool` | Is there a live outlined target |
+| `FumioTvTarget()` / `FumioTvVisibleTarget()` | — | `bool` | Is there a live target under the pointer |
 
 ## Page → native (`window.FumioNative`, TV members)
 
 | Method | Payload | When |
 |---|---|---|
-| `tvTarget(point)` | `"fx,fy"` (6 dp) | the outlined target's centre changed |
+| `tvTarget(point)` | `"fx,fy"` (6 dp) | the target under the ring changed |
 | `tvScrollZone(payload)` | `"l,t,r,b,canX,canY"` (fractions, 4 dp) | the scrollable strip under the cursor changed |
 | `tvInputFocused(bool)` | — | focus entered/left a text field |
 
@@ -75,7 +75,9 @@ frame (ring moved ≥ 1 px, ≥ 28 ms since last)
 3. **`FumioTvHoverF` clears its per-element `getComputedStyle` cache** on each
    resolve, so a stylesheet swap is never stale; within a resolve the cache saves
    every repeated ancestor walk.
-4. **The outline is drawn with `outline` + `box-shadow`**, never anything that
-   takes layout space: a target must never move the page it sits on.
+4. **Nothing is drawn on the page and nothing is written to it.** The old
+   outline used `outline` + `box-shadow` so it never took layout space, but it
+   still invalidated style for the card on every move, and on a television it
+   read as D-pad focus. The ring is the only highlight.
 5. **Any new `window.FumioTv*` function must be added to `docs/tv-ui.test.cjs`**
    — that harness is the only thing that runs before a TV does.

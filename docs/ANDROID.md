@@ -9,6 +9,33 @@ television (TV behaviour is switched on at runtime, never by a separate build).
 - version: `versionCode = OGPB_VERSION_CODE` (CI stamps the run number),
   `versionName = "1.<versionCode>"`
 
+## Popups: one window, one decision
+
+`onCreateWindow` cannot decide what a popup is, because the page calls
+`window.open()` and only *then* gives the window a URL. So every user-gesture
+popup gets:
+
+1. a 2×2 **invisible** probe WebView attached to the content frame (a WebView
+   only loads once it is in a window, and nothing may appear on screen before
+   we know what the window is for), then
+2. one decision in `handlePopupUrl` on the popup's first navigation.
+
+| The popup is… | What happens |
+|---|---|
+| the site itself (`/download`, a download portal) | loaded in the **main window** — BACK and the site's header work, and its file links reach `DownloadManager` |
+| `/my-downloads` | opens the native download library |
+| a direct file (`.mkv`, `.mp4`, `.zip`, …) | handed straight to `Downloader`, popup closed |
+| Discord / Telegram / Instagram | opened in the browser |
+| Google / Firebase (sign-in) | revealed as a popup, never sent to Chrome |
+| anything else | **dropped** — this is the ad block, on every server's play button |
+
+A popup that never navigates anywhere is dropped after 1.5 s, so an ad popunder
+cannot leave a blank black screen.
+
+Foreign http(s) navigations from the site's own pages are swallowed too: the
+site's deliberate external links use `FumioNative.openBrowser`. `mailto:`,
+`tel:` and `sms:` still reach the phone.
+
 ## The shell in one paragraph
 
 Capacitor loads the bundled web build at `https://localhost`, and the shell
@@ -55,7 +82,7 @@ the **cursor**.
 | `playDownloaded(uri,title)` | play a downloaded file |
 | `lockLandscape()` / `unlockOrientation()` | the player's orientation |
 | `requestJson(method,url,headers,body,id)` | HTTPS without CORS — the reply arrives as a `fumio-native-http` event with `{id, result}` |
-| `tvTarget(point)` | TV: the outlined target's centre |
+| `tvTarget(point)` | TV: the target's centre under the ring |
 | `tvScrollZone(payload)` | TV: the scrollable strip under the cursor |
 | `tvInputFocused(bool)` | TV: the remote belongs to a text field |
 

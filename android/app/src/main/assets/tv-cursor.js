@@ -42,16 +42,12 @@
     var css =
       "html.fumio-tv,html.fumio-tv *{scroll-behavior:auto!important;" +
       "-webkit-tap-highlight-color:transparent;}" +
-      // 3 px so it survives being seen from three metres, plus a dark halo
-      // OUTSIDE the lit line so the outline reads on a white poster and on a
-      // black background alike. outline+box-shadow draw outside the box, so
-      // nothing in the grid moves when the target changes.
-      "html.fumio-tv ." +
-      TARGET_CLASS +
-      "{outline:3px solid rgba(255,255,255,.92)!important;" +
-      "outline-offset:2px!important;border-radius:6px;" +
-      "box-shadow:0 0 0 5px rgba(0,0,0,.35)!important;" +
-      "transition:outline-offset 90ms ease-out;}" +
+      // NO TARGET OUTLINE. A box that appeared around whatever the cursor was
+      // over looked exactly like D-pad focus navigation — the thing the pointer
+      // replaced — and it cost a style recalculation on the whole document
+      // every time it moved between cards, which on a TV box is the stutter
+      // people could see. The ring under the pointer IS the feedback now.
+      // Text fields keep their focus ring: that one is information.
       "html.fumio-tv input:focus,html.fumio-tv textarea:focus{" +
       "outline:2px solid rgba(255,212,0,.9)!important;outline-offset:2px!important;}";
     var tag = document.createElement("style");
@@ -244,21 +240,10 @@
       publishTarget(current); // same element, possibly a new position
       return;
     }
-    if (current) {
-      try {
-        current.classList.remove(TARGET_CLASS);
-      } catch (e) {
-        /* ignore */
-      }
-    }
+    // No classList write: touching the class attribute of a card in a React
+    // grid invalidates style for it and its subtree, on every pointer move.
+    // The element is tracked in a variable; the page is never modified.
     current = el && el.isConnected ? el : null;
-    if (current) {
-      try {
-        current.classList.add(TARGET_CLASS);
-      } catch (e) {
-        /* ignore */
-      }
-    }
     publishTarget(current);
   }
 
