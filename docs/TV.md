@@ -42,11 +42,15 @@ The pointer is a **ring** (`TvCursorView`):
 
 | | Value | Why |
 |---|---|---|
-| Tap step | 16 dp | about one card; precise without being fiddly |
-| Ramp to full speed | 420 ms | no spool-up, no jolt |
-| Full speed | crosses the screen in 1.25 s | a deliberate mouse, not a rocket |
-| Start speed | 28 % of full | first frames are fine aiming |
+| Tap | no step; a tap is simply a short hold | the old 16 dp jump on press was the D-pad tell: snap, pause, catch up |
+| Ramp to full speed | 240 ms | responsive without a jolt |
+| Full speed | crosses the screen in 1.05 s | a deliberate mouse, not a rocket |
+| Start speed | 45 % of full | a 120 ms tap has to cross about one card |
 | Hold watchdog | 1.2 s without a key event | IR/Bluetooth remotes really do lose a key-up; without this the ring glides on its own |
+
+**There is no focus ring.** An outline box around whatever the pointer is over
+looked like D-pad navigation and cost a style recalculation per card. The ring
+is the only feedback, and `OK` presses the pixel under it.
 
 ## Hover — the part that makes it a mouse
 

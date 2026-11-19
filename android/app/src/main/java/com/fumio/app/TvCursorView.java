@@ -166,9 +166,15 @@ final class TvCursorView extends View {
         setClickable(false);
         setWillNotDraw(false);
 
-        // A hardware layer means the transform is the compositor's job and the
-        // ring is rasterised once instead of per frame.
-        setLayerType(LAYER_TYPE_HARDWARE, null);
+        // NO hardware layer. It was there to rasterise the ring once, and it
+        // bought exactly one bug: a hardware layer is evicted under memory
+        // pressure (a TV box playing 4K has very little to spare), and a view
+        // that only invalidates on a click then draws NOTHING — the ring
+        // simply vanished mid-film and never came back. Four small circles
+        // per frame is not worth that: the view stays software-drawn, so it
+        // cannot disappear, and place() invalidates so it always redraws
+        // where it moved to.
+        setLayerType(LAYER_TYPE_NONE, null);
 
         contrast.setStyle(Paint.Style.STROKE);
         contrast.setColor(CONTRAST);
@@ -276,12 +282,17 @@ final class TvCursorView extends View {
         float top = y - centre;
         setTranslationX(left - getLeft());
         setTranslationY(top - getTop());
+        // Nothing is cached any more, so the pixels have to be produced for the
+        // new position. It is a 120 dp view: this is cheaper than the layer it
+        // replaces, and it cannot be evicted out from under us.
+        invalidate();
     }
 
     @Override
     protected void onAttachedToWindow() {
         super.onAttachedToWindow();
         place(renderX, renderY);
+        invalidate();
     }
 
     @Override

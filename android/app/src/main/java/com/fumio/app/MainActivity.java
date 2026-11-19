@@ -732,7 +732,7 @@ public class MainActivity extends BridgeActivity {
                 return null;
             }
             if (!mainFrame) return false;
-            if (isDiscord(url)) {
+            if (isSocial(url)) {
                 openExternal(url);
                 return true;
             }
@@ -744,9 +744,17 @@ public class MainActivity extends BridgeActivity {
                 if (openedLive || googleRedirectActive) return false;
                 return true;
             }
-            if (isLaunchableUri(url)) {
-                openExternal(url);
-                return true;
+            // Everything else that wants to leave the page is an ad, a
+            // smartlink or a popunder: swallow it. A window or tab opening
+            // over the film is the single thing that makes the app feel cheap,
+            // and there is no legitimate foreign http(s) navigation from the
+            // site's own pages — the links it MEANS to open (socials, help)
+            // come through FumioNative.openBrowser, which is untouched.
+            //
+            // mailto:/tel:/sms: are not ads and belong to the phone.
+            String foreignScheme = url.getScheme();
+            if (foreignScheme != null && !foreignScheme.toLowerCase(Locale.US).startsWith("http")) {
+                if (isLaunchableUri(url)) openExternal(url);
             }
             return true;
         }
@@ -891,32 +899,33 @@ public class MainActivity extends BridgeActivity {
             this.delegate = delegate;
         }
 
+        /**
+         * Every user-gesture popup gets a real window, and {@link #handlePopupUrl}
+         * decides what it is on the popup's FIRST load.
+         *
+         * Why not decide here: the page calls window.open() and only THEN gives
+         * the window its URL, so at this point there usually is no URL to look
+         * at. The old code asked the anchor under the cursor, which is empty for
+         * window.open() — so a download button did nothing at all (the reported
+         * "downloads won't open"), while a target=_blank ad was still launched
+         * into Chrome. One window, one decision, at the moment the URL exists.
+         */
         @Override
         public boolean onCreateWindow(WebView view, boolean isDialog, boolean isUserGesture, Message resultMsg) {
             if (!isUserGesture || resultMsg == null || !(resultMsg.obj instanceof WebView.WebViewTransport)) {
                 return false;
             }
-            try {
-                Uri hitUrl = hitTestUri(view);
-                if (isDiscord(hitUrl)) {
-                    openExternal(hitUrl);
-                    return false;
-                }
-                if (isDownloadPath(hitUrl)) return false;
-                if (isAuthProvider(hitUrl) || googleRedirectActive) {
-                    WebView popup = createPopupWebView();
-                    ((WebView.WebViewTransport) resultMsg.obj).setWebView(popup);
-                    resultMsg.sendToTarget();
-                    showPopup(popup);
-                    return true;
-                }
-                // Real target=_blank links (Donate, payments). Iframe popunders
-                // have no anchor hit, so they stay blocked.
-                if (hitUrl != null && !isPlayerEmbed(hitUrl) && !isWatchPath(hitUrl) && isLaunchableUri(hitUrl)) {
-                    openExternal(hitUrl);
-                    return false;
-                }
+            Uri hitUrl = hitTestUri(view);
+            if (isSocial(hitUrl)) {
+                openExternal(hitUrl);
                 return false;
+            }
+            try {
+                WebView popup = createPopupWebView();
+                ((WebView.WebViewTransport) resultMsg.obj).setWebView(popup);
+                resultMsg.sendToTarget();
+                showPopup(popup);
+                return true;
             } catch (Exception ignored) {
                 return false;
             }
@@ -1053,6 +1062,14 @@ public class MainActivity extends BridgeActivity {
             // DownloadManager by the popup's listener.
             return false;
         }
+        if (Downloader.looksLikeFile(url.toString())) {
+            // The last hop of a download pool is a direct file. The popup's own
+            // DownloadManager listener never sees it because nothing loads — it
+            // is a navigation, not a download from a page.
+            Downloader.start(this, liveWebView(), url.toString(), null, null, null);
+            dismissPopup();
+            return true;
+        }
         if (isLiveSite(url) && isWatchPath(url) && !playerActive) {
             // A Play button that opens the site's player in a new window:
             // hand it to the APP's player instead of showing a web page.
@@ -1061,7 +1078,7 @@ public class MainActivity extends BridgeActivity {
             return true;
         }
         if (isBenignPopupUrl(url) || isAuthProvider(url) || isLiveSite(url)) return false;
-        if (isDiscord(url)) {
+        if (isSocial(url)) {
             openExternal(url);
             dismissPopup();
             return true;
@@ -1674,6 +1691,12 @@ public class MainActivity extends BridgeActivity {
                 }
             }
         );
+    }
+
+    /** Anything the site links to on purpose: Discord, Telegram, Instagram. */
+    private boolean isSocial(Uri url) {
+        if (isDiscord(url)) return true;
+        return hostMatches(url, "t.me", "telegram.me", "telegram.org", "instagram.com", "instagr.am");
     }
 
     private boolean isDiscord(Uri url) {

@@ -55,7 +55,7 @@ the **cursor**.
 | `playDownloaded(uri,title)` | play a downloaded file |
 | `lockLandscape()` / `unlockOrientation()` | the player's orientation |
 | `requestJson(method,url,headers,body,id)` | HTTPS without CORS — the reply arrives as a `fumio-native-http` event with `{id, result}` |
-| `tvTarget(point)` | TV: the outlined target's centre |
+| `tvTarget(point)` | TV: the target's centre under the ring |
 | `tvScrollZone(payload)` | TV: the scrollable strip under the cursor |
 | `tvInputFocused(bool)` | TV: the remote belongs to a text field |
 
