@@ -170,41 +170,41 @@ jobs:
 
       - name: Boot the TV emulator
         run: |
-          # GitHub's runner has the SDK but not every tool on PATH, and
-          # `emulator` in particular usually lives only in $ANDROID_HOME.
           export ANDROID_SDK_ROOT="${ANDROID_SDK_ROOT:-${ANDROID_HOME}}"
           PATH="$ANDROID_SDK_ROOT/emulator:$ANDROID_SDK_ROOT/platform-tools:$ANDROID_SDK_ROOT/cmdline-tools/latest/bin:$PATH"
           export PATH
-          set -x
-          echo "=== sdk: $ANDROID_SDK_ROOT"
-          which avdmanager emulator adb sdkmanager || true
-          echo "=== images ==="
-          sdkmanager --list_installed 2>/dev/null | grep -i tv || true
-          echo "=== devices ==="
-          avdmanager list device -c 2>/dev/null | grep -i tv || true
-          echo no | avdmanager create avd -n fumio-tv \
-            -k "system-images;android-34;android-tv;x86_64" \
-            -d tv_1080p --force
-          # A television AVD has no touchscreen, so the app must not need one;
-          # the runner is headless and software-rendered.
+          IMG="system-images;android-34;android-tv;x86_64"
+
+          say() { echo "$1"; echo "${1}" | while IFS= read -r l; do [ -n "$l" ] && echo "::error::$l"; done; }
+
+          DEVICE=""
+          if avdmanager list device -c 2>/dev/null | grep -qx "tv_1080p"; then
+            DEVICE="-d tv_1080p"
+          else
+            say "no tv_1080p profile here; using the default device for a TV image"
+          fi
+
+          if ! echo no | avdmanager create avd -n fumio-tv -k "$IMG" $DEVICE --force > /tmp/boot.log 2>&1; then
+            say "avdmanager could not create the AVD:"
+            say "$(tail -6 /tmp/boot.log)"
+            exit 1
+          fi
+
           emulator -avd fumio-tv -no-window -no-audio -no-boot-anim \
             -no-snapshot -no-metrics -gpu swiftshader_indirect \
             -netdelay none -netspeed full > /tmp/emulator.log 2>&1 &
           adb wait-for-device
           for i in $(seq 1 180); do
-            booted=$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')
-            [ "$booted" = "1" ] && break
+            [ "$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" = "1" ] && break
             sleep 2
           done
           echo "boot_completed=$(adb shell getprop sys.boot_completed | tr -d '\r')"
           echo "characteristics=$(adb shell getprop ro.build.characteristics | tr -d '\r')"
-          adb shell getprop ro.build.version.sdk
-          # If this is not a tv, every assertion afterwards is meaningless.
-          adb shell getprop ro.build.characteristics | grep -q tv || {
-            echo "::error::the emulator booted, but it is not a TV image"
-            tail -30 /tmp/emulator.log
+          if ! adb shell getprop ro.build.characteristics | grep -q tv; then
+            say "the emulator is not running a TV image:"
+            say "$(tail -12 /tmp/emulator.log)"
             exit 1
-          }
+          fi
 
       - name: TV behaviour tests (on the emulator)
         run: |
