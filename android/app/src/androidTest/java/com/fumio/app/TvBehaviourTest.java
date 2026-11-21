@@ -107,12 +107,18 @@ public class TvBehaviourTest {
             new android.view.KeyEvent(android.view.KeyEvent.ACTION_DOWN, android.view.KeyEvent.KEYCODE_A);
         assertEquals("a", TvRemoteKeys.charactersFor(letter));
 
+        // SIX arguments: (downTime, eventTime, action, code, repeat, metaState).
+        // The five-argument overload's last parameter is the REPEAT COUNT, so
+        // passing META_SHIFT_ON there silently sent shift-less key events — which
+        // is exactly what the first version of this test did, and it looked like
+        // an app bug for two runs.
         android.view.KeyEvent upper =
             new android.view.KeyEvent(
                 0,
                 0,
                 android.view.KeyEvent.ACTION_DOWN,
                 android.view.KeyEvent.KEYCODE_B,
+                0,
                 android.view.KeyEvent.META_SHIFT_ON
             );
         assertEquals("B", TvRemoteKeys.charactersFor(upper));
