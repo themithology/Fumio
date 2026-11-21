@@ -170,14 +170,18 @@ jobs:
 
       - name: Boot the TV emulator
         run: |
+          # GitHub's runner has the SDK but not every tool on PATH, and
+          # `emulator` in particular usually lives only in $ANDROID_HOME.
+          export ANDROID_SDK_ROOT="${ANDROID_SDK_ROOT:-${ANDROID_HOME}}"
+          PATH="$ANDROID_SDK_ROOT/emulator:$ANDROID_SDK_ROOT/platform-tools:$ANDROID_SDK_ROOT/cmdline-tools/latest/bin:$PATH"
+          export PATH
           set -x
-          echo "=== tools ==="
+          echo "=== sdk: $ANDROID_SDK_ROOT"
           which avdmanager emulator adb sdkmanager || true
           echo "=== images ==="
           sdkmanager --list_installed 2>/dev/null | grep -i tv || true
           echo "=== devices ==="
           avdmanager list device -c 2>/dev/null | grep -i tv || true
-          exec 2> >(tee /tmp/boot.log >&2)
           echo no | avdmanager create avd -n fumio-tv \
             -k "system-images;android-34;android-tv;x86_64" \
             -d tv_1080p --force
@@ -204,6 +208,9 @@ jobs:
 
       - name: TV behaviour tests (on the emulator)
         run: |
+          export ANDROID_SDK_ROOT="${ANDROID_SDK_ROOT:-${ANDROID_HOME}}"
+          PATH="$ANDROID_SDK_ROOT/emulator:$ANDROID_SDK_ROOT/platform-tools:$PATH"
+          export PATH
           set -o pipefail
           cd android
           chmod +x ./gradlew
