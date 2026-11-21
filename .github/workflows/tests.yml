@@ -170,6 +170,14 @@ jobs:
 
       - name: Boot the TV emulator
         run: |
+          set -x
+          echo "=== tools ==="
+          which avdmanager emulator adb sdkmanager || true
+          echo "=== images ==="
+          sdkmanager --list_installed 2>/dev/null | grep -i tv || true
+          echo "=== devices ==="
+          avdmanager list device -c 2>/dev/null | grep -i tv || true
+          exec 2> >(tee /tmp/boot.log >&2)
           echo no | avdmanager create avd -n fumio-tv \
             -k "system-images;android-34;android-tv;x86_64" \
             -d tv_1080p --force
@@ -210,7 +218,24 @@ jobs:
 
       - name: Emulator log
         if: failure()
-        run: tail -40 /tmp/emulator.log || true
+        run: |
+          test -f /tmp/emulator.log && tail -40 /tmp/emulator.log || echo "no emulator log"
+          test -f /tmp/boot.log && tail -40 /tmp/boot.log || echo "no boot log"
+
+      # The runtime log is not reliably downloadable from an API client, but
+      # annotations always are - so the tail travels as one.
+      - name: Say why it failed
+        if: failure()
+        run: |
+          {
+            echo "=== emulator ==="
+            test -f /tmp/emulator.log && tail -25 /tmp/emulator.log || echo none
+            echo "=== boot ==="
+            test -f /tmp/boot.log && tail -25 /tmp/boot.log || echo none
+          } > /tmp/say.txt 2>&1 || true
+          tail -12 /tmp/say.txt | while IFS= read -r line; do
+            [ -n "$line" ] && echo "::error::$line"
+          done
 
       - name: Device report in the summary
         if: always()
