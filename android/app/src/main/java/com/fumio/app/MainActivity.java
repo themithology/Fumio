@@ -5,12 +5,15 @@ import android.app.PictureInPictureParams;
 import android.content.Intent;
 import android.net.ConnectivityManager;
 import android.net.Network;
+import android.content.ComponentCallbacks2;
 import android.content.pm.ActivityInfo;
 import android.content.res.Configuration;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Message;
+import android.os.SystemClock;
+import android.util.Log;
 import android.util.Rational;
 import android.view.View;
 import android.view.Gravity;
@@ -121,6 +124,7 @@ public class MainActivity extends BridgeActivity {
                 ).start();
             }
             installClients(webView, bridge);
+            installCrashTrail();
             // TELEVISION ONLY. On a phone this call returns immediately.
             TvUi.install(this, webView);
             LiveServers.load(this);
@@ -265,6 +269,56 @@ public class MainActivity extends BridgeActivity {
             // make the remote dead.
         }
         return super.dispatchKeyEvent(event);
+    }
+
+    // ─── when the renderer dies ──────────────────────────────────────────────
+
+    /**
+     * The WebView's renderer was killed (out of memory, or a GPU crash). The
+     * only safe move is to throw the dead WebView away and build a new one:
+     * touching a WebView whose renderer is gone throws from every call.
+     *
+     * What the viewer sees: the site reloads where they were, rather than the
+     * app disappearing. If they were watching, the player is closed first —
+     * a dead player cannot keep playing, and pretending otherwise loses the
+     * resume point.
+     */
+    private boolean recoverFromDeadRenderer(WebView dead, RenderProcessGoneDetail detail) {
+        Log.w("FumioCrash", "WebView renderer gone (crashed=" + (detail != null && detail.didCrash()) + ")");
+        if (isFinishing() || isDestroyed()) return true;
+
+        String lastUrl = lastGoodUrl;
+        try {
+            if (playerActive) closeAppPlayer();
+        } catch (Throwable ignored) {
+            // The player is dead either way.
+        }
+        try {
+            dismissPopup();
+        } catch (Throwable ignored) {
+            // Popup is dead either way.
+        }
+
+        // Rebuild the browse WebView on a clean slate.
+        try {
+            if (dead != null && dead.getParent() instanceof ViewGroup) {
+                ((ViewGroup) dead.getParent()).removeView(dead);
+            }
+            if (dead != null) dead.destroy();
+        } catch (Throwable ignored) {
+            // A dead WebView often refuses to be destroyed; nothing to do.
+        }
+        // recreate() rebuilds the activity, the bridge and a fresh WebView. It
+        // starts at the site's home rather than the page they were on: a
+        // remembered URL is not worth restoring state the site no longer has,
+        // and a wrong page on a television is harder to get out of than home.
+        if (lastUrl != null) Log.i("FumioCrash", "was at " + lastUrl);
+        try {
+            recreate();
+        } catch (Throwable error) {
+            Log.w("FumioCrash", "recreate failed: " + error.getMessage());
+        }
+        return true;
     }
 
     // ─── when the site will not load ─────────────────────────────────────────
@@ -643,9 +697,35 @@ public class MainActivity extends BridgeActivity {
         return null;
     }
 
+    /** The last URL the live WebView actually finished loading. */
+    private String lastGoodUrl;
+    private long lastTrimAt;
+
     private class TrustedWebViewClient extends BridgeWebViewClient {
         TrustedWebViewClient(Bridge bridge) {
             super(bridge);
+        }
+
+        /**
+         * THE CRASH THAT KILLED TVs.
+         *
+         * On Android 8+, if the WebView's renderer process is killed — and a TV
+         * box does that constantly, because the renderer is the biggest thing
+         * in the process and the system is always short of RAM — the default
+         * behaviour is to crash the WHOLE APP. Not "the page failed": a hard
+         * crash, no dialog, straight to the TV home screen. Every other WebView
+         * in this app is short-lived; this one is the app.
+         *
+         * @return true = we handled it, the app stays alive.
+         */
+        @Override
+        public boolean onRenderProcessGone(WebView view, RenderProcessGoneDetail detail) {
+            try {
+                return recoverFromDeadRenderer(view, detail);
+            } catch (Throwable ignored) {
+                // Never let the recovery path itself crash.
+                return true;
+            }
         }
 
         @Override
@@ -801,6 +881,8 @@ public class MainActivity extends BridgeActivity {
         public void onPageFinished(WebView view, String url) {
             super.onPageFinished(view, url);
             Uri uri = url == null ? null : Uri.parse(url);
+            if (uri != null) lastGoodUrl = url;
+            showDiagnosticsIfAsked(view, url);
             if (isOwnOrigin(uri)) rememberLocalAppUrl();
             if (!openedLive && !liveFailed && isOwnOrigin(uri)) {
                 openedLive = true;
@@ -2060,6 +2142,137 @@ public class MainActivity extends BridgeActivity {
             startActivity(any);
         } catch (Exception ignored) {
             openExternal(uri);
+        }
+    }
+
+    /**
+     * A television tells us when it is short of memory — and it does, often,
+     * while a 4K stream is decoding. This is where the app gives memory back
+     * BEFORE the system decides the cheaper fix is to kill the process.
+     *
+     * Two things only: let go of what is behind us, and let go of the renderer
+     * caches. Nothing visible changes, and no page state is lost — the cache
+     * is re-fetched from the network on the next load.
+     */
+    /**
+     * The crash trail.
+     *
+     * A crash on a television is otherwise invisible: no adb, no DevTools, just
+     * the home screen. This records the last uncaught exception — class, line
+     * and message — on disk, and {@code #diagnostics} at the end of the app's
+     * address shows it. WebView renderer deaths are handled (they do not reach
+     * here); this is for everything else, including OOM.
+     *
+     * Nothing is uploaded and nothing leaves the device.
+     */
+    private void installCrashTrail() {
+        final Thread.UncaughtExceptionHandler previous = Thread.getDefaultUncaughtExceptionHandler();
+        if (previous instanceof CrashTrail) return;
+        Thread.setDefaultUncaughtExceptionHandler(new CrashTrail(previous));
+    }
+
+    private class CrashTrail implements Thread.UncaughtExceptionHandler {
+        private final Thread.UncaughtExceptionHandler previous;
+
+        CrashTrail(Thread.UncaughtExceptionHandler previous) {
+            this.previous = previous;
+        }
+
+        @Override
+        public void uncaughtException(Thread thread, Throwable error) {
+            try {
+                StackTraceElement[] frames = error.getStackTrace();
+                StackTraceElement top = frames != null && frames.length > 0 ? frames[0] : null;
+                String text =
+                    error.getClass().getName() +
+                    "\n" +
+                    (top == null ? "?" : top.toString()) +
+                    "\n" +
+                    (error.getMessage() == null ? "" : error.getMessage());
+                java.io.FileOutputStream out =
+                    openFileOutput("last-crash.txt", MODE_PRIVATE);
+                out.write(text.getBytes(StandardCharsets.UTF_8));
+                out.close();
+            } catch (Throwable ignored) {
+                // A crash reporter that crashes is worse than none.
+            } finally {
+                if (previous != null) previous.uncaughtException(thread, error);
+            }
+        }
+    }
+
+    /** The diagnostics panel, as text. Empty when nothing has gone wrong. */
+    private String diagnostics() {
+        StringBuilder out = new StringBuilder();
+        try {
+            out.append("Fumio ").append(getPackageManager().getPackageInfo(getPackageName(), 0).versionName);
+            out.append(" (").append(Build.VERSION.RELEASE).append(")\n");
+            out.append("TV: ").append(TvMode.isTv(this)).append("\n");
+            out.append("heap: ")
+                .append(Runtime.getRuntime().totalMemory() / (1024 * 1024))
+                .append("/")
+                .append(Runtime.getRuntime().maxMemory() / (1024 * 1024))
+                .append(" MB\n");
+        } catch (Throwable ignored) {
+            // Best effort only.
+        }
+        try {
+            java.io.File file = new java.io.File(getFilesDir(), "last-crash.txt");
+            if (file.exists()) {
+                java.io.BufferedReader reader =
+                    new java.io.BufferedReader(new java.io.InputStreamReader(new java.io.FileInputStream(file), StandardCharsets.UTF_8));
+                String line;
+                out.append("\nlast crash:\n");
+                while ((line = reader.readLine()) != null) out.append(line).append("\n");
+                reader.close();
+            } else {
+                out.append("\nno crash recorded");
+            }
+        } catch (Throwable ignored) {
+            out.append("\ncrash log unreadable");
+        }
+        return out.toString();
+    }
+
+    /** {@code #diagnostics} anywhere in the app's address. */
+    private boolean showDiagnosticsIfAsked(WebView view, String url) {
+        if (url == null || !url.contains("#diagnostics")) return false;
+        String text = diagnostics();
+        String script =
+            "(function(t){var p=document.getElementById('fumio-diag');"
+                + "if(!p){p=document.createElement('pre');p.id='fumio-diag';"
+                + "p.style.cssText='position:fixed;inset:0;margin:0;padding:24px;z-index:2147483647;"
+                + "background:#000;color:#fff;font-size:16px;white-space:pre-wrap;overflow:auto';"
+                + "document.body.appendChild(p);p.onclick=function(){p.remove();};}"
+                + "p.textContent=t;})(" + JSONObject.quote(text) + ");";
+        try {
+            view.evaluateJavascript(script, null);
+        } catch (Throwable ignored) {
+            // Nothing to show.
+        }
+        return true;
+    }
+
+    @Override
+    public void onTrimMemory(int level) {
+        super.onTrimMemory(level);
+        try {
+            if (level < ComponentCallbacks2.TRIM_MEMORY_RUNNING_LOW) return;
+            long now = SystemClock.uptimeMillis();
+            // Bounded: this is a cache clear, not something to do per frame.
+            if (now - lastTrimAt < 15000L) return;
+            lastTrimAt = now;
+            WebView live = liveWebView();
+            if (live == null) return;
+            if (level >= ComponentCallbacks2.TRIM_MEMORY_COMPLETE) {
+                // The next thing the system does is kill this process.
+                live.clearCache(true);
+                live.freeMemory();
+            } else if (level >= ComponentCallbacks2.TRIM_MEMORY_RUNNING_CRITICAL) {
+                live.freeMemory();
+            }
+        } catch (Throwable ignored) {
+            // Trimming is best-effort by definition.
         }
     }
 

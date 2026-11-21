@@ -44,6 +44,27 @@ the live site, except the four things the app owns: the **player**, the
 **downloads**, the **access wall**, and the **update prompt** — plus, on a TV,
 the **cursor**.
 
+## Surviving a dead renderer
+
+A WebView is a separate process. When the system kills it — and on a TV it will,
+because it is the largest thing in the app — Android's default is to crash the
+**whole application**. Both WebViews here handle it:
+
+- **Browse** (`TrustedWebViewClient.onRenderProcessGone`): the dead view is
+  destroyed and the activity is rebuilt. The viewer sees the site reload.
+- **Player** (`FumioPlayerOverlay`'s own handler): the player is closed and the
+  browse page comes back with its resume point intact.
+
+Related, and in the manifest: `android:largeHeap="true"` and
+`android:hardwareAccelerated="true"`. `MainActivity.onTrimMemory` frees renderer
+memory and, at the worst level, the WebView cache — bounded to once per 15 s.
+`FumioPlayerOverlay` releases every `<video>` (`pause`, `removeAttribute('src')`,
+`load()`) **before** its WebView is destroyed, which is what stops decoders
+piling up across episodes.
+
+The last uncaught exception is written to `files/last-crash.txt` and shown by
+`#diagnostics` — see [`TV.md`](TV.md#diagnostics--the-crash-report-without-a-cable).
+
 ## Files
 
 | File | Job |

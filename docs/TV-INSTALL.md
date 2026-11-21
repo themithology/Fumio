@@ -55,7 +55,22 @@ If you prefer the manual route: `adb install -r` the new APK. Same result.
 > one uninstall first — which clears app data. After that, updates install over
 > the top.
 
-## 5. When something looks wrong
+## 5. When it crashes
+
+Do this **before** reinstalling — the information is lost on a reinstall.
+
+1. Open the app, go to any page, and put `#diagnostics` at the end of the
+   address. A black panel shows version, heap and the **last crash** (class,
+   line, message). Photograph it.
+2. If you can reach the box with `adb`, run
+   `adb logcat -s FumioCrash:* AndroidRuntime:E` and reproduce: renderer deaths
+   are logged as `WebView renderer gone`.
+3. Report the panel or the log line. Without one of them a TV crash is a guess.
+
+Full explanation, including what the app now does about memory, is in
+[`TV.md`](TV.md#memory--why-the-app-used-to-crash-on-a-tv).
+
+## 6. When something looks wrong
 
 - **Blank screen on launch, remote does nothing** → press BACK once, then MENU
   (the app logs a `FumioTvSelfTest` line with candidate counts and per-direction
