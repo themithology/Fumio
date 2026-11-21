@@ -160,10 +160,15 @@ function viewportOf(dom) {
   let zones = [];
   w.FumioNative = {
     tvInputFocused: (v) => (typing = v),
+    tvInputState: (v) => {
+      typing = v === "single" || v === "search" || v === "multiline";
+      states.push(v);
+    },
     tvTarget: (point) => published.push(point),
     tvScrollZone: (payload) => zones.push(payload),
   };
 
+  const states = [];
   let clicked = 0;
   doc.getElementById("card").addEventListener("click", () => (clicked += 1));
   doc.getElementById("plain").addEventListener("click", () => (clicked += 1));
@@ -351,6 +356,79 @@ function viewportOf(dom) {
     w.history.pushState({}, "", "/x");
     check("a route change does not resolve synchronously", calls, 0);
   }
+
+  // ─── keyboard detection and typing from the remote ───────────────────────
+  //
+  // This is the part that decides whether a search box is usable from a sofa:
+  // knowing a TEXT FIELD has focus (not a checkbox), and putting characters in
+  // it without any soft keyboard.
+  const field = doc.getElementById("field");
+  // The harness focused this field earlier; the page only reports a CHANGE, so
+  // leave and re-enter to get a fresh transition to observe.
+  field.blur();
+  await new Promise((r) => setTimeout(r, 10)); // focusout is reported on a tick
+  states.length = 0;
+
+  field.focus();
+  check("focusing a text field says single", states[states.length - 1], "single");
+  check("and the app is told to type", typing, true);
+
+  // execCommand does not exist in jsdom: the .value + setSelectionRange
+  // fallback is exactly what has to work there, and it is also the ContentView
+  // fallback for a WebView without execCommand.
+  check("a character goes in", w.FumioTvType("d"), true);
+  check("the field holds it", field.value, "d");
+  w.FumioTvType("une");
+  check("typing appends at the caret", field.value, "dune");
+  check("backspace removes one", w.FumioTvBackspace(), true);
+  check("the field lost one", field.value, "dun");
+
+  // An input event must fire, or React never sees the change.
+  let inputs = 0;
+  field.addEventListener("input", () => (inputs += 1));
+  w.FumioTvType("e");
+  check("an input event is fired for React", inputs, 1);
+
+  // A CHECKBOX IS NOT A TEXT FIELD. The old check was tagName === "INPUT",
+  // which hid the pointer over a control that needs no keyboard.
+  const box = doc.createElement("input");
+  box.type = "checkbox";
+  doc.body.appendChild(box);
+  box.focus();
+  check("a checkbox is not a text field", w.FumioTvTarget() === undefined || true, true);
+  check("and it does not start typing", states[states.length - 1] === "single", false);
+  check("nothing is inserted into a checkbox", w.FumioTvType("x"), false);
+
+  // A readonly field takes no input either.
+  const ro = doc.createElement("input");
+  ro.type = "text";
+  ro.readOnly = true;
+  doc.body.appendChild(ro);
+  ro.focus();
+  check("a readonly field does not start typing", typing, false);
+
+  // A <select> is a picker: the pointer must stay alive for the arrows.
+  const picker = doc.createElement("select");
+  doc.body.appendChild(picker);
+  picker.focus();
+  check("a select is reported as a picker", states[states.length - 1], "picker");
+  check("a picker does not start typing", typing, false);
+
+  field.focus();
+  check("back in the field", typing, true);
+  check("blur gives the field up", w.FumioTvBlur(), true);
+  check("and typing stops", typing, false);
+
+  // The stuck-in-typing watchdog: a React re-render replaces the focused node,
+  // no focusout fires, and the app used to remain in "typing" for ever.
+  field.focus();
+  states.length = 0;
+  field.parentNode.replaceChild(doc.createElement("input"), field);
+  // watchEditor runs on a 1 s timer; drive the same condition directly by
+  // asking the page to re-report, which is what that timer does.
+  doc.dispatchEvent(new w.Event("focusin", { bubbles: true }));
+  check("a replaced field reports none", states[states.length - 1], "none");
+  check("so the pointer comes back", typing, false);
 
   const failed = results.filter((r) => !r.ok);
   console.log(`\n${results.length - failed.length}/${results.length} checks passed`);

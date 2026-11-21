@@ -28,6 +28,7 @@
   var native = window.FumioNative || null;
   var current = null;
   var inputFocused = false;
+  var inputState = "none";
 
   // What counts as "clickable" without asking the page. Deliberately broad: a
   // false positive costs one outline, a false negative makes a control
@@ -576,23 +577,206 @@
 
   // ─── hand the remote to the keyboard while typing ───────────────────────
 
+  /**
+   * DOES THIS FIELD NEED A KEYBOARD?
+   *
+   * The old check was `tagName === "INPUT"`, which is true for a checkbox, a
+   * radio and a submit button - so ticking a box hid the pointer and handed the
+   * remote to a keyboard nobody asked for. The distinction that matters is
+   * "text goes in here", and that is decided by the TYPE, not the tag.
+   */
+  var TEXT_TYPES = {
+    text: 1, search: 1, url: 1, email: 1, password: 1, tel: 1,
+    number: 1, date: 1, "datetime-local": 1, month: 1, time: 1, week: 1
+  };
+
+  function editorOf(el) {
+    if (!el || el.nodeType !== 1) return null;
+    var tag = (el.tagName || "").toUpperCase();
+    if (tag === "TEXTAREA") return "multiline";
+    if (tag === "INPUT") {
+      var type = (el.getAttribute("type") || "text").toLowerCase();
+      if (!TEXT_TYPES[type]) return null;
+      return type === "search" ? "search" : "single";
+    }
+    if (el.isContentEditable === true) return "multiline";
+    return null;
+  }
+
+  /** The focused element, if it is editable at all. */
+  function editableOf(el) {
+    var kind = editorOf(el);
+    if (!kind || !el) return null;
+    if (el.disabled === true || el.readOnly === true) return null;
+    return kind;
+  }
+
+  function activeEditor() {
+    return editableOf(document.activeElement);
+  }
+
+  /**
+   * Tell native what kind of typing surface is focused, when it changes.
+   *
+   * "picker" is reported rather than ignored: a <select> on a TV is opened with
+   * OK and then navigated with the arrows, so native must keep the pointer alive
+   * for it - but must not hide the ring or start eating letters.
+   */
   function reportInput() {
     var el = document.activeElement;
-    var typing =
-      !!el &&
-      (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable === true);
-    if (typing === inputFocused) return;
-    inputFocused = typing;
+    var kind = editableOf(el);
+    var tag = el && el.tagName ? el.tagName.toUpperCase() : "";
+    var state = kind || (tag === "SELECT" ? "picker" : "none");
+    if (state === inputState) return;
+    inputState = state;
+    inputFocused = state === "single" || state === "search" || state === "multiline";
     try {
-      if (native && native.tvInputFocused) native.tvInputFocused(typing);
+      if (native && native.tvInputState) native.tvInputState(state);
+      else if (native && native.tvInputFocused) native.tvInputFocused(inputFocused);
     } catch (e) {
       /* bridge is optional */
     }
   }
+
+  /**
+   * THE STUCK-IN-TYPING BUG.
+   *
+   * A React page can replace the focused node while it is focused: no focusout
+   * ever fires, document.activeElement silently becomes <body>, and the app
+   * stayed in "typing" with the ring hidden and no way back. This is a cheap
+   * comparison, and it is the only thing that recovers that state.
+   */
+  function watchEditor() {
+    if (inputFocused && !activeEditor()) reportInput();
+  }
+
+  // ─── typing, from the remote ─────────────────────────────────────────────
+  //
+  // Most Android TV boxes ship NO soft keyboard at all, so "show the IME" solves
+  // nothing there: the viewer points at a search box, presses OK, and the app
+  // goes quiet. These two functions are what actually makes a search box work
+  // from a sofa — native forwards the remote's printable keys here and this
+  // inserts them the way a keyboard would, character by character.
+
+  function setValue(el, text) {
+    try {
+      el.value = text;
+      return true;
+    } catch (e) {
+      /* a field that refuses .value is handled below */
+    }
+    return false;
+  }
+
+  function caretOf(el) {
+    try {
+      if (typeof el.selectionStart === "number") return [el.selectionStart, el.selectionEnd];
+    } catch (e) {
+      /* some input types throw on selectionStart */
+    }
+    var len = (el.value || "").length;
+    return [len, len];
+  }
+
+  /**
+   * Insert text at the caret, exactly as a keypress would.
+   *
+   * React-controlled inputs keep their own copy of the value, so assigning
+   * .value alone is invisible to them forever. execCommand('insertText') goes
+   * through the browser's editing pipeline, which fires beforeinput/input and
+   * updates React — so it is tried FIRST, and .value is the fallback for
+   * contenteditable and for WebViews where execCommand is gone.
+   */
+  window.FumioTvType = function (text) {
+    var kind = activeEditor();
+    if (!kind || typeof text !== "string" || !text) return false;
+    var el = document.activeElement;
+    try {
+      el.focus();
+      var inserted = false;
+      try {
+        inserted = document.execCommand("insertText", false, text);
+      } catch (e) {
+        inserted = false;
+      }
+      if (!inserted && !el.isContentEditable) {
+        var range = caretOf(el);
+        var value = el.value == null ? "" : String(el.value);
+        var next = value.slice(0, range[0]) + text + value.slice(range[1]);
+        if (setValue(el, next)) {
+          try {
+            el.setSelectionRange(range[0] + text.length, range[0] + text.length);
+          } catch (e) {
+            /* number/date inputs refuse it */
+          }
+          el.dispatchEvent(new Event("input", { bubbles: true }));
+        } else {
+          return false;
+        }
+      } else if (!inserted) {
+        // contenteditable: execCommand failed and there is no .value
+        return false;
+      }
+      return true;
+    } catch (e) {
+      return false;
+    }
+  };
+
+  /** Delete one character backwards (the remote's DEL / backspace). */
+  window.FumioTvBackspace = function () {
+    var kind = activeEditor();
+    if (!kind) return false;
+    var el = document.activeElement;
+    try {
+      el.focus();
+      var deleted = false;
+      try {
+        deleted = document.execCommand("delete", false, null);
+      } catch (e) {
+        deleted = false;
+      }
+      if (deleted) return true;
+      if (el.isContentEditable) return false;
+      var range = caretOf(el);
+      if (range[0] === range[1] && range[0] === 0) return true; // nothing to do
+      var value = el.value == null ? "" : String(el.value);
+      var from = range[0] === range[1] ? range[0] - 1 : range[0];
+      var next = value.slice(0, from) + value.slice(range[1]);
+      if (!setValue(el, next)) return false;
+      try {
+        el.setSelectionRange(from, from);
+      } catch (e) {
+        /* ignore */
+      }
+      el.dispatchEvent(new Event("input", { bubbles: true }));
+      return true;
+    } catch (e) {
+      return false;
+    }
+  };
+
+  /** Give up the field: closes the keyboard, puts the ring back. */
+  window.FumioTvBlur = function () {
+    try {
+      if (document.activeElement && document.activeElement.blur) {
+        document.activeElement.blur();
+      }
+      reportInput();
+      return true;
+    } catch (e) {
+      return false;
+    }
+  };
+
   document.addEventListener("focusin", reportInput, true);
   document.addEventListener("focusout", function () {
     setTimeout(reportInput, 0);
   }, true);
+
+  // Once a second, and only while the app believes it is typing: recovers a
+  // field the page replaced underneath us.
+  setInterval(watchEditor, 1000);
 
   // A page that re-renders under the cursor (SPA route change) must not leave a
   // stale outline on a dead node.

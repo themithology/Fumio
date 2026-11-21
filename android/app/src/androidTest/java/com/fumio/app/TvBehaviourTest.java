@@ -85,6 +85,73 @@ public class TvBehaviourTest {
         assertTrue("versionCode must be stamped by CI, was " + code, code > 0);
     }
 
+    /**
+     * THE KEYBOARD QUESTION, ON A REAL TV IMAGE.
+     *
+     * A search box is useless if nothing can type into it. This asserts both
+     * independent halves, because a TV may have neither, either, or both:
+     *
+     *   - the IME path exists and cannot crash when the box has no keyboard;
+     *   - a letter key produces text through {@link TvRemoteKeys} — the path that
+     *     works when there is no IME at all, which is the normal case on a TV.
+     */
+    @Test
+    public void theTypingPathIsWired() {
+        android.view.inputmethod.InputMethodManager imm =
+            (android.view.inputmethod.InputMethodManager)
+                context().getSystemService(Context.INPUT_METHOD_SERVICE);
+        assertTrue("no InputMethodManager on this device", imm != null);
+        // Deliberately NOT asserted: whether an IME is installed. On a TV it
+        // often is not, and that is not a failure — it is the reason the app
+        // types for the viewer instead of waiting for a keyboard.
+
+        android.view.KeyEvent letter =
+            new android.view.KeyEvent(android.view.KeyEvent.ACTION_DOWN, android.view.KeyEvent.KEYCODE_A);
+        android.view.KeyEvent capital =
+            new android.view.KeyEvent(
+                0,
+                0,
+                android.view.KeyEvent.ACTION_DOWN,
+                android.view.KeyEvent.KEYCODE_B,
+                android.view.KeyEvent.META_SHIFT_ON
+            );
+        android.view.KeyEvent digit =
+            new android.view.KeyEvent(android.view.KeyEvent.ACTION_DOWN, android.view.KeyEvent.KEYCODE_7);
+        android.view.KeyEvent volume =
+            new android.view.KeyEvent(android.view.KeyEvent.ACTION_DOWN, android.view.KeyEvent.KEYCODE_VOLUME_UP);
+
+        android.webkit.WebView probe = new android.webkit.WebView(context());
+        try {
+            assertTrue("a letter must become text", TvRemoteKeys.handle(probe, letter));
+            assertTrue("SHIFT must survive", TvRemoteKeys.handle(probe, capital));
+            assertTrue("a digit must become text", TvRemoteKeys.handle(probe, digit));
+            // Not swallowed: a page's autocomplete list uses the arrows, and the
+            // box owns its volume keys.
+            assertTrue("the volume key belongs to the television", !TvRemoteKeys.handle(probe, volume));
+            // The IME path is a no-op without a keyboard, never an exception.
+            TvUi.showKeyboard(null, probe);
+            TvUi.hideKeyboard(null, probe);
+        } finally {
+            probe.destroy();
+        }
+    }
+
+    @Test
+    public void onlyTextFieldsCountAsTyping() {
+        // The bug this replaced: tagName === "INPUT" is true for a checkbox, so
+        // ticking one hid the pointer and handed the remote to a keyboard.
+        TvUi.setInputState("none");
+        assertTrue("nothing focused is not typing", !TvUi.isTyping());
+        TvUi.setInputState("single");
+        assertTrue("a text field is typing", TvUi.isTyping());
+        TvUi.setInputState("search");
+        assertTrue("a search box is typing", TvUi.isTyping());
+        TvUi.setInputState("picker");
+        assertTrue("a select keeps the pointer", !TvUi.isTyping());
+        TvUi.setInputState("none");
+        assertTrue("and it recovers", !TvUi.isTyping());
+    }
+
     @Test
     public void theOfflineScreenIsPackaged() throws Exception {
         // The crash/HTTP-failure screen is an asset, and a missing asset is a
