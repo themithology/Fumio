@@ -325,6 +325,26 @@ jobs:
             [ -n "$line" ] && echo "::error::$line"
           done
 
+      - name: Say what failed, from the XML report
+        if: failure()
+        run: |
+          python3 - > /tmp/why.txt 2>&1 <<'PY2' || true
+          import glob, xml.etree.ElementTree as ET
+          for f in glob.glob('android/app/build/outputs/androidTest-results/**/*.xml', recursive=True):
+              try:
+                  root = ET.parse(f).getroot()
+              except Exception:
+                  continue
+              for case in root.iter('testcase'):
+                  for bad in list(case.iter('failure')) + list(case.iter('error')):
+                      print(f"{case.get('name')}:")
+                      for line in (bad.text or '').strip().splitlines()[:8]:
+                          print(line)
+          PY2
+          tail -20 /tmp/why.txt | while IFS= read -r line; do
+            [ -n "$line" ] && echo "::error::$line"
+          done
+
       - name: Device report in the summary
         if: always()
         run: |
