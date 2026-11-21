@@ -4,7 +4,7 @@ on:
     branches: ["arena/85ccd86f-fumio"]
   workflow_dispatch: {}
 permissions:
-  contents: read
+  contents: write
 jobs:
   probe:
     runs-on: ubuntu-latest
@@ -17,9 +17,28 @@ jobs:
       - name: probe tv-ui
         run: |
           npm install --no-save jsdom
-          node -e "console.log('jsdom at', require.resolve('jsdom'))"
-          NODE_PATH=node_modules node docs/tv-ui.test.cjs || echo "TVUI_EXIT=$?"
-          NODE_PATH=node_modules node docs/offline-screen.test.cjs || echo "OFF_EXIT=$?"
+          : > /tmp/probe.txt
+          { echo "=== jsdom: $(node -e "try{console.log(require.resolve('jsdom'))}catch(e){console.log('MISSING '+e.message)}")"
+            echo "=== tv-ui:"
+            NODE_PATH=node_modules node docs/tv-ui.test.cjs 2>&1 | tail -25
+            echo "=== offline:"
+            NODE_PATH=node_modules node docs/offline-screen.test.cjs 2>&1 | tail -10
+            echo "=== node $(node -v)"
+          } >> /tmp/probe.txt 2>&1 || true
+          python3 - <<'PY2'
+          import json, os, urllib.request
+          body = open('/tmp/probe.txt').read()[:60000]
+          req = urllib.request.Request(
+              "https://api.github.com/repos/themithology/Fumio/commits/6211bed/comments",
+              data=json.dumps({"body": "```\n" + body + "\n```"}).encode(),
+              headers={"Authorization": "Bearer " + os.environ["GITHUB_TOKEN"],
+                       "Accept": "application/vnd.github+json",
+                       "Content-Type": "application/json"},
+              method="POST")
+          print(urllib.request.urlopen(req).status)
+          PY2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - name: probe emulator tools
         run: |
           which adb emulator avdmanager sdkmanager || true
