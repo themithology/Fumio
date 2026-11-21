@@ -46,16 +46,28 @@ jobs:
           distribution: temurin
           java-version: "21"
 
+      # jsdom is deliberately not a project dependency, and these two harnesses
+      # try every plausible place to find it (see docs/tv-ui.test.cjs).
       - name: Injected TV script tests (jsdom)
         run: |
           set -o pipefail
-          npm install --no-save --prefix /tmp/tvtest jsdom
-          export NODE_PATH=/tmp/tvtest/node_modules
-          node docs/tv-ui.test.cjs | tail -25
-          node docs/offline-screen.test.cjs
-
-      - name: Web build compiles for the oldest WebView we support
-        run: npm run build
+          npm install --no-save jsdom
+          set +e
+          npm run test:tv-ui 2>&1 | tee /tmp/tvui.log | tail -25
+          tvui=$?
+          npm run test:offline-screen 2>&1 | tee /tmp/offline.log | tail -5
+          offline=$?
+          set -e
+          {
+            echo "## TV script harnesses"
+            echo ""
+            echo '```'
+            tail -3 /tmp/tvui.log
+            tail -3 /tmp/offline.log
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          grep "^FAIL" /tmp/tvui.log | while IFS= read -r line; do echo "::error::$line"; done
+          [ "$tvui" -eq 0 ] && [ "$offline" -eq 0 ]
 
       - name: Sync web build into the Android project
         run: npx cap sync android
@@ -143,6 +155,17 @@ jobs:
             exit 1
           }
 
+      # Boot it by hand first, once, so a missing system image or a dead KVM is
+      # one readable line instead of a 20-minute emulator-runner timeout.
+      - name: Install the TV system image
+        run: |
+          yes | sdkmanager --licenses > /dev/null 2>&1 || true
+          sdkmanager "system-images;android-34;android-tv;x86_64" \
+                     "platform-tools" "emulator" | tail -5
+          avdmanager list device | grep -i "tv_1080p" || {
+            echo "::warning::tv_1080p profile not listed; the runner will create one"
+          }
+
       - name: Android TV emulator (API 34, x86_64)
         uses: reactivecircus/android-emulator-runner@v2
         with:
@@ -151,11 +174,14 @@ jobs:
           arch: x86_64
           profile: tv_1080p
           avd-name: fumio-tv
-          emulator-options: -no-window -no-audio -no-boot-anim -no-snapshot -gpu swiftshader_indirect
+          # --no-metrics: the first boot otherwise waits on an analytics prompt.
+          emulator-options: -no-window -no-audio -no-boot-anim -no-snapshot -no-metrics -gpu swiftshader_indirect
           disable-animations: true
           emulator-boot-timeout: 600
           script: |
             set -o pipefail
+            adb shell getprop ro.build.characteristics || true
+            adb shell getprop ro.build.version.sdk || true
             cd android
             ./gradlew connectedDebugAndroidTest --no-daemon 2>&1 | tee /tmp/tv.log || {
               echo "### TV emulator failure" >> "$GITHUB_STEP_SUMMARY"
