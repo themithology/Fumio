@@ -1,0 +1,197 @@
+name: Android TV tests
+
+# The app's own behaviours — the update decision, what counts as a download,
+# how a television is recognised, and the crash handling — were all validated by
+# hand on a TV in somebody's living room. That does not scale, and it means a
+# regression is discovered by a viewer, not by a build.
+#
+# Two jobs, because the two kinds of test are not the same kind of thing:
+#
+#   unit-tests  JVM only. Runs in ~1 minute on every push and needs no device.
+#               Fast enough that a broken updater never reaches a release.
+#
+#   tv-emulator A real Android TV system image, booted in CI. Slower and it can
+#               never verify *feel* (no remote, no 10-foot judgement), but it
+#               proves the manifest, the TV detection and the version stamp on
+#               an actual television framework.
+
+on:
+  push:
+    branches:
+      - "arena/**"
+      - main
+  pull_request:
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  unit-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      # The web bundle is an input to the Android build, and the injected TV
+      # scripts are tested straight from the repo (no build needed).
+      - run: npm ci
+      - run: npm run build
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Injected TV script tests (jsdom)
+        run: |
+          set -o pipefail
+          npm install --no-save --prefix /tmp/tvtest jsdom
+          export NODE_PATH=/tmp/tvtest/node_modules
+          node docs/tv-ui.test.cjs | tail -25
+          node docs/offline-screen.test.cjs
+
+      - name: Web build compiles for the oldest WebView we support
+        run: npm run build
+
+      - name: Sync web build into the Android project
+        run: npx cap sync android
+
+      - name: JVM unit tests
+        working-directory: android
+        run: |
+          chmod +x ./gradlew
+          set -o pipefail
+          ./gradlew testDebugUnitTest --no-daemon 2>&1 | tee /tmp/unit.log || {
+            echo "### Unit test failure" >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+            grep -E "FAILED|error:|What went wrong" /tmp/unit.log | head -40 >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          }
+
+      - name: Test report in the summary
+        if: always()
+        run: |
+          python3 - <<'PY' >> "$GITHUB_STEP_SUMMARY"
+          import glob, xml.etree.ElementTree as ET
+          rows, fails = [], []
+          for f in glob.glob('android/app/build/test-results/**/*.xml', recursive=True):
+              try:
+                  root = ET.parse(f).getroot()
+              except Exception:
+                  continue
+              for case in root.iter('testcase'):
+                  name = f"{case.get('classname','').split('.')[-1]}.{case.get('name')}"
+                  bad = list(case.iter('failure')) or list(case.iter('error'))
+                  rows.append((name, 'FAIL' if bad else 'pass'))
+                  if bad:
+                      fails.append((name, (bad[0].text or '').strip().splitlines()[:3]))
+          total = len(rows)
+          passed = sum(1 for _, s in rows if s == 'pass')
+          print(f"## Unit tests: {passed}/{total} passed\n")
+          if fails:
+              print("| test | first lines |")
+              print("|---|---|")
+              for name, detail in fails:
+                  print(f"| `{name}` | `{' / '.join(detail)}` |")
+          else:
+              print("| test | result |")
+              print("|---|---|")
+              for name, status in sorted(rows):
+                  print(f"| `{name}` | {status} |")
+          PY
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: unit-test-results
+          path: android/app/build/reports/tests/testDebugUnitTest/
+          retention-days: 14
+
+  # A real Android TV image. Kept separate from the APK job so a slow emulator
+  # can never delay or block a release build.
+  tv-emulator:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: npm ci
+      - run: npm run build
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - run: npx cap sync android
+
+      # KVM must be available or the emulator falls back to software rendering
+      # and the job times out. GitHub's Linux runners have it; this says so in
+      # one line instead of a 20-minute timeout if that ever changes.
+      - name: Check hardware acceleration
+        run: |
+          ls -l /dev/kvm || {
+            echo "::error::/dev/kvm is missing - the TV emulator cannot boot here"
+            exit 1
+          }
+
+      - name: Android TV emulator (API 34, x86_64)
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 34
+          target: android-tv
+          arch: x86_64
+          profile: tv_1080p
+          avd-name: fumio-tv
+          emulator-options: -no-window -no-audio -no-boot-anim -no-snapshot -gpu swiftshader_indirect
+          disable-animations: true
+          emulator-boot-timeout: 600
+          script: |
+            set -o pipefail
+            cd android
+            ./gradlew connectedDebugAndroidTest --no-daemon 2>&1 | tee /tmp/tv.log || {
+              echo "### TV emulator failure" >> "$GITHUB_STEP_SUMMARY"
+              echo '```' >> "$GITHUB_STEP_SUMMARY"
+              tail -40 /tmp/tv.log >> "$GITHUB_STEP_SUMMARY"
+              echo '```' >> "$GITHUB_STEP_SUMMARY"
+              exit 1
+            }
+
+      - name: Device report in the summary
+        if: always()
+        run: |
+          python3 - <<'PY' >> "$GITHUB_STEP_SUMMARY"
+          import glob, xml.etree.ElementTree as ET
+          rows = []
+          for f in glob.glob('android/app/build/outputs/androidTest-results/**/*.xml', recursive=True):
+              try:
+                  root = ET.parse(f).getroot()
+              except Exception:
+                  continue
+              for case in root.iter('testcase'):
+                  name = f"{case.get('classname','').split('.')[-1]}.{case.get('name')}"
+                  bad = list(case.iter('failure')) or list(case.iter('error'))
+                  rows.append((name, 'FAIL' if bad else 'pass'))
+          print(f"## TV emulator: {sum(1 for _, s in rows if s=='pass')}/{len(rows)} passed\n")
+          print("| test | result |")
+          print("|---|---|")
+          for name, status in sorted(rows):
+              print(f"| `{name}` | {status} |")
+          PY
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: tv-emulator-results
+          path: |
+            android/app/build/reports/androidTests/
+            android/app/build/outputs/androidTest-results/
+          retention-days: 14

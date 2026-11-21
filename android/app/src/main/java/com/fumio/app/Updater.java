@@ -133,7 +133,7 @@ final class Updater {
 
     // ─── the feed ────────────────────────────────────────────────────────────
 
-    private static class Release {
+    static class Release {
         int build;
         String url;
         String notes;
@@ -150,32 +150,53 @@ final class Updater {
             if (result == null || !result.optBoolean("ok", false)) return null;
             Object data = result.opt("data");
             if (!(data instanceof JSONArray)) return null;
-            JSONArray list = (JSONArray) data;
-            Release best = null;
-            for (int i = 0; i < list.length(); i += 1) {
-                JSONObject rel = list.optJSONObject(i);
-                if (rel == null) continue;
-                Matcher m = BUILD_TAG.matcher(rel.optString("tag_name", ""));
-                if (!m.find()) continue;
-                int build;
-                try {
-                    build = Integer.parseInt(m.group(1));
-                } catch (Exception ignored) {
-                    continue;
-                }
-                String apk = apkAsset(rel);
-                if (apk == null) continue;
-                if (best == null || build > best.build) {
-                    best = new Release();
-                    best.build = build;
-                    best.url = apk;
-                    best.notes = rel.optString("name", "");
-                }
-            }
-            return best;
+            return bestRelease((JSONArray) data);
         } catch (Exception ignored) {
             return null;
         }
+    }
+
+    /**
+     * The newest release we can actually install, out of whatever the feed
+     * returned. Pure: no network, no Android — see {@code UpdaterTest}.
+     *
+     * Everything that has ever gone wrong with updates is decided here, and
+     * every one of those cases is a test:
+     *
+     *   - the feed is newest-first but is not guaranteed to be, so the highest
+     *     build wins rather than the first one;
+     *   - a prerelease is a real build (every CI build is one) and must be
+     *     considered, which is why the feed is NOT /releases/latest;
+     *   - a tag that is not theogpiratebot-apk-<n> is skipped, so a stray tag
+     *     cannot make the updater offer a file that is not an APK;
+     *   - a release with no .apk asset is skipped instead of downloading a
+     *     source zip and failing at install time;
+     *   - a non-https asset URL is refused.
+     */
+    static Release bestRelease(JSONArray list) {
+        if (list == null) return null;
+        Release best = null;
+        for (int i = 0; i < list.length(); i += 1) {
+            JSONObject rel = list.optJSONObject(i);
+            if (rel == null) continue;
+            Matcher m = BUILD_TAG.matcher(rel.optString("tag_name", ""));
+            if (!m.find()) continue;
+            int build;
+            try {
+                build = Integer.parseInt(m.group(1));
+            } catch (Exception ignored) {
+                continue;
+            }
+            String apk = apkAsset(rel);
+            if (apk == null) continue;
+            if (best == null || build > best.build) {
+                best = new Release();
+                best.build = build;
+                best.url = apk;
+                best.notes = rel.optString("name", "");
+            }
+        }
+        return best;
     }
 
     private static String apkAsset(JSONObject release) {
