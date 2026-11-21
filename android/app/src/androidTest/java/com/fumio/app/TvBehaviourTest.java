@@ -5,6 +5,7 @@ import static org.junit.Assert.assertTrue;
 
 import android.app.UiModeManager;
 import android.content.Context;
+import android.content.Intent;
 import android.content.res.Configuration;
 
 import androidx.test.ext.junit.runners.AndroidJUnit4;
@@ -51,28 +52,28 @@ public class TvBehaviourTest {
     }
 
     @Test
-    public void theManifestHasBothLaunchers() throws Exception {
-        android.content.pm.PackageInfo info =
+    public void theManifestHasBothLaunchers() {
+        // Asked of the system, not parsed out of the manifest: this is the same
+        // question a TV home screen asks when it builds its app row.
+        Intent leanback = new Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LEANBACK_LAUNCHER);
+        Intent phone = new Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER);
+        assertTrue(
+            "a TV home screen needs a leanback launcher entry",
+            !context().getPackageManager().queryIntentActivities(leanback, 0).isEmpty()
+        );
+        assertTrue(
+            "the same APK must still appear on a phone",
+            !context().getPackageManager().queryIntentActivities(phone, 0).isEmpty()
+        );
+    }
+
+    @Test
+    public void theApplicationHasABanner() throws Exception {
+        int banner =
             context()
                 .getPackageManager()
-                .getPackageInfo(
-                    context().getPackageName(),
-                    android.content.pm.PackageManager.GET_ACTIVITIES
-                );
-        boolean leanback = false;
-        boolean banner = false;
-        for (android.content.pm.ActivityInfo activity : info.activities) {
-            if (!activity.name.endsWith("MainActivity")) continue;
-            for (android.content.pm.IntentFilter filter : activity.intentFilters) {
-                for (String category : filter.categories) {
-                    if (category == null) continue;
-                    if (category.endsWith("LEANBACK_LAUNCHER")) leanback = true;
-                }
-            }
-            banner = activity.banner != 0;
-        }
-        assertTrue("a TV home screen needs a leanback launcher entry", leanback);
-        assertTrue("a TV launcher needs a banner", banner);
+                .getApplicationInfo(context().getPackageName(), 0).banner;
+        assertTrue("a TV launcher tile needs a banner", banner != 0);
     }
 
     @Test
