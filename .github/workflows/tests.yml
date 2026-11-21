@@ -200,17 +200,41 @@ jobs:
             exit 1
           fi
 
+          # --no-accel: the x86 TV image needs KVM, and the runners have it, but
+          # if they ever stop having it the emulator must say so out loud rather
+          # than sit here for forty minutes.
           emulator -avd fumio-tv -no-window -no-audio -no-boot-anim \
             -no-snapshot -no-metrics -gpu swiftshader_indirect \
             -netdelay none -netspeed full > /tmp/emulator.log 2>&1 &
-          adb wait-for-device
-          for i in $(seq 1 180); do
-            [ "$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" = "1" ] && break
-            sleep 2
+          EMU_PID=$!
+
+          # Never `adb wait-for-device`: it waits forever if the emulator dies,
+          # and a step that hangs for 45 minutes teaches nobody anything.
+          booted=0
+          for i in $(seq 1 150); do
+            if ! kill -0 "$EMU_PID" 2>/dev/null; then
+              say "the emulator exited before Android booted:"
+              say "$(tail -20 /tmp/emulator.log)"
+              exit 1
+            fi
+            state=$(adb get-state 2>/dev/null | tr -d '\r' || true)
+            if [ "$state" = "device" ]; then
+              if [ "$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" = "1" ]; then
+                booted=1
+                break
+              fi
+            fi
+            sleep 4
           done
-          echo "boot_completed=$(adb shell getprop sys.boot_completed | tr -d '\r')"
-          echo "characteristics=$(adb shell getprop ro.build.characteristics | tr -d '\r')"
-          if ! adb shell getprop ro.build.characteristics | grep -q tv; then
+
+          echo "boot_completed=$booted"
+          echo "characteristics=$(adb shell getprop ro.build.characteristics 2>/dev/null | tr -d '\r')"
+          [ "$booted" = "1" ] || {
+            say "Android did not finish booting in 10 minutes:"
+            say "$(tail -20 /tmp/emulator.log)"
+            exit 1
+          }
+          if ! adb shell getprop ro.build.characteristics 2>/dev/null | grep -q tv; then
             say "the emulator is not running a TV image:"
             say "$(tail -12 /tmp/emulator.log)"
             exit 1
