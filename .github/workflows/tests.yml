@@ -157,16 +157,25 @@ jobs:
             exit 1
           }
 
-      # Boot it by hand first, once, so a missing system image or a dead KVM is
-      # one readable line instead of a 20-minute emulator-runner timeout.
       - name: Install the TV system image
         run: |
+          export ANDROID_SDK_ROOT="${ANDROID_SDK_ROOT:-${ANDROID_HOME}}"
+          PATH="$ANDROID_SDK_ROOT/emulator:$ANDROID_SDK_ROOT/platform-tools:$ANDROID_SDK_ROOT/cmdline-tools/latest/bin:$PATH"
+          export PATH
+          IMG="system-images;android-34;android-tv;x86_64"
+          say() { echo "$1"; echo "$1" | while IFS= read -r l; do [ -n "$l" ] && echo "::error::$l"; done; }
+          if sdkmanager --list_installed 2>/dev/null | grep -q "$IMG"; then
+            echo "already installed: $IMG"
+            exit 0
+          fi
           yes | sdkmanager --licenses > /dev/null 2>&1 || true
-          sdkmanager "system-images;android-34;android-tv;x86_64" \
-                     "platform-tools" "emulator" | tail -5
-          avdmanager list device | grep -i "tv_1080p" || {
-            echo "::warning::tv_1080p profile not listed; the runner will create one"
-          }
+          if ! sdkmanager "$IMG" > /tmp/sdk.log 2>&1; then
+            say "could not install $IMG:"
+            say "$(tail -8 /tmp/sdk.log)"
+            exit 1
+          fi
+          sdkmanager --list_installed | grep -q "$IMG" || { say "$IMG missing after install"; exit 1; }
+          echo "installed: $IMG"
 
       - name: Boot the TV emulator
         run: |
@@ -186,7 +195,7 @@ jobs:
 
           if ! echo no | avdmanager create avd -n fumio-tv -k "$IMG" $DEVICE --force > /tmp/boot.log 2>&1; then
             say "avdmanager could not create the AVD:"
-            say "$(tail -6 /tmp/boot.log)"
+            say "$(grep -v '^\[=' /tmp/boot.log | tail -20)"
             exit 1
           fi
 
