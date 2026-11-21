@@ -157,6 +157,15 @@ jobs:
             exit 1
           }
 
+      - name: Which TV images exist
+        run: |
+          export ANDROID_SDK_ROOT="${ANDROID_SDK_ROOT:-${ANDROID_HOME}}"
+          PATH="$ANDROID_SDK_ROOT/cmdline-tools/latest/bin:$PATH"
+          export PATH
+          echo "sdkmanager: $(command -v sdkmanager || echo missing)"
+          sdkmanager --list 2>/dev/null | tr -d '\r' | grep -E "system-images;android-(3[0-9]);(android-tv|google-tv)" | head -20 \
+            | while IFS= read -r line; do echo "::notice::image: $line"; done
+
       - name: Install the TV system image
         run: |
           export ANDROID_SDK_ROOT="${ANDROID_SDK_ROOT:-${ANDROID_HOME}}"
