@@ -89,7 +89,7 @@ final class TvRemoteKeys {
             return false;
         }
 
-        String text = characters(event);
+        String text = charactersFor(event);
         if (text == null) return false;
         run(webView, "window.FumioTvType&&window.FumioTvType(" + quote(text) + ");");
         return true;
@@ -106,9 +106,14 @@ final class TvRemoteKeys {
      * KeyEvent.getUnicodeChar already handles SHIFT and the keyboard layout for
      * a hardware keyboard, which is what an air-mouse presents itself as — so it
      * is preferred over a hand-written A–Z table. The table is the fallback for
-     * keys with no unicode value (some remote firmware reports 0).
+     * keys with no unicode value (some remote firmware reports 0, and a
+     * synthetic KeyEvent always does).
+     *
+     * Package-private and WebView-free on purpose: this is the part that decides
+     * whether a letter reaches the page, so it must be testable without a
+     * WebView — and a WebView can only be touched from the UI thread.
      */
-    private static String characters(KeyEvent event) {
+    static String charactersFor(KeyEvent event) {
         int unicode = 0;
         try {
             unicode = event.getUnicodeChar(event.getMetaState());
