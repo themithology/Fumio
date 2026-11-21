@@ -4,7 +4,19 @@
  * the same): `npm i --prefix /tmp/tvtest jsdom` then NODE_PATH=/tmp/tvtest/node_modules.
  */
 const fs = require('fs');
-const { JSDOM } = require('jsdom');
+const path = require('path');
+function loadJsdom() {
+  for (const candidate of ['jsdom', '/tmp/tvtest/node_modules/jsdom', path.join(__dirname, '..', 'node_modules', 'jsdom')]) {
+    try {
+      return require(candidate);
+    } catch (e) {
+      /* next */
+    }
+  }
+  console.error('jsdom is missing: npm i --no-save jsdom');
+  process.exit(2);
+}
+const { JSDOM } = loadJsdom();
 const html = fs.readFileSync(require('path').join(__dirname, '..', 'android/app/src/main/assets/offline.html'), 'utf8');
 const calls = [];
 const dom = new JSDOM(html, {

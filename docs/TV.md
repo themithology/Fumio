@@ -165,6 +165,17 @@ triggered by the site, which is the last thing a wrapper needs.
 
 `
 
+## What CI proves, and what only the sofa can
+
+`.github/workflows/tests.yml` boots a real Android TV image and asserts the four
+things that decide whether this is a TV app: the image is a television, `TvMode`
+agrees, both launcher entries resolve, and the version is stamped for the
+updater. It also runs the injected script harnesses (48 checks) and the JVM
+tests for the updater, downloads and TV detection.
+
+It cannot tell you whether the pointer *feels* right. Nothing without a remote
+can. See [`TESTING.md`](TESTING.md#what-cannot-be-tested-here--check-on-the-device).
+
 ## The self-test line
 
 `TvPointer.state()` returns `aim=…, drawn=…, held=…` for logs. If the drawn

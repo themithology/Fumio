@@ -1,0 +1,354 @@
+name: Android TV tests
+
+# The app's own behaviours — the update decision, what counts as a download,
+# how a television is recognised, and the crash handling — were all validated by
+# hand on a TV in somebody's living room. That does not scale, and it means a
+# regression is discovered by a viewer, not by a build.
+#
+# Two jobs, because the two kinds of test are not the same kind of thing:
+#
+#   unit-tests  JVM only. Runs in ~1 minute on every push and needs no device.
+#               Fast enough that a broken updater never reaches a release.
+#
+#   tv-emulator A real Android TV system image (API 33, x86 - the newest TV
+#               image the SDK repository actually publishes), booted in CI. It can
+#               never verify *feel* (no remote, no 10-foot judgement), but it
+#               proves the manifest, the TV detection and the version stamp on
+#               an actual television framework.
+
+on:
+  push:
+    branches:
+      - "arena/**"
+      - main
+  pull_request:
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  unit-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      # The web bundle is an input to the Android build, and the injected TV
+      # scripts are tested straight from the repo (no build needed).
+      - run: npm ci
+      - run: npm run build
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      # jsdom is deliberately not a project dependency, and these two harnesses
+      # try every plausible place to find it (see docs/tv-ui.test.cjs).
+      # jsdom is deliberately not a project dependency. These two harnesses
+      # find it wherever it was installed (docs/tv-ui.test.cjs) and exit 0 on
+      # success, 1 on a failed check.
+      - name: Injected TV script tests (jsdom)
+        run: |
+          npm install --no-save jsdom
+          set -o pipefail
+          NODE_PATH=node_modules node docs/tv-ui.test.cjs 2>&1 | tee /tmp/tvui.log | tail -25
+          NODE_PATH=node_modules node docs/offline-screen.test.cjs 2>&1 | tee /tmp/offline.log | tail -3
+          {
+            echo "### TV script harnesses"
+            echo '```'
+            tail -2 /tmp/tvui.log
+            tail -2 /tmp/offline.log
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Name the failing checks
+        if: always()
+        run: |
+          test -f /tmp/tvui.log && grep "^FAIL" /tmp/tvui.log \
+            | while IFS= read -r line; do echo "::error::$line"; done || true
+
+      - name: Sync web build into the Android project
+        run: npx cap sync android
+
+      - name: JVM unit tests
+        working-directory: android
+        run: |
+          chmod +x ./gradlew
+          set -o pipefail
+          ./gradlew testDebugUnitTest --no-daemon 2>&1 | tee /tmp/unit.log || {
+            echo "### Unit test failure" >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+            grep -E "FAILED|error:|What went wrong" /tmp/unit.log | head -40 >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          }
+
+      - name: Test report in the summary
+        if: always()
+        run: |
+          python3 - <<'PY' >> "$GITHUB_STEP_SUMMARY"
+          import glob, xml.etree.ElementTree as ET
+          rows, fails = [], []
+          for f in glob.glob('android/app/build/test-results/**/*.xml', recursive=True):
+              try:
+                  root = ET.parse(f).getroot()
+              except Exception:
+                  continue
+              for case in root.iter('testcase'):
+                  name = f"{case.get('classname','').split('.')[-1]}.{case.get('name')}"
+                  bad = list(case.iter('failure')) or list(case.iter('error'))
+                  rows.append((name, 'FAIL' if bad else 'pass'))
+                  if bad:
+                      fails.append((name, (bad[0].text or '').strip().splitlines()[:3]))
+          total = len(rows)
+          passed = sum(1 for _, s in rows if s == 'pass')
+          print(f"## Unit tests: {passed}/{total} passed\n")
+          if fails:
+              print("| test | first lines |")
+              print("|---|---|")
+              for name, detail in fails:
+                  print(f"| `{name}` | `{' / '.join(detail)}` |")
+          else:
+              print("| test | result |")
+              print("|---|---|")
+              for name, status in sorted(rows):
+                  print(f"| `{name}` | {status} |")
+          PY
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: unit-test-results
+          path: android/app/build/reports/tests/testDebugUnitTest/
+          retention-days: 14
+
+  # A real Android TV image. Kept separate from the APK job so a slow emulator
+  # can never delay or block a release build.
+  tv-emulator:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: npm ci
+      - run: npm run build
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - run: npx cap sync android
+
+      # /dev/kvm exists on these runners but is not writable by the build user,
+      # and an x86 image refuses to start without it ("This user doesn't have
+      # permissions to use KVM"). This is the standard udev rule, plus the two
+      # commands that make it take effect without a reboot.
+      - name: Make KVM usable
+        run: |
+          ls -l /dev/kvm || {
+            echo "::error::/dev/kvm is missing - the TV emulator cannot boot here"
+            exit 1
+          }
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+            | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+          sudo chmod 666 /dev/kvm
+          ls -l /dev/kvm
+          # -accel-check's exit code is not a pass/fail signal here; the file
+          # permissions above are what matters, and the boot step reports the
+          # rest. (Calling it with `set -e` failed the job with 127.)
+          "$ANDROID_SDK_ROOT/emulator/emulator" -accel-check || true
+
+      - name: Install the TV system image
+        run: |
+          export ANDROID_SDK_ROOT="${ANDROID_SDK_ROOT:-${ANDROID_HOME}}"
+          # avdmanager and emulator do not necessarily agree about where AVDs
+          # live ($ANDROID_AVD_HOME vs $ANDROID_SDK_HOME/.android/avd vs
+          # $HOME/.android/avd). Pin it here, once, so both steps use the same
+          # one — otherwise `emulator -avd` says "no file fumio-tv.ini" for an
+          # AVD that was created seconds earlier.
+          export ANDROID_AVD_HOME="$HOME/.android/avd"
+          mkdir -p "$ANDROID_AVD_HOME"
+          PATH="$ANDROID_SDK_ROOT/emulator:$ANDROID_SDK_ROOT/platform-tools:$ANDROID_SDK_ROOT/cmdline-tools/latest/bin:$PATH"
+          export PATH
+          IMG="system-images;android-33;android-tv;x86"
+          say() { echo "$1"; echo "$1" | while IFS= read -r l; do [ -n "$l" ] && echo "::error::$l"; done; }
+          if sdkmanager --list_installed 2>/dev/null | grep -q "$IMG"; then
+            echo "already installed: $IMG"
+            exit 0
+          fi
+          yes | sdkmanager --licenses > /dev/null 2>&1 || true
+          if ! sdkmanager "$IMG" > /tmp/sdk.log 2>&1; then
+            say "could not install $IMG:"
+            say "$(tr -d '\r' < /tmp/sdk.log | grep -viE '^\[[= ]*\]|computing|loading package' | tail -25)"
+            exit 1
+          fi
+          sdkmanager --list_installed | grep -q "$IMG" || { say "$IMG missing after install"; exit 1; }
+          echo "installed: $IMG"
+
+      - name: Boot the TV emulator
+        run: |
+          export ANDROID_SDK_ROOT="${ANDROID_SDK_ROOT:-${ANDROID_HOME}}"
+          export ANDROID_AVD_HOME="$HOME/.android/avd"
+          mkdir -p "$ANDROID_AVD_HOME"
+          PATH="$ANDROID_SDK_ROOT/emulator:$ANDROID_SDK_ROOT/platform-tools:$ANDROID_SDK_ROOT/cmdline-tools/latest/bin:$PATH"
+          export PATH
+          IMG="system-images;android-33;android-tv;x86"
+
+          say() { echo "$1"; echo "${1}" | while IFS= read -r l; do [ -n "$l" ] && echo "::error::$l"; done; }
+
+          DEVICE=""
+          if avdmanager list device -c 2>/dev/null | grep -qx "tv_1080p"; then
+            DEVICE="-d tv_1080p"
+          else
+            say "no tv_1080p profile here; using the default device for a TV image"
+          fi
+
+          if ! echo no | avdmanager create avd -n fumio-tv -k "$IMG" $DEVICE --force > /tmp/boot.log 2>&1; then
+            say "avdmanager could not create the AVD:"
+            say "$(grep -v '^\[=' /tmp/boot.log | tail -20)"
+            exit 1
+          fi
+          echo "avd home contents: $(ls -1 "$ANDROID_AVD_HOME" 2>/dev/null | tr '\n' ' ')"
+          if ! emulator -list-avds | grep -qx fumio-tv; then
+            say "the emulator cannot see the AVD it was just given:"
+            say "$(avdmanager list avd 2>&1 | grep -v '^\[=' | tail -15)"
+            exit 1
+          fi
+
+          # --no-accel: the x86 TV image needs KVM, and the runners have it, but
+          # if they ever stop having it the emulator must say so out loud rather
+          # than sit here for forty minutes.
+          emulator -avd fumio-tv -no-window -no-audio -no-boot-anim \
+            -no-snapshot -no-metrics -gpu swiftshader_indirect \
+            -netdelay none -netspeed full > /tmp/emulator.log 2>&1 &
+          EMU_PID=$!
+
+          # Never `adb wait-for-device`: it waits forever if the emulator dies,
+          # and a step that hangs for 45 minutes teaches nobody anything.
+          booted=0
+          # 20 minutes (300 x 4 s): a TV image on a shared CPU runner with
+          # software rendering is genuinely slow, and "it was still booting"
+          # must not read as "the app is broken".
+          for i in $(seq 1 300); do
+            if ! kill -0 "$EMU_PID" 2>/dev/null; then
+              say "the emulator exited before Android booted:"
+              say "$(tail -20 /tmp/emulator.log)"
+              exit 1
+            fi
+            state=$(adb get-state 2>/dev/null | tr -d '\r' || true)
+            if [ "$state" = "device" ]; then
+              if [ "$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" = "1" ]; then
+                booted=1
+                break
+              fi
+            fi
+            if [ $((i % 30)) -eq 0 ]; then echo "still booting: $((i * 4))s (state=$state)"; fi
+            sleep 4
+          done
+
+          echo "boot_completed=$booted"
+          echo "characteristics=$(adb shell getprop ro.build.characteristics 2>/dev/null | tr -d '\r')"
+          [ "$booted" = "1" ] || {
+            say "Android did not finish booting in 20 minutes:"
+            say "$(tail -20 /tmp/emulator.log)"
+            exit 1
+          }
+          # Is this really a television? ro.build.characteristics is empty on an
+          # AVD created without a hardware profile, so it cannot be the only
+          # test — the TV features are the honest ones.
+          chars=$(adb shell getprop ro.build.characteristics 2>/dev/null | tr -d '\r')
+          features=$(adb shell pm list features 2>/dev/null | tr -d '\r')
+          echo "characteristics='$chars'"
+          echo "$features" | grep -iE "leanback|television" | sed 's/^/feature: /' || true
+          if ! echo "$chars $features" | grep -qiE "tv|leanback|television"; then
+            say "the emulator booted, but nothing about it says television:"
+            say "characteristics='$chars'"
+            say "$(tail -12 /tmp/emulator.log)"
+            exit 1
+          fi
+
+      - name: TV behaviour tests (on the emulator)
+        run: |
+          export ANDROID_SDK_ROOT="${ANDROID_SDK_ROOT:-${ANDROID_HOME}}"
+          PATH="$ANDROID_SDK_ROOT/emulator:$ANDROID_SDK_ROOT/platform-tools:$PATH"
+          export PATH
+          set -o pipefail
+          cd android
+          chmod +x ./gradlew
+          # Module-scoped on purpose: the bare `connectedDebugAndroidTest` task
+          # also builds capacitor-cordova-android-plugins' own androidTest, which
+          # fails its duplicate-class check and has nothing to do with this app.
+          ./gradlew :app:connectedDebugAndroidTest --no-daemon 2>&1 | tee /tmp/tv.log | tail -40 || {
+            echo "### TV emulator test failure" >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+            grep -E "FAILED|Tests on|error:|What went wrong" /tmp/tv.log | head -30 >> "$GITHUB_STEP_SUMMARY"
+            # And to the annotations, which an API client can always read.
+            grep -E "FAILED|error:|What went wrong|Starting [0-9]+ tests|Tests on" /tmp/tv.log \
+              | head -12 | while IFS= read -r line; do echo "::error::$line"; done
+            tail -15 /tmp/emulator.log >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          }
+
+      - name: Emulator log
+        if: failure()
+        run: |
+          test -f /tmp/emulator.log && tail -40 /tmp/emulator.log || echo "no emulator log"
+          test -f /tmp/boot.log && tail -40 /tmp/boot.log || echo "no boot log"
+
+      # The runtime log is not reliably downloadable from an API client, but
+      # annotations always are - so the tail travels as one.
+      - name: Say why it failed
+        if: failure()
+        run: |
+          {
+            echo "=== emulator ==="
+            test -f /tmp/emulator.log && tail -25 /tmp/emulator.log || echo none
+            echo "=== boot ==="
+            test -f /tmp/boot.log && tail -25 /tmp/boot.log || echo none
+          } > /tmp/say.txt 2>&1 || true
+          tail -12 /tmp/say.txt | while IFS= read -r line; do
+            [ -n "$line" ] && echo "::error::$line"
+          done
+
+      - name: Device report in the summary
+        if: always()
+        run: |
+          python3 - <<'PY' >> "$GITHUB_STEP_SUMMARY"
+          import glob, xml.etree.ElementTree as ET
+          rows = []
+          for f in glob.glob('android/app/build/outputs/androidTest-results/**/*.xml', recursive=True):
+              try:
+                  root = ET.parse(f).getroot()
+              except Exception:
+                  continue
+              for case in root.iter('testcase'):
+                  name = f"{case.get('classname','').split('.')[-1]}.{case.get('name')}"
+                  bad = list(case.iter('failure')) or list(case.iter('error'))
+                  rows.append((name, 'FAIL' if bad else 'pass'))
+          print(f"## TV emulator: {sum(1 for _, s in rows if s=='pass')}/{len(rows)} passed\n")
+          print("| test | result |")
+          print("|---|---|")
+          for name, status in sorted(rows):
+              print(f"| `{name}` | {status} |")
+          PY
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: tv-emulator-results
+          path: |
+            android/app/build/reports/androidTests/
+            android/app/build/outputs/androidTest-results/
+          retention-days: 14

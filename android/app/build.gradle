@@ -61,6 +61,16 @@ android {
         }
     }
 
+    testOptions {
+        unitTests {
+            // TvMode, Downloader and Updater reference android.* types. With
+            // the stubs returned instead of thrown, they are testable on the
+            // JVM; the behaviour that really needs a device lives in
+            // androidTest and runs on the TV emulator in CI.
+            returnDefaultValues = true
+        }
+    }
+
     buildTypes {
         debug {
             // CI publishes the debug variant, so it has to carry the stable key.
@@ -87,6 +97,11 @@ dependencies {
     implementation "androidx.core:core-splashscreen:$coreSplashScreenVersion"
     implementation project(':capacitor-android')
     testImplementation "junit:junit:$junitVersion"
+    // The unit tests exercise the parts of the app that touch Android types
+    // (TvMode asks the PackageManager a question). Mockito lets those run on a
+    // plain JVM in CI with no emulator and no device.
+    testImplementation "org.mockito:mockito-core:5.11.0"
+    testImplementation "org.json:json:20231013"
     androidTestImplementation "androidx.test.ext:junit:$androidxJunitVersion"
     androidTestImplementation "androidx.test.espresso:espresso-core:$androidxEspressoCoreVersion"
     implementation project(':capacitor-cordova-android-plugins')

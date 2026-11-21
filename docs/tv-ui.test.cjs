@@ -5,14 +5,31 @@
 //
 // Run: node docs/tv-ui.test.cjs      (needs jsdom: npm i --prefix /tmp/tvtest jsdom)
 const fs = require("fs");
-let JSDOM;
-try {
-  JSDOM = require("jsdom").JSDOM;
-} catch (e) {
-  JSDOM = require("/tmp/tvtest/node_modules/jsdom").JSDOM;
+const path = require("path");
+// jsdom is a test-only dependency and is deliberately NOT in package.json (the
+// shipped app must never grow a dependency because of a harness). It is found
+// however it was installed: normally in node_modules, or in the /tmp scratch
+// install used when this repo is worked on offline.
+function loadJsdom() {
+  const candidates = [
+    "jsdom",
+    "/tmp/tvtest/node_modules/jsdom",
+    path.join(__dirname, "..", "node_modules", "jsdom"),
+  ];
+  for (const candidate of candidates) {
+    try {
+      return require(candidate).JSDOM;
+    } catch (e) {
+      /* next */
+    }
+  }
+  console.error("jsdom is missing: npm i --no-save jsdom");
+  process.exit(2);
 }
+const JSDOM = loadJsdom();
 
-const ASSETS = "/home/user/Fumio/android/app/src/main/assets";
+// Absolute, so the harness runs from a CI checkout and from a workspace alike.
+const ASSETS = path.join(__dirname, "..", "android", "app", "src", "main", "assets");
 const viewportSource = fs.readFileSync(ASSETS + "/tv-viewport.js", "utf8");
 const cursorSource = fs.readFileSync(ASSETS + "/tv-cursor.js", "utf8");
 
