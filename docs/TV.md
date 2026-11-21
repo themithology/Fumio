@@ -123,6 +123,48 @@ was a real bug.
 - Read `isTrusted` OS mouse events: no site that demands those can be satisfied
   from any WebView app.
 
+## Memory — why the app used to crash on a TV
+
+A TV box is not a small phone; it is a device with 1.5–2 GB of RAM shared with
+the system UI, a decoder, and whatever the launcher keeps. Two things killed
+this app there, and both are handled:
+
+| What happened | Why | Where it is handled |
+|---|---|---|
+| A hard crash to the TV home screen, no dialog | On Android 8+, a killed **WebView renderer** crashes the whole app unless `onRenderProcessGone` is overridden. On a TV the renderer is the biggest thing in the process, so the system targets it first. | `TrustedWebViewClient.onRenderProcessGone` rebuilds the activity instead of dying; the **player** overlay has its own handler that closes the player and returns to the browse page |
+| It died after a few episodes, not on the first | Each film's `<video>` held its decoder buffers after the overlay was destroyed. Three or four in an evening is enough. | `FumioPlayerOverlay.RELEASE_MEDIA` runs before the WebView is destroyed: `pause()`, `removeAttribute('src')`, `load()` — the documented way to make a media element give its decoder back immediately |
+| Killed while a 4K stream decoded | The app held more memory than the system was willing to give it | `android:largeHeap="true"` in the manifest, and `onTrimMemory` (below) |
+
+`onTrimMemory` is the app giving memory back *before* the system decides to kill
+it: at `RUNNING_CRITICAL` it frees renderer memory (`freeMemory`), at `COMPLETE`
+it also clears the WebView cache. Bounded to once per 15 s — a cache clear is not
+something to do per frame.
+
+Nothing here changes what a viewer sees, except that the app stays open.
+
+## `#diagnostics` — the crash report without a cable
+
+On a television there is no adb and no DevTools, so a crash is otherwise
+invisible. Two doors:
+
+- **In the app**, put `#diagnostics` at the end of the address (any page of our
+  own site, or the bundled build). A black panel covers the screen with: version,
+  Android version, whether it thinks this is a TV, heap used/max, and the last
+  uncaught exception — class, first frame, message. Tap it to dismiss.
+- **Over the network**, if you can reach the box with adb:
+  ```bash
+  adb connect <TV-IP>:5555
+  adb logcat -s FumioCrash:* AndroidRuntime:E
+  ```
+  Renderer deaths log as `FumioCrash: WebView renderer gone (crashed=true)`.
+
+The crash trail is written by an uncaught-exception handler to
+`files/last-crash.txt`. Nothing is uploaded, ever, and **there is no interface
+to upload WebView console messages** — that would be a remote script surface
+triggered by the site, which is the last thing a wrapper needs.
+
+`
+
 ## The self-test line
 
 `TvPointer.state()` returns `aim=…, drawn=…, held=…` for logs. If the drawn

@@ -13,6 +13,7 @@ import android.webkit.WebResourceRequest;
 import android.webkit.WebResourceResponse;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
+import android.webkit.RenderProcessGoneDetail;
 import android.webkit.WebViewClient;
 import android.widget.FrameLayout;
 import androidx.webkit.WebViewAssetLoader;
@@ -240,10 +241,16 @@ final class FumioPlayerOverlay {
         hideCustomView();
         WebView view = webView;
         if (view != null) {
-            view.evaluateJavascript(
-                "(function(){try{return localStorage.getItem('continueWatching')||'[]';}catch(e){return '[]';}})()",
-                (value) -> finishClose(mergeTrail(jsString(value)))
-            );
+            try {
+                view.evaluateJavascript(
+                    "(function(){try{return localStorage.getItem('continueWatching')||'[]';}catch(e){return '[]';}})()",
+                    (value) -> finishClose(mergeTrail(jsString(value)))
+                );
+            } catch (Throwable dead) {
+                // The renderer is gone: the 1.2 s fallback below still closes.
+                finishClose(null);
+                return;
+            }
             view.postDelayed(() -> {
                 if (!closedOut) finishClose(mergeTrail(null));
             }, 1200);
@@ -255,6 +262,20 @@ final class FumioPlayerOverlay {
     private void finishClose(String continueWatching) {
         if (closedOut) return;
         closedOut = true;
+        // Stop the decoder BEFORE the WebView goes away. This is the difference
+        // between "it crashed after four episodes" and "it did not".
+        WebView closing = webView;
+        if (closing != null) {
+            try {
+                // The release is ASYNC in the page, and destroyView() runs in
+                // this same tick — so pause() is issued synchronously by the
+                // page's first statement, which is what releases the decoder.
+                closing.evaluateJavascript(RELEASE_MEDIA, null);
+                closing.stopLoading();
+            } catch (Throwable ignored) {
+                // Already dead; nothing to release.
+            }
+        }
         if (root != null) root.setVisibility(View.GONE);
         destroyView();
         try {
@@ -263,7 +284,7 @@ final class FumioPlayerOverlay {
             activity.setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED);
         }
         host.onPlayerClosed(continueWatching);
-        closing = false;
+        closing = null;
     }
 
     private void destroyView() {
@@ -364,6 +385,28 @@ final class FumioPlayerOverlay {
                     return blockPlayerPopunder(uri, true);
                 }
 
+                /**
+                 * The renderer died while watching (out of memory is the usual
+                 * reason on a TV). Left unhandled this crashes the whole app
+                 * from the middle of a film.
+                 */
+                @Override
+                public boolean onRenderProcessGone(WebView v, RenderProcessGoneDetail detail) {
+                    activity.runOnUiThread(
+                        () -> {
+                            // finishClose(), not close(): close() asks the dead
+                            // page a question first, and a dead page cannot
+                            // answer. It tears down and reports exactly once.
+                            try {
+                                finishClose(null);
+                            } catch (Throwable ignored) {
+                                // Nothing left to close.
+                            }
+                        }
+                    );
+                    return true;
+                }
+
                 @Override
                 public void onPageFinished(WebView v, String url) {
                     v.evaluateJavascript(
@@ -438,6 +481,28 @@ final class FumioPlayerOverlay {
             null
         );
     }
+
+    /**
+     * Stop playback for real, inside the page, before this WebView is thrown
+     * away.
+     *
+     * Why this exists: a TV decodes video in a fixed pool, and a <video> that
+     * is destroyed while it is still decoding does not always give its buffers
+     * back. One film is fine; the third or fourth in an evening is not, and the
+     * box kills the app. pause() + removeAttribute('src') + load() is what
+     * makes a media element release its decoder immediately rather than when
+     * the garbage collector feels like it.
+     */
+    private static final String RELEASE_MEDIA =
+        "(function(){try{"
+            + "document.querySelectorAll('video,audio').forEach(function(m){try{"
+            + "m.pause();m.removeAttribute('src');"
+            + "var kids=m.querySelectorAll('source');"
+            + "for(var i=0;i<kids.length;i++)kids[i].removeAttribute('src');"
+            + "m.load();"
+            + "}catch(e){}});"
+            + "if(window.hls&&window.hls.destroy)try{window.hls.destroy();}catch(e){}"
+            + "}catch(e){}})()";
 
     private void injectTrail(WebView view) {
         if (view == null) return;
