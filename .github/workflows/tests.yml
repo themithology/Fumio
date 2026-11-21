@@ -264,8 +264,16 @@ jobs:
             say "$(tail -20 /tmp/emulator.log)"
             exit 1
           }
-          if ! adb shell getprop ro.build.characteristics 2>/dev/null | grep -q tv; then
-            say "the emulator is not running a TV image:"
+          # Is this really a television? ro.build.characteristics is empty on an
+          # AVD created without a hardware profile, so it cannot be the only
+          # test — the TV features are the honest ones.
+          chars=$(adb shell getprop ro.build.characteristics 2>/dev/null | tr -d '\r')
+          features=$(adb shell pm list features 2>/dev/null | tr -d '\r')
+          echo "characteristics='$chars'"
+          echo "$features" | grep -iE "leanback|television" | sed 's/^/feature: /' || true
+          if ! echo "$chars $features" | grep -qiE "tv|leanback|television"; then
+            say "the emulator booted, but nothing about it says television:"
+            say "characteristics='$chars'"
             say "$(tail -12 /tmp/emulator.log)"
             exit 1
           fi
