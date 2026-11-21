@@ -122,7 +122,10 @@ public class TvBehaviourTest {
 
         android.webkit.WebView probe = new android.webkit.WebView(context());
         try {
-            assertTrue("a letter must become text", TvRemoteKeys.handle(probe, letter));
+            assertTrue(
+                "a letter must become text (getUnicodeChar gave nothing and the A-Z fallback did not fire)",
+                TvRemoteKeys.handle(probe, letter)
+            );
             assertTrue("SHIFT must survive", TvRemoteKeys.handle(probe, capital));
             assertTrue("a digit must become text", TvRemoteKeys.handle(probe, digit));
             // Not swallowed: a page's autocomplete list uses the arrows, and the

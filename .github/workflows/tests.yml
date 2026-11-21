@@ -296,6 +296,9 @@ jobs:
             # And to the annotations, which an API client can always read.
             grep -E "FAILED|error:|What went wrong|Starting [0-9]+ tests|Tests on" /tmp/tv.log \
               | head -12 | while IFS= read -r line; do echo "::error::$line"; done
+            # The assertion text itself, which is what says WHY.
+            grep -A 6 -E "junit.framework.AssertionError|java.lang.AssertionError" /tmp/tv.log \
+              | head -20 | while IFS= read -r line; do echo "::error::assert: $line"; done
             tail -15 /tmp/emulator.log >> "$GITHUB_STEP_SUMMARY"
             echo '```' >> "$GITHUB_STEP_SUMMARY"
             exit 1
