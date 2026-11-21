@@ -114,6 +114,20 @@ final class TvRemoteKeys {
      * WebView — and a WebView can only be touched from the UI thread.
      */
     static String charactersFor(KeyEvent event) {
+        if (event == null) return null;
+        int code = event.getKeyCode();
+        boolean shift = event.isShiftPressed();
+
+        // LETTERS FIRST, from the key code, because getUnicodeChar does not
+        // reliably honour SHIFT here: on the TV image, SHIFT+B came back as "b",
+        // so a capital was impossible to type into a search box. A remote's
+        // letter keys are layout-independent, so the key code is the source of
+        // truth and SHIFT is applied by us.
+        if (code >= KeyEvent.KEYCODE_A && code <= KeyEvent.KEYCODE_Z) {
+            char letter = (char) ('a' + (code - KeyEvent.KEYCODE_A));
+            return String.valueOf(shift ? Character.toUpperCase(letter) : letter);
+        }
+
         int unicode = 0;
         try {
             unicode = event.getUnicodeChar(event.getMetaState());
@@ -124,12 +138,6 @@ final class TvRemoteKeys {
             return new String(Character.toChars(unicode));
         }
 
-        int code = event.getKeyCode();
-        boolean shift = event.isShiftPressed();
-        if (code >= KeyEvent.KEYCODE_A && code <= KeyEvent.KEYCODE_Z) {
-            char letter = (char) ('a' + (code - KeyEvent.KEYCODE_A));
-            return String.valueOf(shift ? Character.toUpperCase(letter) : letter);
-        }
         if (code >= KeyEvent.KEYCODE_0 && code <= KeyEvent.KEYCODE_9) {
             return String.valueOf((char) ('0' + (code - KeyEvent.KEYCODE_0)));
         }
