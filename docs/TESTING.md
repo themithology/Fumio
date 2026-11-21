@@ -1,3 +1,53 @@
+## What CI runs now
+
+There is no TV in this project, so the tests moved into the two places that
+exist without one.
+
+### `.github/workflows/tests.yml` — `unit-tests` (JVM, ~90 s, every push)
+
+| Suite | What it guarantees |
+|---|---|
+| `UpdaterTest` | the update decision: highest build wins (not the first), prereleases count (every CI build is one), non-build tags / releases with no `.apk` / non-https assets are refused, garbage in the feed is survived |
+| `DownloaderTest` | what counts as a downloadable file, against the URL shapes the pools actually emit |
+| `TvModeTest` | a TV is recognised by all four paths; a phone is not; a vendor service that throws fails **closed** (a phone wrongly answering TV would skip the ad wall) |
+| `docs/tv-ui.test.cjs` | the injected TV scripts, in jsdom — 48 checks |
+| `docs/offline-screen.test.cjs` | the "Something went wrong" screen, its socials and its reason line |
+
+The updater's rule lived inside a network call until it was extracted to
+`Updater.bestRelease(JSONArray)` — pure, no Android, and therefore testable.
+That extraction is the only production change the tests required.
+
+### `.github/workflows/tests.yml` — `tv-emulator` (a real TV, ~4 min)
+
+An Android TV system image (API 33, x86 — the newest TV image the SDK
+publishes) is booted on the runner, and `TvBehaviourTest` runs **on it**:
+
+1. the image really is a television (`UI_MODE_TYPE_TELEVISION`);
+2. `TvMode.isTv` agrees — the boolean the whole TV path hangs off;
+3. the leanback **and** phone launcher entries both resolve, via
+   `queryIntentActivities` (the same question a TV home screen asks);
+4. the application carries a banner;
+5. the `versionCode` is stamped, so the updater has something to compare;
+6. `offline.html` is readable from the APK.
+
+The emulator step is deliberately manual — no emulator action: create the AVD,
+boot it, wait for `sys.boot_completed`, and refuse to continue unless something
+about the device says television. Every failure prints the emulator's own log.
+
+Practical notes, learned the hard way: the SDK has **no x86_64 TV image** (only
+`x86` and `arm64-v8a`, up to API 33), `/dev/kvm` exists but is not writable by
+the build user until a udev rule is installed, `avdmanager` and `emulator`
+disagree about where AVDs live (pin `ANDROID_AVD_HOME`), and a
+software-rendered TV image needs ~5 minutes to boot — so the loop gives it 20 and
+reports progress.
+
+### What still cannot be automated
+
+Pointer feel, hover cadence, a rail that scrolls under a thumb, how readable
+`TEXT_ZOOM=115` is from a sofa. An emulator has no remote and no 10-foot
+judgement; a test that cannot feel the difference would only lie. Those stay
+manual, and are listed in the table above.
+
 # Testing — and what honestly cannot be tested here
 
 There is no Android SDK and no television in the development sandbox, so the
@@ -9,12 +59,24 @@ compiling.
 
 ```bash
 npm ci
-npx vite build                     # the web bundle the APK ships
+npx vite build                      # the web bundle the APK ships
 
-npm install --prefix /tmp/tvtest jsdom
-NODE_PATH=/tmp/tvtest/node_modules node docs/tv-ui.test.cjs          # 45 checks
-NODE_PATH=/tmp/tvtest/node_modules node docs/offline-screen.test.cjs # the failure screen
+npm install --no-save jsdom         # test-only, deliberately not a dependency
+npm run test:tv-ui                  # 48 checks
+npm run test:offline-screen         # the failure screen
+
+cd android && ./gradlew testDebugUnitTest   # updater, downloads, TV detection
 ```
+
+The instrumented TV test needs a device:
+
+```bash
+cd android && ./gradlew :app:connectedDebugAndroidTest
+```
+
+Both harnesses find jsdom wherever it was installed (`node_modules`, or the
+`/tmp` scratch install this repo is sometimes worked on), so they run unchanged
+locally and in CI.
 
 `npm run lint` should also stay clean.
 
@@ -49,6 +111,10 @@ reason, exact text after).
 `cap sync` → signing key readable → **`assets/offline.html` is inside the APK** →
 `gradlew assembleDebug` → release. A green run means the Java compiles, the assets
 are packaged, and the APK installs as an update of the previous one.
+
+`.github/workflows/tests.yml` then proves the *behaviour*: see "What CI runs now"
+above. The APK job and the test jobs are separate on purpose — a slow TV
+emulator must never delay or block a release build.
 
 ## What cannot be tested here — check on the device
 
