@@ -237,7 +237,10 @@ jobs:
           # Never `adb wait-for-device`: it waits forever if the emulator dies,
           # and a step that hangs for 45 minutes teaches nobody anything.
           booted=0
-          for i in $(seq 1 150); do
+          # 20 minutes (300 x 4 s): a TV image on a shared CPU runner with
+          # software rendering is genuinely slow, and "it was still booting"
+          # must not read as "the app is broken".
+          for i in $(seq 1 300); do
             if ! kill -0 "$EMU_PID" 2>/dev/null; then
               say "the emulator exited before Android booted:"
               say "$(tail -20 /tmp/emulator.log)"
@@ -250,13 +253,14 @@ jobs:
                 break
               fi
             fi
+            if [ $((i % 30)) -eq 0 ]; then echo "still booting: $((i * 4))s (state=$state)"; fi
             sleep 4
           done
 
           echo "boot_completed=$booted"
           echo "characteristics=$(adb shell getprop ro.build.characteristics 2>/dev/null | tr -d '\r')"
           [ "$booted" = "1" ] || {
-            say "Android did not finish booting in 10 minutes:"
+            say "Android did not finish booting in 20 minutes:"
             say "$(tail -20 /tmp/emulator.log)"
             exit 1
           }
