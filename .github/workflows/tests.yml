@@ -171,7 +171,7 @@ jobs:
           yes | sdkmanager --licenses > /dev/null 2>&1 || true
           if ! sdkmanager "$IMG" > /tmp/sdk.log 2>&1; then
             say "could not install $IMG:"
-            say "$(tail -8 /tmp/sdk.log)"
+            say "$(tr -d '\r' < /tmp/sdk.log | grep -viE '^\[[= ]*\]|computing|loading package' | tail -25)"
             exit 1
           fi
           sdkmanager --list_installed | grep -q "$IMG" || { say "$IMG missing after install"; exit 1; }
