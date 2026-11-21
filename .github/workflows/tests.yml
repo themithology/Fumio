@@ -290,6 +290,9 @@ jobs:
             echo "### TV emulator test failure" >> "$GITHUB_STEP_SUMMARY"
             echo '```' >> "$GITHUB_STEP_SUMMARY"
             grep -E "FAILED|Tests on|error:|What went wrong" /tmp/tv.log | head -30 >> "$GITHUB_STEP_SUMMARY"
+            # And to the annotations, which an API client can always read.
+            grep -E "FAILED|error:|What went wrong|Starting [0-9]+ tests|Tests on" /tmp/tv.log \
+              | head -12 | while IFS= read -r line; do echo "::error::$line"; done
             tail -15 /tmp/emulator.log >> "$GITHUB_STEP_SUMMARY"
             echo '```' >> "$GITHUB_STEP_SUMMARY"
             exit 1
