@@ -286,7 +286,10 @@ jobs:
           set -o pipefail
           cd android
           chmod +x ./gradlew
-          ./gradlew connectedDebugAndroidTest --no-daemon 2>&1 | tee /tmp/tv.log | tail -40 || {
+          # Module-scoped on purpose: the bare `connectedDebugAndroidTest` task
+          # also builds capacitor-cordova-android-plugins' own androidTest, which
+          # fails its duplicate-class check and has nothing to do with this app.
+          ./gradlew :app:connectedDebugAndroidTest --no-daemon 2>&1 | tee /tmp/tv.log | tail -40 || {
             echo "### TV emulator test failure" >> "$GITHUB_STEP_SUMMARY"
             echo '```' >> "$GITHUB_STEP_SUMMARY"
             grep -E "FAILED|Tests on|error:|What went wrong" /tmp/tv.log | head -30 >> "$GITHUB_STEP_SUMMARY"
