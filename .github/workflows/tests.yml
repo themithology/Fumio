@@ -48,26 +48,28 @@ jobs:
 
       # jsdom is deliberately not a project dependency, and these two harnesses
       # try every plausible place to find it (see docs/tv-ui.test.cjs).
+      # jsdom is deliberately not a project dependency. These two harnesses
+      # find it wherever it was installed (docs/tv-ui.test.cjs) and exit 0 on
+      # success, 1 on a failed check.
       - name: Injected TV script tests (jsdom)
         run: |
-          set -o pipefail
           npm install --no-save jsdom
-          set +e
-          npm run test:tv-ui 2>&1 | tee /tmp/tvui.log | tail -25
-          tvui=$?
-          npm run test:offline-screen 2>&1 | tee /tmp/offline.log | tail -5
-          offline=$?
-          set -e
+          set -o pipefail
+          NODE_PATH=node_modules node docs/tv-ui.test.cjs 2>&1 | tee /tmp/tvui.log | tail -25
+          NODE_PATH=node_modules node docs/offline-screen.test.cjs 2>&1 | tee /tmp/offline.log | tail -3
           {
-            echo "## TV script harnesses"
-            echo ""
+            echo "### TV script harnesses"
             echo '```'
-            tail -3 /tmp/tvui.log
-            tail -3 /tmp/offline.log
+            tail -2 /tmp/tvui.log
+            tail -2 /tmp/offline.log
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
-          grep "^FAIL" /tmp/tvui.log | while IFS= read -r line; do echo "::error::$line"; done
-          [ "$tvui" -eq 0 ] && [ "$offline" -eq 0 ]
+
+      - name: Name the failing checks
+        if: always()
+        run: |
+          test -f /tmp/tvui.log && grep "^FAIL" /tmp/tvui.log \
+            | while IFS= read -r line; do echo "::error::$line"; done || true
 
       - name: Sync web build into the Android project
         run: npx cap sync android
@@ -166,30 +168,49 @@ jobs:
             echo "::warning::tv_1080p profile not listed; the runner will create one"
           }
 
-      - name: Android TV emulator (API 34, x86_64)
-        uses: reactivecircus/android-emulator-runner@v2
-        with:
-          api-level: 34
-          target: android-tv
-          arch: x86_64
-          profile: tv_1080p
-          avd-name: fumio-tv
-          # --no-metrics: the first boot otherwise waits on an analytics prompt.
-          emulator-options: -no-window -no-audio -no-boot-anim -no-snapshot -no-metrics -gpu swiftshader_indirect
-          disable-animations: true
-          emulator-boot-timeout: 600
-          script: |
-            set -o pipefail
-            adb shell getprop ro.build.characteristics || true
-            adb shell getprop ro.build.version.sdk || true
-            cd android
-            ./gradlew connectedDebugAndroidTest --no-daemon 2>&1 | tee /tmp/tv.log || {
-              echo "### TV emulator failure" >> "$GITHUB_STEP_SUMMARY"
-              echo '```' >> "$GITHUB_STEP_SUMMARY"
-              tail -40 /tmp/tv.log >> "$GITHUB_STEP_SUMMARY"
-              echo '```' >> "$GITHUB_STEP_SUMMARY"
-              exit 1
-            }
+      - name: Boot the TV emulator
+        run: |
+          echo no | avdmanager create avd -n fumio-tv \
+            -k "system-images;android-34;android-tv;x86_64" \
+            -d tv_1080p --force
+          # A television AVD has no touchscreen, so the app must not need one;
+          # the runner is headless and software-rendered.
+          emulator -avd fumio-tv -no-window -no-audio -no-boot-anim \
+            -no-snapshot -no-metrics -gpu swiftshader_indirect \
+            -netdelay none -netspeed full > /tmp/emulator.log 2>&1 &
+          adb wait-for-device
+          for i in $(seq 1 180); do
+            booted=$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')
+            [ "$booted" = "1" ] && break
+            sleep 2
+          done
+          echo "boot_completed=$(adb shell getprop sys.boot_completed | tr -d '\r')"
+          echo "characteristics=$(adb shell getprop ro.build.characteristics | tr -d '\r')"
+          adb shell getprop ro.build.version.sdk
+          # If this is not a tv, every assertion afterwards is meaningless.
+          adb shell getprop ro.build.characteristics | grep -q tv || {
+            echo "::error::the emulator booted, but it is not a TV image"
+            tail -30 /tmp/emulator.log
+            exit 1
+          }
+
+      - name: TV behaviour tests (on the emulator)
+        run: |
+          set -o pipefail
+          cd android
+          chmod +x ./gradlew
+          ./gradlew connectedDebugAndroidTest --no-daemon 2>&1 | tee /tmp/tv.log | tail -40 || {
+            echo "### TV emulator test failure" >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+            grep -E "FAILED|Tests on|error:|What went wrong" /tmp/tv.log | head -30 >> "$GITHUB_STEP_SUMMARY"
+            tail -15 /tmp/emulator.log >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          }
+
+      - name: Emulator log
+        if: failure()
+        run: tail -40 /tmp/emulator.log || true
 
       - name: Device report in the summary
         if: always()
