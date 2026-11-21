@@ -161,6 +161,13 @@ jobs:
       - name: Install the TV system image
         run: |
           export ANDROID_SDK_ROOT="${ANDROID_SDK_ROOT:-${ANDROID_HOME}}"
+          # avdmanager and emulator do not necessarily agree about where AVDs
+          # live ($ANDROID_AVD_HOME vs $ANDROID_SDK_HOME/.android/avd vs
+          # $HOME/.android/avd). Pin it here, once, so both steps use the same
+          # one — otherwise `emulator -avd` says "no file fumio-tv.ini" for an
+          # AVD that was created seconds earlier.
+          export ANDROID_AVD_HOME="$HOME/.android/avd"
+          mkdir -p "$ANDROID_AVD_HOME"
           PATH="$ANDROID_SDK_ROOT/emulator:$ANDROID_SDK_ROOT/platform-tools:$ANDROID_SDK_ROOT/cmdline-tools/latest/bin:$PATH"
           export PATH
           IMG="system-images;android-33;android-tv;x86"
@@ -181,6 +188,8 @@ jobs:
       - name: Boot the TV emulator
         run: |
           export ANDROID_SDK_ROOT="${ANDROID_SDK_ROOT:-${ANDROID_HOME}}"
+          export ANDROID_AVD_HOME="$HOME/.android/avd"
+          mkdir -p "$ANDROID_AVD_HOME"
           PATH="$ANDROID_SDK_ROOT/emulator:$ANDROID_SDK_ROOT/platform-tools:$ANDROID_SDK_ROOT/cmdline-tools/latest/bin:$PATH"
           export PATH
           IMG="system-images;android-33;android-tv;x86"
@@ -197,6 +206,12 @@ jobs:
           if ! echo no | avdmanager create avd -n fumio-tv -k "$IMG" $DEVICE --force > /tmp/boot.log 2>&1; then
             say "avdmanager could not create the AVD:"
             say "$(grep -v '^\[=' /tmp/boot.log | tail -20)"
+            exit 1
+          fi
+          echo "avd home contents: $(ls -1 "$ANDROID_AVD_HOME" 2>/dev/null | tr '\n' ' ')"
+          if ! emulator -list-avds | grep -qx fumio-tv; then
+            say "the emulator cannot see the AVD it was just given:"
+            say "$(avdmanager list avd 2>&1 | grep -v '^\[=' | tail -15)"
             exit 1
           fi
 
