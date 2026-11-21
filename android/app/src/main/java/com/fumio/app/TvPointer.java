@@ -427,13 +427,16 @@ final class TvPointer {
         int bit = holdBit(code);
         if (!click && bit == 0) return false; // not ours
 
-        // While the keyboard is open the remote belongs to it — and any held
+        // While a text field has focus the remote belongs to it — and any held
         // direction is released, otherwise the cursor keeps gliding behind the
         // keyboard because the matching key-up never reaches us.
         if (typing) {
             held = 0;
             heldMs = 0;
-            return false;
+            // Letters and digits go into the field. This is the path that works
+            // on a box with no soft keyboard; when the box HAS one, the IME gets
+            // the same keys because the WebView was focused for it.
+            return TvRemoteKeys.handle(webView, event);
         }
 
         if (up) {
@@ -456,6 +459,12 @@ final class TvPointer {
             if (event.getRepeatCount() > 0) return true; // no machine-gun taps
             if (cursor != null) cursor.pulse();
             click(webView);
+            // If that press landed in a text field, the page reports "single"
+            // through tvInputState and this opens the keyboard. It is asked for
+            // here rather than on focus because a box with an IME sometimes
+            // wants a user gesture first.
+            WebView target = web();
+            if (target != null && TvUi.isTyping()) TvUi.showKeyboard(activity, target);
             return true;
         }
 

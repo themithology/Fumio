@@ -85,6 +85,87 @@ public class TvBehaviourTest {
         assertTrue("versionCode must be stamped by CI, was " + code, code > 0);
     }
 
+    /**
+     * THE KEYBOARD QUESTION, ON A REAL TV IMAGE.
+     *
+     * A search box is useless if nothing can type into it. Two independent
+     * halves, because a TV may have neither, either, or both:
+     *
+     *   - an IME service exists and asking for the keyboard cannot crash when
+     *     the box has no keyboard installed;
+     *   - a letter key produces the right TEXT — the path that works with no IME,
+     *     which is the normal case on a television.
+     *
+     * The key mapping is exercised through {@code charactersFor}, which touches
+     * no WebView: a WebView may only be used from the UI thread, and an
+     * instrumented test method does not run on it. That is exactly why the
+     * mapping was split out of {@code handle()}.
+     */
+    @Test
+    public void aRemoteLetterBecomesText() {
+        android.view.KeyEvent letter =
+            new android.view.KeyEvent(android.view.KeyEvent.ACTION_DOWN, android.view.KeyEvent.KEYCODE_A);
+        assertEquals("a", TvRemoteKeys.charactersFor(letter));
+
+        // SIX arguments: (downTime, eventTime, action, code, repeat, metaState).
+        // The five-argument overload's last parameter is the REPEAT COUNT, so
+        // passing META_SHIFT_ON there silently sent shift-less key events — which
+        // is exactly what the first version of this test did, and it looked like
+        // an app bug for two runs.
+        android.view.KeyEvent upper =
+            new android.view.KeyEvent(
+                0,
+                0,
+                android.view.KeyEvent.ACTION_DOWN,
+                android.view.KeyEvent.KEYCODE_B,
+                0,
+                android.view.KeyEvent.META_SHIFT_ON
+            );
+        assertEquals("B", TvRemoteKeys.charactersFor(upper));
+
+        android.view.KeyEvent digit =
+            new android.view.KeyEvent(android.view.KeyEvent.ACTION_DOWN, android.view.KeyEvent.KEYCODE_7);
+        assertEquals("7", TvRemoteKeys.charactersFor(digit));
+
+        android.view.KeyEvent space =
+            new android.view.KeyEvent(android.view.KeyEvent.ACTION_DOWN, android.view.KeyEvent.KEYCODE_SPACE);
+        assertEquals(" ", TvRemoteKeys.charactersFor(space));
+
+        // Keys that must never become text: they belong to the page or the box.
+        android.view.KeyEvent volume =
+            new android.view.KeyEvent(android.view.KeyEvent.ACTION_DOWN, android.view.KeyEvent.KEYCODE_VOLUME_UP);
+        assertEquals(null, TvRemoteKeys.charactersFor(volume));
+        android.view.KeyEvent left =
+            new android.view.KeyEvent(android.view.KeyEvent.ACTION_DOWN, android.view.KeyEvent.KEYCODE_DPAD_LEFT);
+        assertEquals(null, TvRemoteKeys.charactersFor(left));
+    }
+
+    @Test
+    public void thereIsAnInputMethodServiceToAsk() {
+        // Asserted, not assumed: if this is null the IME half of the feature has
+        // nothing to call. Whether a keyboard is actually INSTALLED is
+        // deliberately not asserted — on a TV it often is not.
+        assertTrue(
+            context().getSystemService(Context.INPUT_METHOD_SERVICE) != null
+        );
+    }
+
+    @Test
+    public void onlyTextFieldsCountAsTyping() {
+        // The bug this replaced: tagName === "INPUT" is true for a checkbox, so
+        // ticking one hid the pointer and handed the remote to a keyboard.
+        TvUi.setInputState("none");
+        assertTrue("nothing focused is not typing", !TvUi.isTyping());
+        TvUi.setInputState("single");
+        assertTrue("a text field is typing", TvUi.isTyping());
+        TvUi.setInputState("search");
+        assertTrue("a search box is typing", TvUi.isTyping());
+        TvUi.setInputState("picker");
+        assertTrue("a select keeps the pointer", !TvUi.isTyping());
+        TvUi.setInputState("none");
+        assertTrue("and it recovers", !TvUi.isTyping());
+    }
+
     @Test
     public void theOfflineScreenIsPackaged() throws Exception {
         // The crash/HTTP-failure screen is an asset, and a missing asset is a

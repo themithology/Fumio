@@ -128,6 +128,7 @@ public class MainActivity extends BridgeActivity {
             installCrashTrail();
             // TELEVISION ONLY. On a phone this call returns immediately.
             TvUi.install(this, webView);
+            if (TvMode.isTv(this)) TvUi.watchKeyboardInsets(this, webView);
             LiveServers.load(this);
             LiveServers.refresh(this, webView);
             SystemBars.browse(getWindow(), webView);
@@ -494,6 +495,26 @@ public class MainActivity extends BridgeActivity {
         @JavascriptInterface
         public void tvInputFocused(boolean typing) {
             TvUi.setInputFocused(typing);
+            if (typing) TvUi.showKeyboard(MainActivity.this, keyTarget());
+            else TvUi.hideKeyboard(MainActivity.this, keyTarget());
+        }
+
+        /**
+         * The precise version: "none", "single", "search", "multiline",
+         * "picker". The distinction that matters is that a checkbox is NOT a
+         * text field, and a <select> must keep the pointer.
+         */
+        @JavascriptInterface
+        public void tvInputState(String state) {
+            TvUi.setInputState(state);
+            WebView target = keyTarget();
+            if (target == null) return;
+            if (TvUi.isTyping()) {
+                // The IME may open here; the insets watcher gives it room.
+                TvUi.showKeyboard(MainActivity.this, target);
+            } else {
+                TvUi.hideKeyboard(MainActivity.this, target);
+            }
         }
 
 

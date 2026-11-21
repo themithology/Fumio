@@ -32,6 +32,9 @@ Two exceptions, both deliberate:
 | `FumioTvPress()` | — | `bool` | Pointer/mouse/click sequence at the resolved target (fallback only) |
 | `FumioTvSawPress()` | — | `bool` | Did the last touch become a click? Resets on read |
 | `FumioTvScroll(dx, dy)` | `-1\|0\|1` | `bool` | Scroll the strip under the cursor; page second |
+| `FumioTvType(text)` | string | `bool` | Insert text into the focused field (execCommand first, then `.value`) |
+| `FumioTvBackspace()` | — | `bool` | Delete one character backwards |
+| `FumioTvBlur()` | — | `bool` | Give up the field; the ring comes back |
 | `FumioTvScrollable()` | — | JSON `{x,y}` | Diagnostics: can the page scroll each way |
 | `FumioTvTarget()` / `FumioTvVisibleTarget()` | — | `bool` | Is there a live target under the pointer |
 
@@ -40,6 +43,8 @@ Two exceptions, both deliberate:
 | Method | Payload | When |
 |---|---|---|
 | `tvTarget(point)` | `"fx,fy"` (6 dp) | the target under the ring changed |
+| `tvInputState(state)` | `none` \| `single` \| `search` \| `multiline` \| `picker` | what kind of typing surface is focused |
+| `tvInputFocused(typing)` | `bool` | legacy; now maps to `single`/`none` |
 | `tvScrollZone(payload)` | `"l,t,r,b,canX,canY"` (fractions, 4 dp) | the scrollable strip under the cursor changed |
 | `tvInputFocused(bool)` | — | focus entered/left a text field |
 

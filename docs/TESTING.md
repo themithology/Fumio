@@ -10,7 +10,8 @@ exist without one.
 | `UpdaterTest` | the update decision: highest build wins (not the first), prereleases count (every CI build is one), non-build tags / releases with no `.apk` / non-https assets are refused, garbage in the feed is survived |
 | `DownloaderTest` | what counts as a downloadable file, against the URL shapes the pools actually emit |
 | `TvModeTest` | a TV is recognised by all four paths; a phone is not; a vendor service that throws fails **closed** (a phone wrongly answering TV would skip the ad wall) |
-| `docs/tv-ui.test.cjs` | the injected TV scripts, in jsdom — 48 checks |
+| `TvRemoteKeysTest` | the JS string literal for a typed character — a stray quote there silently drops that character |
+| `docs/tv-ui.test.cjs` | the injected TV scripts, in jsdom — 67 checks |
 | `docs/offline-screen.test.cjs` | the "Something went wrong" screen, its socials and its reason line |
 
 The updater's rule lived inside a network call until it was extracted to
@@ -62,7 +63,7 @@ npm ci
 npx vite build                      # the web bundle the APK ships
 
 npm install --no-save jsdom         # test-only, deliberately not a dependency
-npm run test:tv-ui                  # 48 checks
+npm run test:tv-ui                  # 67 checks
 npm run test:offline-screen         # the failure screen
 
 cd android && ./gradlew testDebugUnitTest   # updater, downloads, TV detection

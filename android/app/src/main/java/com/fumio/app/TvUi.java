@@ -1,7 +1,12 @@
 package com.fumio.app;
 
 import android.app.Activity;
+import android.content.Context;
+import android.os.Build;
 import android.util.Log;
+import android.view.View;
+import android.view.WindowInsets;
+import android.view.inputmethod.InputMethodManager;
 import android.webkit.WebView;
 
 import java.io.ByteArrayOutputStream;
@@ -34,7 +39,8 @@ final class TvUi {
 
     private static String cursorScript = "";
     private static String viewportScript = "";
-    private static volatile boolean inputFocused;
+    /** The focused typing surface: "none", "single", "search", "multiline", "picker". */
+    private static volatile String inputState = "none";
 
     private TvUi() {}
 
@@ -100,12 +106,36 @@ final class TvUi {
 
     // ─── keys ───────────────────────────────────────────────────────────────
 
-    static void setInputFocused(boolean typing) {
-        if (inputFocused == typing) return;
-        inputFocused = typing;
-        // The ring has no business sitting over a soft keyboard, and it must be
-        // exactly where it was when the keyboard goes away again.
+    /**
+     * The page says what kind of surface is focused.
+     *
+     * Three states matter and they are not interchangeable:
+     *
+     *   "single"/"search"/"multiline"  a text field: hide the ring, open the
+     *                                  keyboard, and forward the remote's letters.
+     *   "picker"                       a <select>: opened with OK and driven by
+     *                                  the arrows, so the pointer stays.
+     *   "none"                         nothing editable: the pointer comes back.
+     *
+     * A checkbox used to arrive here as "typing", which hid the cursor over a
+     * control that needs no keyboard at all.
+     */
+    static void setInputState(String state) {
+        String next = state == null ? "none" : state;
+        if (next.equals(inputState)) return;
+        inputState = next;
+        boolean typing = isTyping();
         TvPointer.setTyping(typing);
+    }
+
+    static void setInputFocused(boolean typing) {
+        setInputState(typing ? "single" : "none");
+    }
+
+    /** Is a keyboard supposed to be up right now? */
+    static boolean isTyping() {
+        String state = inputState;
+        return "single".equals(state) || "search".equals(state) || "multiline".equals(state);
     }
 
     /** @return true when the TV layer handled the key and the WebView must not see it. */
@@ -116,7 +146,92 @@ final class TvUi {
         // player overlay. Without this the cursor kept aiming at the hidden
         // browse WebView while a video was playing.
         TvPointer.ensureTarget(webView);
-        return TvPointer.handleKey(activity, webView, event, inputFocused);
+        return TvPointer.handleKey(activity, webView, event, isTyping());
+    }
+
+    // ─── the keyboard ────────────────────────────────────────────────────────
+
+    /**
+     * ASK FOR THE SYSTEM KEYBOARD, and be honest about the answer.
+     *
+     * Many Android TV boxes ship no IME at all, so this can legitimately do
+     * nothing there — which is exactly why {@link TvRemoteKeys} types for us
+     * when the remote has letters (or the D-pad does not). Both paths are live
+     * at once: the IME when the box has one, character forwarding when it does
+     * not, and neither breaks the other.
+     */
+    static void showKeyboard(final Activity activity, final WebView webView) {
+        if (activity == null || webView == null) return;
+        try {
+            webView.requestFocus();
+            final InputMethodManager imm =
+                (InputMethodManager) activity.getSystemService(Context.INPUT_METHOD_SERVICE);
+            if (imm == null) return;
+            // post(): the focus change from our own click has not been committed
+            // yet, and showSoftInput on a view that is not focused is a no-op.
+            webView.post(
+                () -> {
+                    try {
+                        imm.showSoftInput(webView, InputMethodManager.SHOW_IMPLICIT);
+                    } catch (Exception ignored) {
+                        /* no IME on this box - forwarding covers it */
+                    }
+                }
+            );
+        } catch (Exception ignored) {
+            /* the keyboard is a nicety, never a crash */
+        }
+    }
+
+    static void hideKeyboard(Activity activity, WebView webView) {
+        if (activity == null || webView == null) return;
+        try {
+            InputMethodManager imm =
+                (InputMethodManager) activity.getSystemService(Context.INPUT_METHOD_SERVICE);
+            if (imm != null) imm.hideSoftInputFromWindow(webView.getWindowToken(), 0);
+        } catch (Exception ignored) {
+            /* nothing to hide */
+        }
+    }
+
+    /**
+     * THE INSETS BUG THAT MAKES A SEARCH BOX UNUSABLE ON A TV.
+     *
+     * The app runs full screen with the system bars hidden, and the WebView is
+     * laid out edge to edge (SystemBars.insetWebView sets fitsSystemWindows
+     * false). A keyboard opening over that layout covers the bottom of the page
+     * — which is where a focused search field usually is. So: while an IME is
+     * up, give the WebView the IME inset as bottom padding, and take it back
+     * when the keyboard closes. Nothing else in the layout moves.
+     */
+    static void watchKeyboardInsets(final Activity activity, final WebView webView) {
+        if (activity == null || webView == null) return;
+        final View view = webView;
+        try {
+            view.setOnApplyWindowInsetsListener(
+                (v, insets) -> {
+                    int ime = 0;
+                    try {
+                        if (Build.VERSION.SDK_INT >= 30) {
+                            ime = insets.getInsets(WindowInsets.Type.ime()).bottom;
+                        } else {
+                            ime = insets.getSystemWindowInsetBottom();
+                        }
+                    } catch (Exception ignored) {
+                        ime = 0;
+                    }
+                    // Only ever ADD space at the bottom, and only while typing:
+                    // padding that appears for no reason would shift the whole
+                    // page under the pointer.
+                    int wanted = isTyping() ? ime : 0;
+                    if (v.getPaddingBottom() != wanted) v.setPadding(0, 0, 0, wanted);
+                    return insets;
+                }
+            );
+            view.requestApplyInsets();
+        } catch (Exception ignored) {
+            /* insets are best-effort */
+        }
     }
 
     // ─── plumbing ───────────────────────────────────────────────────────────

@@ -123,6 +123,69 @@ was a real bug.
 - Read `isTrusted` OS mouse events: no site that demands those can be satisfied
   from any WebView app.
 
+## Typing: the search box on a sofa
+
+Focusing a search field is easy on a TV. **Putting characters in it is not** —
+most Android TV boxes ship no soft keyboard at all, so "show the IME" can
+legitimately open nothing and the viewer is left pointing at an empty field.
+
+Both paths are live at once, and neither depends on the other:
+
+| Path | Works when | Where |
+|---|---|---|
+| **Character forwarding** | always, including D-pad-only remotes with letters | `TvRemoteKeys` → `FumioTvType` / `FumioTvBackspace` in `tv-cursor.js` |
+| **System IME** | the box actually has a keyboard installed | `TvUi.showKeyboard` (`showSoftInput`) |
+
+### What counts as "needs a keyboard"
+
+Not `tagName === "INPUT"` — that is also a checkbox, a radio and a submit
+button, and treating those as typing hid the pointer over a control that needs
+no keyboard. The page classifies the focused element and sends one of
+`none`, `single`, `search`, `multiline`, `picker`:
+
+| State | Ring | Keyboard | Remote letters |
+|---|---|---|---|
+| `single` / `search` / `multiline` | hidden | requested | typed into the field |
+| `picker` (a `<select>`) | **kept** | no | no — OK opens it, arrows drive it |
+| `none`, or a readonly/disabled field | kept | no | no |
+
+Input types that count: `text, search, url, email, password, tel, number, date,
+datetime-local, month, time, week`, plus `<textarea>` and `contenteditable`.
+A checkbox, radio, button, range and file input are **not** typing.
+
+### Keys while typing
+
+| Key | Result |
+|---|---|
+| A–Z, 0–9, punctuation, SHIFT | the character, inserted at the caret |
+| DEL / FORWARD_DEL | backspace |
+| OK / ENTER | **not** swallowed — the page's own submit runs the search |
+| BACK | leaves the field (the app's BACK still exits on the next press) |
+| arrows, MENU, volume, media, power | **not** swallowed — a page's autocomplete uses arrows, and the box owns its volume |
+
+Insertion goes through `document.execCommand("insertText")` first, because a
+React-controlled input keeps its own copy of `value` and assigning `.value`
+directly is invisible to it for ever; the `.value` + `setSelectionRange` +
+`input` event path is the fallback for `contenteditable` and for WebViews where
+`execCommand` is gone.
+
+### The two bugs this fixed
+
+- **Ticking a checkbox muted the pointer.** Any `<input>` counted as typing, so
+  the ring was hidden and the remote handed to a keyboard that was never needed.
+- **A React re-render could trap the app in "typing" for ever.** Replacing the
+  focused node fires no `focusout`; `document.activeElement` silently becomes
+  `<body>` and the ring never came back. The page now re-checks once a second
+  *only while it believes it is typing*, which is a cheap comparison and the only
+  thing that recovers that state.
+
+### The keyboard must not cover the field
+
+The app is full screen with the WebView laid out edge to edge. `TvUi
+.watchKeyboardInsets` gives the WebView the IME inset as bottom padding while
+typing, and takes it back on blur — so a search box at the bottom of a 1080p
+screen is not under the keyboard.
+
 ## Memory — why the app used to crash on a TV
 
 A TV box is not a small phone; it is a device with 1.5–2 GB of RAM shared with
