@@ -91,11 +91,17 @@ public class TvBehaviourTest {
         // blank screen on a device with no network — the exact moment it
         // matters. CI also checks the APK contents, but this checks the app
         // can actually read it.
-        String[] assets = context().getAssets().list("public");
+        // The file lives at the ROOT of assets/, not under public/ - the web
+        // build is copied in as public/, but offline.html is placed beside it
+        // by the sync job. Listing the root is the honest check.
+        String[] assets = context().getAssets().list("");
         boolean found = false;
         for (String name : assets) {
             if (name != null && name.equals("offline.html")) found = true;
         }
-        assertTrue("offline.html must be readable from the APK", found);
+        assertTrue(
+            "offline.html must be readable from the APK root; found " + java.util.Arrays.toString(assets),
+            found
+        );
     }
 }
