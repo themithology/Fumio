@@ -358,8 +358,17 @@ final class TvPointer {
      * unreachable, so BACK releases typing as a last resort — see handleKey —
      * and a fresh key press re-arms a hold that a watchdog cleared.
      */
-    static void setTyping(boolean typing) {
+    static void setTyping(final boolean typing) {
         if (cursor == null) return;
+        // DEFENCE IN DEPTH. The caller is supposed to be on the UI thread - the
+        // bridge callbacks now hop there explicitly - but this touches views,
+        // and a CalledFromWrongThreadException here kills the whole app on a
+        // television with no visible error. So if it is somehow called from the
+        // JavaBridge thread, it is re-posted instead of thrown.
+        if (Looper.myLooper() != Looper.getMainLooper()) {
+            UI.post(() -> setTyping(typing));
+            return;
+        }
         try {
             if (typing) {
                 cursor.setArrowVisible(false);
