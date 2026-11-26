@@ -79,15 +79,23 @@ final class TvPointer {
      * the hold ramps from rest, and a short press is simply a short hold.
      */
     /** Time for a held direction to reach full speed. */
-    private static final float RAMP_MS = 240f;
-    /** Full speed covers the screen width in this many seconds. */
-    private static final float CROSS_SECONDS = 1.05f;
+    private static final float RAMP_MS = 400f;
     /**
-     * Speed the instant a hold starts, as a fraction of full speed. This is the
-     * one number that makes a TAP usable: a 120 ms press has to cross roughly a
-     * card, so the start cannot be gentler than this.
+     * Full speed covers the screen width in this many seconds.
+     *
+     * 1.05 s was "a deliberate mouse". On a 10-foot screen with a remote it is
+     * twitchy: a normal press overshoots the card it was aimed at and lands on
+     * its neighbour. 1.5 s is a pointer you can stop where you meant to.
      */
-    private static final float SLOW_FRACTION = 0.45f;
+    private static final float CROSS_SECONDS = 1.5f;
+    /**
+     * Speed the instant a hold starts, as a fraction of full speed.
+     *
+     * This is what a TAP feels like, and 0.45 was too eager. A 120 ms tap now
+     * crosses about half a card instead of a full one, which is the difference
+     * between "precise" and "it jumped past what I wanted".
+     */
+    private static final float SLOW_FRACTION = 0.26f;
     /**
      * HOVER is two different things and they must not be handled the same way.
      *
@@ -241,7 +249,14 @@ final class TvPointer {
         } else if (cursor != null) {
             cursor.snapTo(aimX, aimY);
         }
-        if (cursor != null) cursor.setArrowVisible(true);
+        // A fresh document cannot be "typing": nothing in it has focus yet. If
+        // the previous page hid the ring for a text field and the new page's
+        // script never reports, this is what puts the pointer back — the ring
+        // must never depend on a script that might not have run yet.
+        if (cursor != null) {
+            cursor.setArrowVisible(true);
+            cursor.snapTo(aimX, aimY);
+        }
         bringCursorToFront();
         scheduleResolve(140);
     }
@@ -336,6 +351,12 @@ final class TvPointer {
      * which is BEHIND that window, so leaving it "visible" only leaves a stale
      * ring on screen when the keyboard closes over a page that has moved. It is
      * hidden while typing and brought back on blur, at the same aim.
+     */
+    /**
+     * Anyone can get stuck: a page that keeps a field focused, a remote that
+     * sends the focus report and nothing else. The pointer must never be
+     * unreachable, so BACK releases typing as a last resort — see handleKey —
+     * and a fresh key press re-arms a hold that a watchdog cleared.
      */
     static void setTyping(boolean typing) {
         if (cursor == null) return;

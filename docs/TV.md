@@ -43,9 +43,9 @@ The pointer is a **ring** (`TvCursorView`):
 | | Value | Why |
 |---|---|---|
 | Tap | no step; a tap is simply a short hold | the old 16 dp jump on press was the D-pad tell: snap, pause, catch up |
-| Ramp to full speed | 240 ms | responsive without a jolt |
-| Full speed | crosses the screen in 1.05 s | a deliberate mouse, not a rocket |
-| Start speed | 45 % of full | a 120 ms tap has to cross about one card |
+| Ramp to full speed | 400 ms | 240 ms was twitchy on a 10-foot screen |
+| Full speed | crosses the screen in 1.5 s | 1.05 s overshot the card it was aimed at |
+| Start speed | 26 % of full | a 120 ms tap crosses about half a card, so it can be stopped where it was meant |
 | Hold watchdog | 1.2 s without a key event | IR/Bluetooth remotes really do lose a key-up; without this the ring glides on its own |
 
 **There is no focus ring.** An outline box around whatever the pointer is over
@@ -178,6 +178,24 @@ directly is invisible to it for ever; the `.value` + `setSelectionRange` +
   `<body>` and the ring never came back. The page now re-checks once a second
   *only while it believes it is typing*, which is a cheap comparison and the only
   thing that recovers that state.
+
+### The ring must always come back
+
+Three separate guarantees, because "the mouse disappeared" is the worst bug this
+feature can cause:
+
+1. **A new document starts with nothing focused.** `TvUi.forgetInputFocus()` runs
+   on every page finish, so a page that loads after a search cannot inherit
+   "typing" from the page before it.
+2. **`TvPointer.onPageFinished` re-arms the ring** unconditionally. The pointer
+   never depends on a script that might not have run yet.
+3. **BACK is an escape hatch.** The first press asks the page to blur; the second
+   is handed to the app, because a field the page refuses to give up must not
+   trap the viewer on a screen with no other exit.
+
+Also: exactly **one** editor watchdog timer per document. The script is
+re-injected on every page finish, and without clearing the old interval an SPA
+would accumulate one per navigation, each scanning the DOM every second.
 
 ### The keyboard must not cover the field
 

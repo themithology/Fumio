@@ -86,6 +86,11 @@ final class TvUi {
     static void onLivePageFinished(Activity activity, WebView webView) {
         if (activity == null || webView == null) return;
         if (!TvMode.isTv(activity)) return;
+        // A new document starts with NOTHING focused. Without this the app stayed
+        // in "typing" from the previous page: the ring stayed hidden and every
+        // letter went into a field that no longer existed — exactly what "after
+        // pressing search, the mouse is gone" looked like.
+        forgetInputFocus();
         loadAssets(activity);
         evaluate(webView, viewportScript);
         evaluate(webView, cursorScript);
@@ -99,6 +104,7 @@ final class TvUi {
     static void onOwnPageFinished(Activity activity, WebView webView) {
         if (activity == null || webView == null) return;
         if (!TvMode.isTv(activity)) return;
+        forgetInputFocus();
         loadAssets(activity);
         evaluate(webView, cursorScript);
         TvPointer.onPageFinished(activity, webView);
@@ -130,6 +136,16 @@ final class TvUi {
 
     static void setInputFocused(boolean typing) {
         setInputState(typing ? "single" : "none");
+    }
+
+    /**
+     * The page changed under us: nothing is focused any more.
+     *
+     * Goes through the ordinary state transition, so the ring comes back by the
+     * same path it would have if the viewer had left the field.
+     */
+    static void forgetInputFocus() {
+        setInputState("none");
     }
 
     /** Is a keyboard supposed to be up right now? */
