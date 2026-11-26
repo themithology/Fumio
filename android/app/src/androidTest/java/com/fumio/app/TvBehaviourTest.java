@@ -150,6 +150,43 @@ public class TvBehaviourTest {
         );
     }
 
+    /**
+     * THE CRASH THIS FEATURE CAUSED.
+     *
+     * A @JavascriptInterface method runs on the WebView's private JavaBridge
+     * thread. {@code setInputState} ends in View.setVisibility /
+     * setTranslationX, which throws CalledFromWrongThreadException off the UI
+     * thread — and an uncaught one kills the app. That is exactly how "type in
+     * the search box" became a crash-on-every-search.
+     *
+     * The guard is asserted directly: called from a background thread, it must
+     * not throw, and it must still arrive.
+     */
+    @Test
+    public void theTypingStateSurvivesBeingCalledOffTheUiThread() throws Exception {
+        final java.util.concurrent.atomic.AtomicReference<Throwable> thrown =
+            new java.util.concurrent.atomic.AtomicReference<>();
+        Thread bridge = new Thread(() -> {
+            try {
+                TvUi.setInputState("single");
+                TvUi.setInputState("none");
+            } catch (Throwable error) {
+                thrown.set(error);
+            }
+        }, "javabridge-simulation");
+        bridge.start();
+        bridge.join(5000);
+
+        assertTrue(
+            "setInputState threw off the UI thread: " + thrown.get(),
+            thrown.get() == null
+        );
+        // And it is not left believing it is typing: the UI thread should have
+        // applied the last state, which was "none".
+        InstrumentationRegistry.getInstrumentation().waitForIdleSync();
+        assertTrue("the last state did not arrive", !TvUi.isTyping());
+    }
+
     @Test
     public void onlyTextFieldsCountAsTyping() {
         // The bug this replaced: tagName === "INPUT" is true for a checkbox, so

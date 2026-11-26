@@ -491,12 +491,32 @@ public class MainActivity extends BridgeActivity {
             TvPointer.setTapTarget(point);
         }
 
-        /** tv-cursor.js tells us when the remote belongs to a text field. */
+        /**
+         * tv-cursor.js reports what kind of typing surface has focus.
+         *
+         * THE UI THREAD MATTERS HERE AND IT IS NOT OPTIONAL.
+         *
+         * A @JavascriptInterface method runs on the WebView's private JavaBridge
+         * thread, NOT on the thread that owns the views. This handler ends up in
+         * {@code View.setVisibility} and {@code setTranslationX}, and touching a
+         * view hierarchy from any other thread throws
+         * CalledFromWrongThreadException — which, uncaught, kills the app.
+         *
+         * That was a real regression: hiding the ring for a text field turned
+         * "type in the search box" into a crash. Every view-touching bridge
+         * callback now hops to the UI thread first.
+         */
         @JavascriptInterface
-        public void tvInputFocused(boolean typing) {
-            TvUi.setInputFocused(typing);
-            if (typing) TvUi.showKeyboard(MainActivity.this, keyTarget());
-            else TvUi.hideKeyboard(MainActivity.this, keyTarget());
+        public void tvInputFocused(final boolean typing) {
+            runOnUiThread(
+                () -> {
+                    TvUi.setInputFocused(typing);
+                    WebView target = keyTarget();
+                    if (target == null) return;
+                    if (typing) TvUi.showKeyboard(MainActivity.this, target);
+                    else TvUi.hideKeyboard(MainActivity.this, target);
+                }
+            );
         }
 
         /**
@@ -505,16 +525,20 @@ public class MainActivity extends BridgeActivity {
          * text field, and a <select> must keep the pointer.
          */
         @JavascriptInterface
-        public void tvInputState(String state) {
-            TvUi.setInputState(state);
-            WebView target = keyTarget();
-            if (target == null) return;
-            if (TvUi.isTyping()) {
-                // The IME may open here; the insets watcher gives it room.
-                TvUi.showKeyboard(MainActivity.this, target);
-            } else {
-                TvUi.hideKeyboard(MainActivity.this, target);
-            }
+        public void tvInputState(final String state) {
+            runOnUiThread(
+                () -> {
+                    TvUi.setInputState(state);
+                    WebView target = keyTarget();
+                    if (target == null) return;
+                    if (TvUi.isTyping()) {
+                        // The IME may open here; the insets watcher gives it room.
+                        TvUi.showKeyboard(MainActivity.this, target);
+                    } else {
+                        TvUi.hideKeyboard(MainActivity.this, target);
+                    }
+                }
+            );
         }
 
 

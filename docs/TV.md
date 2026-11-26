@@ -179,6 +179,24 @@ directly is invisible to it for ever; the `.value` + `setSelectionRange` +
   *only while it believes it is typing*, which is a cheap comparison and the only
   thing that recovers that state.
 
+### The crash this feature caused (and the rule that prevents it)
+
+A `@JavascriptInterface` method runs on the WebView's **JavaBridge thread**, not
+on the thread that owns the views. `tvInputState` ends in `View.setVisibility`
+and `setTranslationX`; from the bridge thread that throws
+`CalledFromWrongThreadException`, and an uncaught one takes the whole app down —
+no dialog, straight to the TV home screen.
+
+So: **every bridge callback that touches a view hops to the UI thread first**
+(`runOnUiThread`), and `TvPointer.setTyping` re-posts itself if it ever finds
+itself on the wrong thread anyway. Both are asserted on the TV emulator:
+`theTypingStateSurvivesBeingCalledOffTheUiThread` calls it from a background
+thread and requires that nothing throws.
+
+This is the same class of crash as the dead-renderer one in #5, and the lesson is
+the same: on a television there is no log for the viewer to read, so the app must
+survive the mistake rather than report it.
+
 ### The ring must always come back
 
 Three separate guarantees, because "the mouse disappeared" is the worst bug this
