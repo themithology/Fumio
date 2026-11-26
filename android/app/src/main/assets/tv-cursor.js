@@ -776,7 +776,19 @@
 
   // Once a second, and only while the app believes it is typing: recovers a
   // field the page replaced underneath us.
-  setInterval(watchEditor, 1000);
+  //
+  // ONE timer per document. The script is re-injected on every page finish, and
+  // the guard at the top of this IIFE is what stops a second set of listeners
+  // existing; without clearing the old timer an SPA would slowly accumulate one
+  // interval per navigation, each scanning the DOM once a second.
+  if (window.__fumioEditorTimer) {
+    try {
+      clearInterval(window.__fumioEditorTimer);
+    } catch (e) {
+      /* nothing to clear */
+    }
+  }
+  window.__fumioEditorTimer = setInterval(watchEditor, 1000);
 
   // A page that re-renders under the cursor (SPA route change) must not leave a
   // stale outline on a dead node.

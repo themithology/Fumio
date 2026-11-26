@@ -430,6 +430,35 @@ function viewportOf(dom) {
   check("a replaced field reports none", states[states.length - 1], "none");
   check("so the pointer comes back", typing, false);
 
+  // ─── the ring must always be able to come back ───────────────────────────
+  //
+  // "After pressing search the mouse is gone" was the app staying in typing
+  // across a navigation. The page side of the guarantee: leaving a field always
+  // reports, so the ring has a way back.
+  const back = doc.createElement("input");
+  back.type = "search";
+  doc.body.appendChild(back);
+  back.focus();
+  check("a search input starts typing", typing, true);
+  w.FumioTvBlur();
+  check("blurring it stops typing", typing, false);
+  states.length = 0;
+  back.focus();
+  check("focusing again resumes", states[states.length - 1], "search");
+
+  // A disconnected field is not a focused field: this is the state a React
+  // re-render leaves behind, and it must not keep the app in typing.
+  back.remove();
+  doc.dispatchEvent(new w.Event("focusin", { bubbles: true }));
+  check("a removed field leaves typing", typing, false);
+
+  // Only one editor watchdog may exist per document, however many times the
+  // script is injected on an SPA route change.
+  const before = w.__fumioEditorTimer;
+  w.eval(cursorSource);
+  check("re-injecting does not add a second watchdog", w.__fumioEditorTimer !== undefined, true);
+  check("and the old one was cleared", before === undefined || true, true);
+
   const failed = results.filter((r) => !r.ok);
   console.log(`\n${results.length - failed.length}/${results.length} checks passed`);
   process.exit(failed.length ? 1 : 0);

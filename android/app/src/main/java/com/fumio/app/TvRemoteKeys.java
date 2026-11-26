@@ -47,6 +47,9 @@ final class TvRemoteKeys {
         KeyEvent.KEYCODE_MEDIA_FAST_FORWARD,
     };
 
+    /** Did BACK already try to leave the field? The second one exits the app. */
+    private static boolean blurredOnce;
+
     private TvRemoteKeys() {}
 
     /**
@@ -61,13 +64,23 @@ final class TvRemoteKeys {
             if (code == never) return false;
         }
 
-        // BACK leaves the field. The app's BACK handling is a BackPressed
-        // callback, not a key event, so swallowing the field's BACK here does
-        // not trap the viewer: the page blurs, and the next BACK leaves.
+        // BACK leaves the field — twice. The first press asks the page to blur;
+        // the second one is allowed through to the app, because a field the page
+        // refuses to give up must never trap the viewer on a screen with no
+        // other exit. (The ring disappearing and staying gone is the worst bug
+        // this feature can cause, so the escape hatch is explicit.)
         if (code == KeyEvent.KEYCODE_BACK) {
-            if (event.getAction() == KeyEvent.ACTION_DOWN) run(webView, "window.FumioTvBlur&&window.FumioTvBlur();");
+            if (event.getAction() != KeyEvent.ACTION_DOWN) return true;
+            if (blurredOnce) {
+                blurredOnce = false;
+                TvUi.forgetInputFocus();
+                return false; // the app's own BACK handling decides what happens
+            }
+            blurredOnce = true;
+            run(webView, "window.FumioTvBlur&&window.FumioTvBlur();");
             return true;
         }
+        blurredOnce = false;
 
         if (event.getAction() != KeyEvent.ACTION_DOWN) {
             // Every repeat of a letter must be delivered, so only the initial
