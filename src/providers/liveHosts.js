@@ -1,5 +1,5 @@
 // Embed hosts are no longer a frozen APK list. Defaults cover the known
-// vidstuck/zxcstream TLD move; the native shell scrapes theogpiratebot.online
+// vidstuck/zxcstream TLD move; the native shell scrapes theogpiratebot.to
 // and writes window.__fumioLiveHosts so a site deploy can retarget hosts
 // without a new APK.
 
@@ -17,7 +17,7 @@ const currentMap = () => {
 export function applyLiveHost(url) {
   if (!url) return url;
   try {
-    const parsed = new URL(url, "https://theogpiratebot.online");
+    const parsed = new URL(url, "https://theogpiratebot.to");
     const host = (parsed.hostname || "").replace(/^www\./i, "").toLowerCase();
     if (!host) return url;
     const family = host.split(".")[0];

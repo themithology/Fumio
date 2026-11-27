@@ -53,8 +53,8 @@ final class LiveSourceSync {
     }
 
     /** The site's optional cheap contract (see docs/iris-players-endpoint.md). */
-    private static final String ENDPOINT = "https://theogpiratebot.online/api/players";
-    private static final String PLAYER_PAGE = "https://theogpiratebot.online/player";
+    private static final String ENDPOINT = "https://theogpiratebot.to/api/players";
+    private static final String PLAYER_PAGE = "https://theogpiratebot.to/player";
 
     private static final String PREFS = "ogpb_live_sources";
     private static final long CACHE_TTL_MS = 6 * 60 * 60 * 1000L;

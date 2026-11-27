@@ -201,7 +201,7 @@ final class InAppGoogleAuth {
     private static String fetchWebClientId() {
         String[] continues = {
             "https://ogpb-331d5.firebaseapp.com/__/auth/handler",
-            "https://theogpiratebot.online/account",
+            "https://theogpiratebot.to/account",
             "https://ogpb-331d5.firebaseapp.com",
         };
         for (String cont : continues) {

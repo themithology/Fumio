@@ -63,7 +63,21 @@ import org.json.JSONObject;
  */
 public class MainActivity extends BridgeActivity {
 
-    private static final String LIVE_ORIGIN = "https://theogpiratebot.online";
+    /** The site's canonical origin. Moved from .online on 2026-11-27. */
+    private static final String LIVE_ORIGIN = "https://theogpiratebot.to";
+
+    /**
+     * Every origin that is "our site".
+     *
+     * BOTH ARE LIVE ON PURPOSE. The app is installed and updates itself, but a
+     * viewer who was already inside the app when the domain moved still has the
+     * old origin in their WebView history, in a shared link, and in a bookmark.
+     * Recognising only the new one would treat their own site as third-party:
+     * the shell stops intercepting /watch, the ad-blocking and download paths
+     * stop matching, and external-link handling starts throwing the site at a
+     * browser. This list shrinks when .online stops answering, not before.
+     */
+    private static final String[] LIVE_ORIGINS = { "theogpiratebot.to", "theogpiratebot.online" };
     private Dialog popupDialog;
     private WebView popupView;
     private String pendingAuthToken;
@@ -1816,7 +1830,23 @@ public class MainActivity extends BridgeActivity {
     }
 
     private boolean isLiveSite(Uri url) {
-        return hostMatches(url, "theogpiratebot.online");
+        return url != null && isLiveHost(url.getHost());
+    }
+
+    /**
+     * Is this host our site — either origin?
+     *
+     * WebView-free so a JVM test can prove the boundary that broke every time
+     * the domain moved: if only the canonical origin is recognised, a viewer
+     * still on the old one has their own site treated as third-party.
+     */
+    static boolean isLiveHost(String host) {
+        if (host == null || host.isEmpty()) return false;
+        String target = host.toLowerCase(Locale.US);
+        for (String origin : LIVE_ORIGINS) {
+            if (target.equals(origin) || target.endsWith("." + origin)) return true;
+        }
+        return false;
     }
 
     private void noteBrowsePage(Uri url) {

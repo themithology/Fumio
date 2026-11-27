@@ -1,6 +1,6 @@
 # The website (`src/` + `public/`)
 
-React 19 + Vite + Tailwind. This is the thing at `theogpiratebot.online`, **and**
+React 19 + Vite + Tailwind. This is the thing at `theogpiratebot.to`, **and**
 the web layer the Android app loads — there is one codebase, not two.
 
 ```
@@ -74,7 +74,7 @@ crossed that line:
   bundled build now lands on `NotFound` — honest, and never a stale screen that
   looks live.
 - **`src/pages/Player.jsx` — offline fallback only.** Online, `FumioPlayerOverlay`
-  loads the SITE's player (`https://theogpiratebot.online/watch/...`) with the
+  loads the SITE's player (`https://theogpiratebot.to/watch/...`) with the
   site's own query string. The bundled player is what a television with no
   network gets.
 

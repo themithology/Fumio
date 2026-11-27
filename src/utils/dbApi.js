@@ -12,7 +12,7 @@ export const AUTH_UNAVAILABLE_CODE = "auth-unavailable";
 // The deployed account service is also the default for the native APK. A
 // build-time VITE_ACCOUNT_API_BASE can still override it for staging or a
 // different deployment.
-const DEFAULT_ACCOUNT_API_BASE = "https://theogpiratebot.online";
+const DEFAULT_ACCOUNT_API_BASE = "https://theogpiratebot.to";
 const API_BASE = String(import.meta.env.VITE_ACCOUNT_API_BASE || DEFAULT_ACCOUNT_API_BASE).replace(/\/$/, "");
 const endpoint = (path) => `${API_BASE}${path}`;
 

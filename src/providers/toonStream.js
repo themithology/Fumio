@@ -7,7 +7,7 @@
 import { PROXY_BASES } from "../lib/proxyTiers.js";
 
 const BASES = [
-  "https://theogpiratebot.online",
+  "https://theogpiratebot.to",
   ...PROXY_BASES.filter(Boolean),
 ];
 

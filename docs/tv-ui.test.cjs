@@ -42,7 +42,7 @@ const check = (label, got, want) => {
 const checkThat = (label, got) => check(label, !!got, true);
 
 // ─── a page whose layout we control ────────────────────────────────────────
-function page({ w, h, html = "", host = "theogpiratebot.online", meta = null, overflow = 0 }) {
+function page({ w, h, html = "", host = "theogpiratebot.to", meta = null, overflow = 0 }) {
   const head = meta === null ? "" : `<meta name="viewport" content="width=device-width, initial-scale=1">`;
   const dom = new JSDOM(`<!doctype html><html><head>${head}</head><body>${html}</body></html>`, {
     url: `https://${host}/player?id=1399&type=tv&season=1&episode=1`,
@@ -129,7 +129,7 @@ function viewportOf(dom) {
          <div id="empty">nothing here</div>
        </div>
      </body></html>`,
-    { url: "https://theogpiratebot.online/", runScripts: "dangerously" }
+    { url: "https://theogpiratebot.to/", runScripts: "dangerously" }
   );
   const w = dom.window;
   const doc = w.document;

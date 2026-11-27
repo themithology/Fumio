@@ -9,12 +9,12 @@ import java.util.UUID;
 import org.json.JSONObject;
 
 /**
- * Talks to theogpiratebot.online /api/verify from native HTTPS (no Origin).
+ * Talks to theogpiratebot.to /api/verify from native HTTPS (no Origin).
  * Unlock is 12 hours from a successful redeem, keyed by a stable installId.
  */
 public final class VerifyClient {
 
-    static final String BASE = "https://theogpiratebot.online";
+    static final String BASE = "https://theogpiratebot.to";
     private static final String START = BASE + "/api/verify/start";
     private static final String REDEEM = BASE + "/api/verify/redeem";
     private static final String ENTITLEMENT = BASE + "/api/verify/entitlement";

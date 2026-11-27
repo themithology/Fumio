@@ -19,7 +19,7 @@ Resolution order, per title + episode:
 
 1. **Cache** — `SharedPreferences` key `ogpb_live_sources`, key
    `type|id|season|episode`, TTL **6 hours**. A repeat open costs nothing.
-2. **The cheap endpoint** — `GET https://theogpiratebot.online/api/players` with a
+2. **The cheap endpoint** — `GET https://theogpiratebot.to/api/players` with a
    4 s timeout. Contract: [iris-players-endpoint.md](iris-players-endpoint.md).
 3. **Harvest** — open the site's own player page off-screen (22 s cap) and read
    the server list the page itself rendered. Slower and less exact, but it is the

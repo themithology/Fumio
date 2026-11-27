@@ -1,5 +1,34 @@
 # Changelog
 
+## Unreleased — the site is theogpiratebot.to now
+
+The main website moved from `theogpiratebot.online` to `theogpiratebot.to`.
+Everything that names the site moved with it, except two things that must not:
+
+- **Both origins count as "us".** `MainActivity.LIVE_ORIGINS` lists `.to` **and**
+  `.online`, and `isLiveSite` accepts either. This decides `/watch`
+  interception, ad suppression, download routing and in-app-vs-browser link
+  handling. Recognising only the new origin would treat any viewer still on the
+  old one as a stranger — their own site thrown at a browser, the player no
+  longer ours — on every box that was already running when the domain moved.
+  `LiveOriginTest` fails if either origin stops being recognised, and it asserts
+  that look-alikes (`nottheogpiratebot.to`, `theogpiratebot.to.example.com`)
+  are not.
+- **Sign-in does not follow the domain, on purpose.** `PRIMARY_AUTH_DOMAIN` is
+  now `theogpiratebot.to`, but `resolveAuthDomain()` still returns Firebase's
+  own host: Firebase Hosting only answers `/__/auth/handler` on a host it is
+  connected to, and Google only accepts a redirect URI registered on the OAuth
+  client. Pointing at `.to` before both are true loads the site's own HTML into
+  the sign-in popup and kills Google sign-in silently, for everyone. The switch
+  afterwards is one environment variable: `VITE_FIREBASE_AUTH_DOMAIN`.
+
+Also moved: `LIVE_ORIGIN`, `LIVE_SITE`, `LiveServers.SITE`,
+`LiveSourceSync.ENDPOINT`/`PLAYER_PAGE`, `VerifyClient.BASE`,
+`InAppGoogleAuth`'s account URL, the `Downloader` referer check (which accepts
+both, for a file link that started on the old origin), `capacitor.config.json`
+`allowNavigation` (both, so a bookmark still opens in-app), and every site URL
+in `src/` and the docs.
+
 ## Unreleased — nothing that can be hardcoded stays hardcoded
 
 The site (`themithology/Iris`) moved while this app still carried its own copy of

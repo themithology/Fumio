@@ -26,7 +26,7 @@ import {
   AVATAR_CATALOG_CREDIT,
 } from "../config/avatarCatalog.js";
 
-export const CONFIG_URL = "https://theogpiratebot.online/api/config";
+export const CONFIG_URL = "https://theogpiratebot.to/api/config";
 export const CONFIG_TIMEOUT_MS = 8000;
 
 /** The server's answer, or null — never throws, never half-applied. */

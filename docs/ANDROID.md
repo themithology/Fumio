@@ -39,7 +39,7 @@ site's deliberate external links use `FumioNative.openBrowser`. `mailto:`,
 ## The shell in one paragraph
 
 Capacitor loads the bundled web build at `https://localhost`, and the shell
-immediately navigates to `https://theogpiratebot.online/`. Everything you see is
+immediately navigates to `https://theogpiratebot.to/`. Everything you see is
 the live site, except the four things the app owns: the **player**, the
 **downloads**, the **access wall**, and the **update prompt** — plus, on a TV,
 the **cursor**.
@@ -116,7 +116,15 @@ The last uncaught exception is written to `files/last-crash.txt` and shown by
 
 ## Link policy (what stays inside the WebView)
 
-- `theogpiratebot.online` and `*.theogpiratebot.online` → in-app.
+- `theogpiratebot.to` and `*.theogpiratebot.to` → in-app.
+- **`theogpiratebot.online` and `*.theogpiratebot.online` → also in-app, still.**
+  The domain moved on 2026-11-27, but the app is installed on boxes that were
+  already running, and a WebView mid-session, a shared link or a bookmark can
+  still name the old origin. Recognising only the new one would treat the
+  viewer's own site as a stranger: no `/watch` interception, no ad suppression,
+  no download routing, and the site thrown at a browser. The list is
+  `MainActivity.LIVE_ORIGINS`; it shrinks when `.online` stops answering, not
+  before. `LiveOriginTest` fails if either origin stops being recognised.
 - Google / Firebase / reCAPTCHA → in-app (sign-in needs them); never sent to Chrome.
 - Discord, `mailto:`, `tel:`, any other app scheme, other `_blank` targets → the
   system browser or the matching app.

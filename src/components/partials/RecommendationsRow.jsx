@@ -5,7 +5,7 @@ import MediaImage from "./MediaImage.jsx";
 import TitleHint from "./TitleHint.jsx";
 import { DISCORD_INVITE_URL } from "../../utils/externalLinks.js";
 
-const API_BASE = String(import.meta.env.VITE_ACCOUNT_API_BASE || "https://theogpiratebot.online").replace(/\/$/, "");
+const API_BASE = String(import.meta.env.VITE_ACCOUNT_API_BASE || "https://theogpiratebot.to").replace(/\/$/, "");
 
 // Optional Iris server feature. The row disappears quietly when Fumio is
 // served without Iris's Node recommendation endpoint or when the community

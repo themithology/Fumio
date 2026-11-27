@@ -5,7 +5,7 @@ Three parts, one repo. Nothing here is theoretical — every path below exists.
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
 │  src/ + public/ + index.html        THE WEBSITE (React 19 + Vite)    │
-│  theogpiratebot.online — browse, search, details, player, accounts   │
+│  theogpiratebot.to — browse, search, details, player, accounts   │
 └───────────────┬──────────────────────────────────────────────────────┘
                 │  the same build is packed into the app
                 ▼
@@ -33,7 +33,7 @@ Three parts, one repo. Nothing here is theoretical — every path below exists.
 | The player screen | **The app** (`FumioPlayerOverlay` + bundled React build) | The site's `/player` page is never embedded. |
 | Downloads, offline playback, notifications | **The app** | Pure native, works with the site down. |
 | Update prompt | **The app** (`Updater`) | Reads GitHub releases; the website is not involved. |
-| Accounts and sync | **The website's API** (`theogpiratebot.online/api/db`) + Firebase | See [ACCOUNTS.md](ACCOUNTS.md) and [DATA-LAYER-PLAN.md](DATA-LAYER-PLAN.md). |
+| Accounts and sync | **The website's API** (`theogpiratebot.to/api/db`) + Firebase | See [ACCOUNTS.md](ACCOUNTS.md) and [DATA-LAYER-PLAN.md](DATA-LAYER-PLAN.md). |
 | "Something went wrong" screen | **The app** (`offline.html` in the APK) | Must work with no network at all. See [OFFLINE-SCREEN.md](OFFLINE-SCREEN.md). |
 
 The rule that falls out of this table, and the one every change is checked against:
@@ -43,7 +43,7 @@ The rule that falls out of this table, and the one every change is checked again
 
 1. **Launch.** Capacitor loads the bundled web build (`https://localhost`).
 2. `MainActivity.onPageFinished` sees our own origin and immediately navigates to
-   `https://theogpiratebot.online/` — the app is a shell around the live site, not
+   `https://theogpiratebot.to/` — the app is a shell around the live site, not
    a frozen copy.
 3. The live site loads. `MainActivity` injects `fumio-player.js` (link handling,
    app-only chrome, iframe stealing) and, on a TV, `tv-viewport.js` +

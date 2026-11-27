@@ -21,7 +21,7 @@ import java.io.InputStream;
  *   in half on 2026-11-05. The only thing injected is the pointer helper
  *   (tv-cursor.js), which adds no layout of its own.
  *
- *   THE LIVE WEBSITE (theogpiratebot.online): it does not know it is on a TV,
+ *   THE LIVE WEBSITE (theogpiratebot.to): it does not know it is on a TV,
  *   so it is told. tv-viewport.js normalises the layout width to 1920 CSS px
  *   and reverts itself if that ever overflows, and textZoom lifts body text for
  *   a 3 m viewing distance.

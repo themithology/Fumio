@@ -43,8 +43,8 @@ public class DownloaderTest {
     @Test
     public void pagesAreNotFiles() {
         String[] pages = {
-            "https://theogpiratebot.online/download",
-            "https://theogpiratebot.online/watch/movie/550",
+            "https://theogpiratebot.to/download",
+            "https://theogpiratebot.to/watch/movie/550",
             "https://host.example/file/abc", // no extension at all
             "https://host.example/player?id=1",
         };
