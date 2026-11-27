@@ -1,5 +1,42 @@
 # Changelog
 
+## Unreleased — nothing that can be hardcoded stays hardcoded
+
+The site (`themithology/Iris`) moved while this app still carried its own copy of
+the old world. Fixed by learning instead of compiling:
+
+- **Embed hosts are learned.** `LiveServers` now reads the site's own manifest —
+  `GET /api/players?type=movie&id=550` → `servers: [{ key, label, url }]` — and
+  harvests a host from each published embed URL. The old scrape stays as the
+  second tier (it works before any manifest exists), but its host families are no
+  longer a brand whitelist: a provider host is recognised by the `/embed/`,
+  `/player/`, `/watch/` path it appears on.
+  The fifteen-name list in `MainActivity` is gone, replaced by eleven *hints* for
+  the first launch. This is the bug that shipped: vidstuck moved to
+  `0vidads.top`, and the app kept opening the site's own page — with ads —
+  because the new host was not in the APK. Our own Server 1
+  (`embed.theogpiratebot.to`) was never in the list at all.
+- **Where the player and the hidden iframes come from.** `fumio-player.js` hid
+  sixteen literal provider hosts. It now hides the hosts the site published
+  (`window.__fumioLiveHosts`), minus our own embed, plus any iframe on an
+  `/embed/` or `/player/` path.
+- **Three path grammars, not one.** The app only understood `/embed/…`. A TV URL
+  with no season is the anime lane's shape and no longer becomes "season 1,
+  episode 1". `EmbedTitleTest` holds one live path per grammar.
+- **Downloads follow the broker.** The site's download path is `POST
+  /api/downloads`: short-lived signed grants, resolved server-side. Detection is
+  by path and grant shape now, because `tgdl.lovable.app`, `hubcloud` and
+  `filepress` are the *old* picker and no longer appear on the site.
+- **Details.jsx is deleted** (647 lines). The site owns that page; the bundled
+  copy drifted. `SeasonEpisodeBrowser.jsx`, used only by it, went too.
+- **The overlay loads the site's player first**, with the site's own query
+  string; the frozen page is the offline fallback, which is all it was ever good
+  for. `ACCESS_NETWORK_STATE` is declared for that choice, and an absent
+  permission assumes online rather than blocking playback.
+
+Verified: 73/73 TV checks, offline-screen check, `vite build` clean, and the JVM
+tests added for the parser and the host matcher.
+
 Every published APK, newest last. Release tag = `theogpiratebot-apk-<run number>`,
 and that number **is** the `versionCode` the updater compares against.
 

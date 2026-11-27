@@ -61,6 +61,25 @@ No `.env` is required. Every variable has a working default in code; see
 Renaming or adding a server on the site must show up in the app with no APK
 release. That is what `LiveSourceSync` in the Android shell depends on.
 
+## What the bundled build is NOT allowed to own
+
+The React source in `src/` is the app's **offline** copy. Offline means "the
+network is gone", not "a second website with its own opinions", and two screens
+crossed that line:
+
+- **`src/pages/Details.jsx` — deleted (647 lines).** The site has its own details
+  page and it is better informed: anime season maps, the download panel, the
+  live server list. The bundled copy kept a frozen version of all of that and
+  drifted from the site every time the site changed. A details route in the
+  bundled build now lands on `NotFound` — honest, and never a stale screen that
+  looks live.
+- **`src/pages/Player.jsx` — offline fallback only.** Online, `FumioPlayerOverlay`
+  loads the SITE's player (`https://theogpiratebot.online/watch/...`) with the
+  site's own query string. The bundled player is what a television with no
+  network gets.
+
+The rule: **if the site has a page for it, the bundled build does not invent one.**
+
 ## Data and accounts
 
 - Lists, history, "look" (avatar/banner) and the chosen server are

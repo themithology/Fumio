@@ -9,6 +9,9 @@ the app (that was a wrong turn on 2026-10-28 and it is gone).
 |---|---|---|
 | The player UI: iframe surface, server picker, theme, controls, framing | **The app** (`FumioPlayerOverlay` + the bundled React build) | must work on a phone, a TV, and with the site unreachable |
 | Which servers exist: names, order, count, each embed URL | **The website** | never hardcoded in the app; a rename on the site must not need an APK |
+| Which HOSTS are player hosts | **The website**, via `GET /api/players` → `servers[].url` | `LiveServers` harvests the host from each published embed URL and remembers it. The APK keeps eleven *hints* for the very first launch, before any fetch has succeeded — that is the only list left, and it is deliberately tiny. |
+| Which title an embed URL is for | **The site's three path grammars** | `/embed/movie/550`, `/player/movie/550`, `/watch/movie/550`, `/movie/550`. Compiled, because it is a grammar, not a provider name — and covered by `EmbedTitleTest`. |
+| Whether a URL is a download | **The site's broker paths and signed grants** | `/api/downloads`, `/downloads/…`, a 32+ character grant token. `tgdl.lovable.app` / `hubcloud` / `filepress` were the OLD picker and are gone from the site — a hardcoded hostname list for downloads is now a bug, not a feature. |
 
 ## Where the server list comes from (`LiveSourceSync`)
 

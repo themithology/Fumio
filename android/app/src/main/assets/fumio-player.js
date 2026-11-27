@@ -90,7 +90,41 @@
 
   function killDiscordPrompt() {
     try {
-      var style = document.createElement("style");
+      /**
+   * CSS that hides the site's third-party embeds without hiding our own.
+   *
+   * Two sources, and neither is a compiled-in brand name:
+   *   1. every host the site published (window.__fumioLiveHosts), minus ours;
+   *   2. any iframe on an /embed/ or /player/ path, which is what a provider
+   *      mount looks like wherever it lives.
+   *
+   * download pages are excluded, because a file picker legitimately frames a
+   * provider.
+   */
+  function buildEmbedHidingCss() {
+    var OUR_OWN = "theogpiratebot.to";
+    var parts = [];
+    var hosts = (window.__fumioLiveHosts && typeof window.__fumioLiveHosts === "object")
+      ? window.__fumioLiveHosts
+      : null;
+    if (hosts) {
+      for (var key in hosts) {
+        if (!Object.prototype.hasOwnProperty.call(hosts, key)) continue;
+        var host = String(hosts[key] || key || "").toLowerCase();
+        if (!host || host.indexOf(OUR_OWN) >= 0) continue;
+        parts.push('iframe[src*="' + host + '"]');
+      }
+    }
+    parts.push('iframe[src*="/embed/"]');
+    parts.push('iframe[src*="/player/"]');
+    return (
+      "html:not([data-fumio-download]) " +
+      parts.join(",") +
+      "{display:none!important}"
+    );
+  }
+
+  var style = document.createElement("style");
       style.textContent =
         'header a[href*="discord"],nav a[href*="discord"],a[aria-label*="Join our Discord"],a[aria-label*="Join Discord"]{display:none!important}' +
         'iframe[src*="widgetbot"],iframe[src*="e.widgetbot.io"],iframe[src*="discord.com/widget"]{display:none!important}';
@@ -155,7 +189,14 @@
   style.textContent =
     "html,body{overflow-x:hidden!important;max-width:100vw!important}" +
     "img,video,canvas{max-width:100%}" +
-    'html:not([data-fumio-download]) iframe[src*="vidsrc"]:not([src*="vidsrc.party"]),iframe[src*="videasy"],iframe[src*="vidfast"],iframe[src*="vidstuck"],iframe[src*="bingr"],iframe[src*="zxcstream"],iframe[src*="2embed"],iframe[src*="multiembed"],iframe[src*="autoembed"],iframe[src*="smashy"],iframe[src*="vidlink"],iframe[src*="embed.su"],iframe[src*="tgvid.lovable"],iframe[src*="megaplay"],iframe[src*="zoko"],iframe[src*="4animo"]{display:none!important}' +
+    // ── the site's third-party embeds are hidden; OURS is not ────────────────
+    //
+    // This used to be sixteen literal hostnames, which is why our own player
+    // (embed.theogpiratebot.to, Server 1 in both lanes) was invisible in the
+    // app and every renamed provider had to be edited in by hand. Hosts come
+    // from the site now — LiveServers publishes them as
+    // window.__fumioLiveHosts — so the rule is a SHAPE plus that list.
+    buildEmbedHidingCss() +
     'a[href*="watch-party"],a[href*="watchparty"],[data-nav="watch-party"]{display:none!important}' +
     ".fixed,[class*=\"fixed\"]{max-width:100vw;box-sizing:border-box}" +
     ".fixed.bottom-0,.fixed.inset-x-0,[class*=\"bottom-3\"],[class*=\"bottom-4\"],[class*=\"bottom-5\"],[class*=\"bottom-6\"]{left:0!important;right:0!important;width:auto!important;max-width:calc(100vw - 16px)!important;margin-left:auto!important;margin-right:auto!important;overflow-x:auto!important;-webkit-overflow-scrolling:touch;padding-left:max(8px,env(safe-area-inset-left))!important;padding-right:max(8px,env(safe-area-inset-right))!important;padding-bottom:max(8px,env(safe-area-inset-bottom))!important}" +

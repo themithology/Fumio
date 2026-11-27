@@ -51,6 +51,8 @@ final class FumioPlayerOverlay {
 
     /** The app's own player build, served out of the APK. */
     private static final String LOCAL_ORIGIN = "https://localhost";
+    /** The site whose player this is. One origin, one place. */
+    private static final String LIVE_SITE = "https://theogpiratebot.online";
 
     private final Activity activity;
     private final Host host;
@@ -205,10 +207,59 @@ final class FumioPlayerOverlay {
         return local.toString();
     }
 
-    /** The build frozen in the APK — offline, or the site did not answer. */
+    /**
+     * FIRST the live player, then the frozen one.
+     *
+     * The app used to load a build frozen in the APK. That build carries its own
+     * copy of the details page and its own player page, so every change the site
+     * made to either was invisible until a new APK shipped — and the copies
+     * drifted: the online server list, the /api/downloads broker and the
+     * anime-lane numbering all moved on the site while the bundled copy kept
+     * rendering the old thing.
+     *
+     * The live player is now the real one: same page, same server list, same
+     * download logic as the website. The frozen copy remains as the fallback for
+     * a box that is offline, which is the only case it was ever good for.
+     *
+     * Only the PATH is ours (it maps one-to-one onto the site's route); every
+     * parameter the site supplied travels with it.
+     */
     private void loadLocal(String path) {
         if (webView == null) return;
-        webView.loadUrl(LOCAL_ORIGIN + path);
+        String target = playerUrl(path);
+        if (target == null) {
+            webView.loadUrl(LOCAL_ORIGIN + path);
+            return;
+        }
+        webView.loadUrl(target);
+    }
+
+    /**
+     * The site's own player URL for {@code path}, or null when there is no site
+     * to ask (offline), in which case the frozen page is used.
+     *
+     * The query is the one the caller built, so `server=` and anything else the
+     * website sent survives the hand-off.
+     */
+    private String playerUrl(String path) {
+        if (path == null || path.isEmpty()) return null;
+        if (!online()) return null;
+        return LIVE_SITE + path;
+    }
+
+    private boolean online() {
+        try {
+            android.net.ConnectivityManager cm = (android.net.ConnectivityManager) activity.getSystemService(
+                android.content.Context.CONNECTIVITY_SERVICE
+            );
+            if (cm == null) return false;
+            android.net.NetworkInfo info = cm.getActiveNetworkInfo();
+            return info != null && info.isConnected();
+        } catch (Exception offline) {
+            // No permission to ask means "assume online": the load will fail
+            // over to the frozen page on its own if it cannot answer.
+            return true;
+        }
     }
 
     private void attachToActivity() {

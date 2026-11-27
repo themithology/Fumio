@@ -140,3 +140,16 @@ must not be able to affect the phone.
    parked, the frame loop stopped.
 3. The offline screen prints the failure reason in small type: DNS, TLS, timeout
    or HTTP 5xx — a screenshot of it is a bug report.
+
+## The tests that pin "learned, not hardcoded"
+
+| Test | What it proves |
+|---|---|
+| `EmbedTitleTest` — `everyGrammarTheSiteEmitsIsUnderstood` | one live path per grammar the site emits (`/embed/`, `/player/`, `/watch/`, `/movie/`), copied from `src/utils/serverRegistry.js` in `themithology/Iris` |
+| `EmbedTitleTest` — `aSeasonlessTvUrlDoesNotInventEpisodeOne` | the anime lane's shape is not silently "season 1, episode 1" |
+| `EmbedTitleTest` — `landingPagesAndAssetsAreNotPlayers` | `/api/v1/health`, `/assets/app.js`, `/demo` are not handed to the player |
+| `LiveServersTest` | a host the bundle knows **before any network call** is recognised, as is a subdomain of it; an unrelated host is not |
+
+When the site changes a provider path or moves a host, one of these fails with
+the URL in the message — which is the whole point of testing the grammar rather
+than the provider.
