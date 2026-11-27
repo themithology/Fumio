@@ -1,6 +1,6 @@
 # When the site will not load
 
-The screen a viewer sees when `theogpiratebot.online` is unreachable: **"Something
+The screen a viewer sees when `theogpiratebot.to` is unreachable: **"Something
 went wrong — join our socials for updates"**, with Discord, Telegram and Instagram
 on its own card, and two buttons (**Try again**, **Browse offline**).
 

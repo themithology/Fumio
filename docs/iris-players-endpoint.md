@@ -16,7 +16,7 @@ it is a small win; ignoring it costs nothing catastrophic.
 ## Request
 
 ```
-GET https://theogpiratebot.online/api/players?id=550&type=movie&season=1&episode=1
+GET https://theogpiratebot.to/api/players?id=550&type=movie&season=1&episode=1
 ```
 
 | Parameter | Notes |

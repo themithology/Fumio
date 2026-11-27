@@ -14,20 +14,31 @@ adds cross-device sync of list/history/look, and a public profile page.
 | Profiles | `src/utils/profiles.js`, `src/pages/Profile.jsx` | handle, display name, look |
 | Look (avatar/banner) | `src/utils/profileLook.js`, `src/components/account/LookEditor.jsx` | device-first, then published |
 | Sync | `src/utils/accountSync.js` | list, history, look |
-| API | `src/utils/dbApi.js` | `/api/db/*` on `theogpiratebot.online` |
+| API | `src/utils/dbApi.js` | `/api/db/*` on `theogpiratebot.to` |
 
 ## Signing in on our own domain
 
 `authDomain` is **not a label** — it is the origin the Firebase sign-in helper is
 loaded from (`https://<authDomain>/__/auth/handler`). Only Firebase Hosting serves
 that path. So `src/config/authDomain.js` **probes** the apex
-(`theogpiratebot.online`) and only uses it when it really serves the helper;
+(`theogpiratebot.to`) and only uses it when it really serves the helper;
 otherwise it falls back to `ogpb-331d5.firebaseapp.com`, which works today.
 
 Turning the apex on for real requires **both**:
 
 1. the apex connected in Firebase → Hosting, and
-2. `https://theogpiratebot.online/__/auth/handler` added as an authorised
+2. `https://theogpiratebot.to/__/auth/handler` added as an authorised
+
+> **The 2026-11-27 domain move does NOT move the sign-in host by itself.**
+> `PRIMARY_AUTH_DOMAIN` is now `theogpiratebot.to`, but
+> `resolveAuthDomain()` still returns Firebase's own host, deliberately:
+> Firebase Hosting only answers `/__/auth/handler` on a host it is connected to,
+> and Google only accepts a redirect URI that is registered on the OAuth client.
+> Point the apex at `.to` before both are true and the "Continue with Google"
+> popup loads the site's own HTML instead of the helper — sign-in dies silently
+> for every visitor. The switch, once Firebase → Hosting has the `.to` apex and
+> `https://theogpiratebot.to/__/auth/handler` is an authorised redirect URI, is
+> one environment variable: `VITE_FIREBASE_AUTH_DOMAIN=theogpiratebot.to`.
    redirect URI on the Google OAuth client.
 
 Until then the apex is a probe, not a promise. The probe fails **towards the

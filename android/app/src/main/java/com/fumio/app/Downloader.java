@@ -135,7 +135,8 @@ final class Downloader {
         }
         if (cookie != null && !cookie.isEmpty()) request.addRequestHeader("Cookie", cookie);
         if (userAgent != null) request.addRequestHeader("User-Agent", userAgent);
-        if (referer != null && (referer.startsWith("https://theogpiratebot.online") || referer.startsWith("https://localhost"))) {
+        if (referer != null && (referer.startsWith("https://theogpiratebot.to") ||
+                referer.startsWith("https://theogpiratebot.online") || referer.startsWith("https://localhost"))) {
             request.addRequestHeader("Referer", referer);
         }
 

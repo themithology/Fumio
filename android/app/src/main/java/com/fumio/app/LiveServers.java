@@ -43,7 +43,7 @@ import org.json.JSONObject;
  */
 final class LiveServers {
 
-    private static final String SITE = "https://theogpiratebot.online/";
+    private static final String SITE = "https://theogpiratebot.to/";
     private static final String PREFS = "ogpb_live_hosts";
     // Every host family the player can name. The live player is the default
     // now (FumioPlayerOverlay), so this scrape only feeds the OFFLINE copy —
@@ -252,7 +252,7 @@ final class LiveServers {
         while (match.find()) {
             String path = match.group(1);
             if (path == null) continue;
-            out.add("https://theogpiratebot.online" + path);
+            out.add("https://theogpiratebot.to" + path);
         }
         return out;
     }

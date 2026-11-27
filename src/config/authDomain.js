@@ -10,10 +10,10 @@
 // anonymous analytics identity keep working, and no account or document is
 // touched. Hence the probe below instead of a hopeful literal.
 //
-// The owner wants the popup to say `theogpiratebot.online` and never show a
+// The owner wants the popup to say the site's own domain and never show a
 // `*.firebaseapp.com` host. That is only honest once the apex is connected in
 // Firebase → Hosting AND the Google OAuth client carries
-//     https://theogpiratebot.online/__/auth/handler
+//     https://theogpiratebot.to/__/auth/handler
 // as an authorised redirect URI (docs/ACCOUNTS.md §"Signing in on our own
 // domain"). Until BOTH are true the apex cannot serve the helper, so we ask
 // the running site which one is real and fall back to Firebase's own host.
@@ -25,7 +25,16 @@
 // Auth data (those are addressed by projectId/apiKey/appId, which are
 // project identifiers, NOT domains — see the guardrail in src/firebase.js).
 
-export const PRIMARY_AUTH_DOMAIN = "theogpiratebot.online";
+/**
+ * The site's own apex. Moved from theogpiratebot.online on 2026-11-27.
+ *
+ * READ THIS BEFORE "FIXING" THE FALLBACK BELOW. `authDomain` is not a label;
+ * it is the origin Firebase Hosting serves `/__/auth/handler` from, and only a
+ * host that Firebase Hosting serves can answer it. resolveAuthDomain() therefore
+ * deliberately returns FALLBACK_AUTH_DOMAIN to-day — see the note there. This
+ * constant changing does NOT change the popup host by itself, by design.
+ */
+export const PRIMARY_AUTH_DOMAIN = "theogpiratebot.to";
 export const FALLBACK_AUTH_DOMAIN = "ogpb-331d5.firebaseapp.com";
 
 /** The one reserved path Firebase Hosting serves the sign-in helper from. */
@@ -36,8 +45,8 @@ const CACHE_TTL_MS = 60 * 60 * 1000; // re-check hourly; the verdict is stable
 const PROBE_TIMEOUT_MS = 4000;
 
 /**
- * Strip the parts a human pastes in. Accepts "https://theogpiratebot.online/",
- * "theogpiratebot.online" and "theogpiratebot.online/__" alike, because this
+ * Strip the parts a human pastes in. Accepts "https://theogpiratebot.to/",
+ * "theogpiratebot.to" and "theogpiratebot.to/__" alike, because this
  * string also comes from a Vercel env var someone typed by hand.
  */
 export const normaliseDomain = (value) => {
@@ -170,8 +179,19 @@ export const resolveAuthDomain = async ({
   if (override) return override;
 
   // One-click Google must open Firebase Hosting's helper, not the site's SPA
-  // at theogpiratebot.online/__/auth/handler. Always use the known-working host
+  // at theogpiratebot.to/__/auth/handler. Always use the known-working host
   // unless an env override is set.
+  //
+  // THE DOMAIN MOVE DOES NOT CHANGE THIS LINE, ON PURPOSE. Switching the apex
+  // from .online to .to does NOT make Firebase Hosting answer on .to: that needs
+  //   (a) the .to apex connected in Firebase → Hosting, and
+  //   (b) https://theogpiratebot.to/__/auth/handler registered as an authorised
+  //       redirect URI on the Google OAuth client.
+  // Until both are true, pointing authDomain at .to opens the site's own HTML in
+  // the sign-in popup and Google sign-in dies — silently, with no error, for
+  // every visitor. Set VITE_FIREBASE_AUTH_DOMAIN=theogpiratebot.to in the deploy
+  // environment once (a) and (b) are done; that is the whole switch, and it
+  // needs no code change.
   void primary;
   void storage;
   void fetchImpl;

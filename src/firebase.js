@@ -53,7 +53,7 @@ const applyAuthDomain = (domain) => {
   }
 };
 
-/** Probe theogpiratebot.online/__/auth/handler like Iris, else firebaseapp.com. */
+/** Probe theogpiratebot.to/__/auth/handler like Iris, else firebaseapp.com. */
 export const ensureAuthDomainReady = () => {
   if (!authDomainReady) {
     authDomainReady = resolveAuthDomain({ env: import.meta.env })

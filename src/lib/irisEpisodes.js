@@ -19,7 +19,7 @@ const REQUEST_TIMEOUT_MS = 20000;
 // only the four TMDB tiers previously used by Fumio; anime-metadata and
 // anime-episodes are Iris API routes on all of these workers.
 const IRIS_EDGE_BASES = [
-  "https://theogpiratebot.online",
+  "https://theogpiratebot.to",
   "https://sexy.dryfruits.workers.dev",
   "https://theogpiratebot-tmdb-proxy.gleamcasteheavan.workers.dev",
   "https://damp-bird-e8d5.moviehub4u1209.workers.dev",
@@ -134,7 +134,7 @@ const normalizeMetadata = (rawBody, transport) => {
  *
  * The live site API is first: it carries title-specific exceptions
  * (Demon Slayer, Naruto, Mushoku). Browser-direct AniList is the fallback
- * when theogpiratebot.online / edge workers are down.
+ * when theogpiratebot.to / edge workers are down.
  */
 export async function fetchIrisSeasonData({ title, tmdbEpisodes = null, year = null } = {}) {
   const cleanTitle = String(title || "").trim();

@@ -1,5 +1,5 @@
 export const DISCORD_INVITE_URL = "https://discord.gg/t6tjszp5eb";
-export const SITE_ORIGIN = "https://theogpiratebot.online";
+export const SITE_ORIGIN = "https://theogpiratebot.to";
 
 export const isNativeApp = () =>
   typeof window !== "undefined" && Boolean(window.Capacitor?.isNativePlatform?.());

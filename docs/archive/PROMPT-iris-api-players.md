@@ -139,7 +139,7 @@ VERIFY BEFORE YOU FINISH
 3. Deploy: npm run workers:deploy  (all three workers — the app hits whichever
    tier answers; a tier without this route answers 404 and the app silently
    falls back to scraping, so deploy them all).
-4. Confirm live: curl -s "https://theogpiratebot.online/api/players?id=550&type=movie"
+4. Confirm live: curl -s "https://theogpiratebot.to/api/players?id=550&type=movie"
    must return JSON, not index.html.
 
 Report back: the deployed URL, the JSON for id=550 type=movie, and whether any
@@ -148,7 +148,7 @@ registry entry had to be skipped (and why).
 
 ## What the app does with it
 
-`LiveSourceSync` already tries `https://theogpiratebot.online/api/players`
+`LiveSourceSync` already tries `https://theogpiratebot.to/api/players`
 first with a 4 s budget, before any scraping:
 
 - **200 + `servers[]`** → used directly (labels, order, URLs), cached 6 h per

@@ -52,7 +52,8 @@ final class FumioPlayerOverlay {
     /** The app's own player build, served out of the APK. */
     private static final String LOCAL_ORIGIN = "https://localhost";
     /** The site whose player this is. One origin, one place. */
-    private static final String LIVE_SITE = "https://theogpiratebot.online";
+    /** The site's canonical origin (moved from .online on 2026-11-27). */
+    private static final String LIVE_SITE = "https://theogpiratebot.to";
 
     private final Activity activity;
     private final Host host;
@@ -691,6 +692,10 @@ final class FumioPlayerOverlay {
         if (host == null) return true;
         String clean = host.toLowerCase(Locale.US);
         return !(clean.equals("localhost")
+            || clean.equals("theogpiratebot.to")
+            || clean.endsWith(".theogpiratebot.to")
+            // The old origin still counts: a viewer mid-session, or a link
+            // shared before the move, must not be popped out to a browser.
             || clean.equals("theogpiratebot.online")
             || clean.endsWith(".theogpiratebot.online"));
     }

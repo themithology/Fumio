@@ -26,7 +26,7 @@ device, and an update path for a device with no browser (§7).
 
 | Surface | What it is | Who controls it | Volatility |
 |---|---|---|---|
-| **Browse** (home, movie, tv, anime, search, live-tv) | the **live website** in the WebView — `MainActivity` loads `https://theogpiratebot.online/` first, bundled `dist` only as fallback (`onPageFinished`/`onReceivedError`) | **the site** | **high** — can change any day |
+| **Browse** (home, movie, tv, anime, search, live-tv) | the **live website** in the WebView — `MainActivity` loads `https://theogpiratebot.to/` first, bundled `dist` only as fallback (`onPageFinished`/`onReceivedError`) | **the site** | **high** — can change any day |
 | **Player** | **ours**: overlay WebView on `https://localhost/watch/{type}/{id}` → `src/pages/Player.jsx` + `FumioPlayerStage.jsx` + `ServerPickerBar.jsx` | us, in this repo | low — ships with the APK |
 | **Server list** | native harvest / `/api/players` when it lands, injected as `window.__fumioLiveSources` | site data, our code | medium |
 | **Downloads / offline** | native: `Downloader`, `DownloadsLibrary`, `DownloadsActivity`, `OfflinePlayerActivity` (Media3) | us | none |
@@ -369,7 +369,7 @@ What replaces them, and still matters on a sideloaded TV:
    disk is a dead app on a TV.
 6. **Auth on TV.** Google sign-in in a WebView with a remote is the worst part of
    a first run: no fast typing, no QR. Options: device-code flow ("open
-   theogpiratebot.online/tv, enter `4F2K-9Q`"), or anonymous-first on TV and never
+   theogpiratebot.to/tv, enter `4F2K-9Q`"), or anonymous-first on TV and never
    ask (recommended default — everything except synced watchlists works). Decide
    before T4, not during it.
 7. **Text input.** Search works (Android TV IME) but is slow on a remote. In TV

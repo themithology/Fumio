@@ -120,6 +120,60 @@ jobs:
                   print(f"| `{name}` | {status} |")
           PY
 
+      # GREEN IS NOT PROOF THAT A TEST RAN. A renamed, deleted or silently
+      # skipped test class leaves the job green and the behaviour unguarded —
+      # and the failure only shows up months later, on a device, in front of a
+      # viewer. So the classes that guard things people notice are REQUIRED to
+      # appear in the results, by name.
+      #
+      # Add a class here when its absence would be invisible.
+      - name: The tests that matter actually ran
+        run: |
+          python3 - <<'PY'
+          import glob, sys, xml.etree.ElementTree as ET
+
+          REQUIRED = {
+              "LiveOriginTest": "both site origins are recognised (the domain move)",
+              "EmbedTitleTest": "every embed path grammar the site emits",
+              "LiveServersTest": "a learned embed host is recognised",
+              "DownloaderTest": "a page is not mistaken for a file",
+              "TvRemoteKeysTest": "remote keys become the right characters",
+              "TvModeTest": "TV detection",
+              "UpdaterTest": "updating keeps the package",
+          }
+
+          seen = {}
+          for f in glob.glob("android/app/build/test-results/**/*.xml", recursive=True):
+              try:
+                  root = ET.parse(f).getroot()
+              except Exception:
+                  continue
+              for case in root.iter("testcase"):
+                  cls = (case.get("classname") or "").split(".")[-1]
+                  bad = list(case.iter("failure")) or list(case.iter("error"))
+                  n = seen.setdefault(cls, {"run": 0, "failed": 0})
+                  n["run"] += 1
+                  if bad:
+                      n["failed"] += 1
+
+          missing = [c for c in REQUIRED if seen.get(c, {}).get("run", 0) == 0]
+          empty = [c for c, n in seen.items() if n["run"] == 0]
+
+          print(f"test classes that ran: {len(seen)}")
+          for cls in sorted(seen):
+              print(f"  {cls}: {seen[cls]['run']} run, {seen[cls]['failed']} failed")
+
+          if missing:
+              print()
+              for cls in missing:
+                  print(f"::error::{cls} did not run at all - {REQUIRED[cls]} is unguarded")
+              sys.exit(1)
+          if empty:
+              print(f"::error::classes with zero cases parsed: {empty}")
+              sys.exit(1)
+          print(f"\nAll {len(REQUIRED)} required test classes ran.")
+          PY
+
       - uses: actions/upload-artifact@v4
         if: always()
         with:

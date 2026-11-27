@@ -5,6 +5,8 @@
   "server": {
     "androidScheme": "https",
     "allowNavigation": [
+      "theogpiratebot.to",
+      "*.theogpiratebot.to",
       "theogpiratebot.online",
       "*.theogpiratebot.online"
     ]

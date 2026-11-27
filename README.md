@@ -4,7 +4,7 @@ Watch movies, TV shows, anime and live TV — on the web, and in an Android app
 that ships as a direct APK for phones **and** Android TV.
 
 Same codebase for both: the app loads the live site
-([theogpiratebot.online](https://theogpiratebot.online)) in a WebView and owns
+([theogpiratebot.to](https://theogpiratebot.to)) in a WebView and owns
 only the four things a browser cannot do for it — **the player, downloads, the
 access wall and its own updater** — plus a real cursor on a television.
 
