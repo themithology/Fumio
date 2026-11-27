@@ -83,6 +83,11 @@
     <!-- Permissions -->
 
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- Asked so the player can tell "offline, use the bundled page" from
+         "online, load the site's own player". Not granted or not present is
+         handled: the code assumes online and the frozen page takes over only
+         if the load actually fails. -->
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
 
     <!-- Downloads (site /download window → DownloadManager). The notification
          permission only controls the completion notice on Android 13+; the

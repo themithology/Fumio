@@ -3,7 +3,6 @@ import FloatingNav from "./components/partials/FloatingNav.jsx";
 import Home from "./pages/Home.jsx";
 import Search from "./pages/Search.jsx";
 import Explore from "./pages/Explore.jsx";
-import Details from "./pages/Details.jsx";
 import Player from "./pages/Player.jsx";
 import NotFound from "./pages/NotFound.jsx";
 import LiveTv from "./pages/LiveTv.jsx";
@@ -44,8 +43,16 @@ export default function App() {
         <Route path="/live-tv" element={<LiveTv />} />
         <Route path="/live-tv/watch/:id" element={<LiveTvWatch />} />
         <Route path="/explore" element={<Explore />} />
-        <Route path="/details/:type/:id" element={<Details />} />
-        <Route path="/:type/details/:id" element={<Details />} />
+        {/* Details is the SITE's page now, and the app does not ship one.
+            The bundled build used to keep its own copy of it — 647 lines that
+            drifted from the website every time the website changed (the anime
+            season map, the download panel, the server list). A detail page for
+            a title is only ever rendered by the live site; offline, the player
+            still opens because a movie id is all it needs. Anything that lands
+            here without a site falls through to NotFound rather than showing a
+            stale screen that looks live. */}
+        <Route path="/details/:type/:id" element={<NotFound />} />
+        <Route path="/:type/details/:id" element={<NotFound />} />
         <Route path="/watch/:type/:id" element={<Player />} />
         <Route path="*" element={<NotFound />} />
       </Routes>

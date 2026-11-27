@@ -19,14 +19,27 @@ import java.util.regex.Pattern;
 import org.json.JSONObject;
 
 /**
- * Pull current embed hosts from the live site so a TLD change
- * (vidstuck.xyz → vidstuck.cc) does not need a new APK.
+ * The embed hosts, learned from the site instead of compiled into the APK.
  *
- * Since 2026-10-28 the player itself loads the live site
- * (FumioPlayerOverlay.LIVE_ORIGIN), so this is no longer the only update
- * path — it keeps the BUNDLED / OFFLINE player pointing at living hosts, and
- * it is the one thing that still works when the site cannot be reached at
- * player-open time but was reachable earlier.
+ * The site renames providers constantly — vidstuck.xyz → vidstuck.cc →
+ * 0vidads.top in three weeks, TGVID moved to tgvidx.lovable.app, and its Server
+ * 1 is now our own embed at embed.theogpiratebot.to. Every one of those used to
+ * need a new APK.
+ *
+ * There is a proper contract for this, so it is used first:
+ *
+ *   GET /api/players?type=movie&id=550   →   { servers: [{ key, label, url }] }
+ *
+ * `url` is the LIVE embed URL for that slot, which is what the app actually
+ * needs to recognise a player when it sees one. This class harvests the host out
+ * of each of those URLs and keeps them, so a provider that moves is a data
+ * change on the web.
+ *
+ * The old HTML scrape stays as the SECOND tier, because it works before any
+ * manifest exists (the first launch, and the offline player) and it is cheaper
+ * than a manifest request per title. It is no longer the only source, and its
+ * host families are no longer a hardcoded whitelist — anything shaped like a
+ * provider host is remembered.
  */
 final class LiveServers {
 
@@ -36,12 +49,18 @@ final class LiveServers {
     // now (FumioPlayerOverlay), so this scrape only feeds the OFFLINE copy —
     // but that copy is what a plane or a site outage falls back to, so a TLD
     // move must still reach it without a new APK.
+    /*
+     * SHAPE, NOT NAMES. These used to be a literal list of provider brands, so
+     * a new one was invisible until an APK shipped. A provider host is now
+     * recognised by where it appears (an embed path) rather than by what it is
+     * called, which is the whole point of learning instead of hardcoding.
+     */
     private static final Pattern HOST_IN_URL = Pattern.compile(
-        "https?://(?:www\\.)?(vidstuck|zxcstream|vidfast|bingr|nxsha|tgvid|tgfrost|toonstream|megaplay|zokoanime|vidsrc|videasy|vidlink)\\.[A-Za-z0-9.-]+",
+        "https?://(?:www\\.)?([a-z0-9-]+(?:\\.[a-z0-9-]+)+)(?::\\d+)?/(?:embed|player|watch|stream)/",
         Pattern.CASE_INSENSITIVE
     );
     private static final Pattern HOST_IN_QUOTES = Pattern.compile(
-        "[\"'`]((?:www\\.)?(vidstuck|zxcstream|vidfast|bingr|nxsha|tgvid|tgfrost|toonstream|megaplay|zokoanime|vidsrc|videasy|vidlink)\\.[A-Za-z0-9.-]+)[\"'`]",
+        "[\"'`](?:https?://)?((?:www\\.)?[a-z0-9-]+(?:\\.[a-z0-9-]+)+)(?::\\d+)?/(?:embed|player|watch|stream)/",
         Pattern.CASE_INSENSITIVE
     );
     private static final Pattern SCRIPT_SRC = Pattern.compile(
@@ -110,8 +129,34 @@ final class LiveServers {
         );
     }
 
-    private static JSONObject scrape() {
+    /**
+     * The canonical source, when it answers: the site's own player manifest.
+     *
+     * One request. Any id works — the route resolves the title itself, and the
+     * host list is the same for every title, so this does not need to know what
+     * the viewer is about to watch.
+     */
+    private static JSONObject manifest() {
         JSONObject found = new JSONObject();
+        String body = get(SITE + "api/players?type=movie&id=550");
+        if (body == null || body.isEmpty()) return found;
+        try {
+            JSONObject json = new JSONObject(body);
+            org.json.JSONArray servers = json.optJSONArray("servers");
+            if (servers == null) return found;
+            for (int i = 0; i < servers.length(); i += 1) {
+                JSONObject slot = servers.optJSONObject(i);
+                if (slot == null) continue;
+                rememberUrl(found, slot.optString("url", ""));
+            }
+        } catch (Exception notJson) {
+            /* the scrape tier will try the same origin */
+        }
+        return found;
+    }
+
+    private static JSONObject scrape() {
+        JSONObject found = manifest();
         String html = get(SITE);
         if (html == null || html.isEmpty()) return found;
         harvest(html, found);
@@ -135,6 +180,57 @@ final class LiveServers {
         while (quoted.find()) remember(found, quoted.group(1));
     }
 
+    /**
+     * Remember the host of an embed URL the site handed us.
+     *
+     * Unlike {@link #remember}, this takes a whole URL rather than trusting the
+     * caller to have extracted a host, and it keeps the FULL host — TGVID lives
+     * at <name>.lovable.app, so keeping only the first label would record
+     * "tgvidx" and match nothing.
+     */
+    private static void rememberUrl(JSONObject found, String raw) {
+        if (raw == null) return;
+        String host = raw.trim().toLowerCase(Locale.US);
+        int scheme = host.indexOf("://");
+        if (scheme >= 0) host = host.substring(scheme + 3);
+        int slash = host.indexOf('/');
+        if (slash >= 0) host = host.substring(0, slash);
+        int colon = host.indexOf(':');
+        if (colon >= 0) host = host.substring(0, colon);
+        if (host.startsWith("www.")) host = host.substring(4);
+        if (host.indexOf('.') <= 0) return;
+        try {
+            found.put(host, host);
+        } catch (Exception ignored) {
+            /* JSONObject put of strings cannot fail */
+        }
+    }
+
+    /**
+     * Is this host one the site has published an embed on?
+     *
+     * Matched as a SUFFIX of the host so a subdomain (cdn., www., a numbered
+     * shard) still counts, and so the full host is what is stored.
+     */
+    static boolean isKnownHost(String host) {
+        if (host == null || host.isEmpty()) return false;
+        String target = host.toLowerCase(Locale.US);
+        java.util.Iterator<String> keys = hosts.keys();
+        while (keys.hasNext()) {
+            String known = keys.next();
+            if (known.isEmpty()) continue;
+            if (target.equals(known) || target.endsWith("." + known)) return true;
+        }
+        // The bundle's own defaults are always trusted, even before any fetch.
+        keys = DEFAULTS.keys();
+        while (keys.hasNext()) {
+            String known = keys.next();
+            if (known.isEmpty()) continue;
+            if (target.equals(known) || target.endsWith("." + known)) return true;
+        }
+        return false;
+    }
+
     private static void remember(JSONObject found, String raw) {
         if (raw == null) return;
         String host = raw.trim().toLowerCase(Locale.US);
@@ -142,11 +238,9 @@ final class LiveServers {
         int slash = host.indexOf('/');
         if (slash >= 0) host = host.substring(0, slash);
         if (host.startsWith("www.")) host = host.substring(4);
-        int dot = host.indexOf('.');
-        if (dot <= 0) return;
-        String family = host.substring(0, dot);
+        if (host.indexOf('.') <= 0) return;
         try {
-            found.put(family, host);
+            found.put(host, host);
         } catch (Exception ignored) {
             /* JSONObject put of strings cannot fail */
         }
@@ -218,11 +312,19 @@ final class LiveServers {
         }
     }
 
+    /**
+     * The only hosts known before any network call has ever succeeded.
+     *
+     * Kept to the two that a first launch genuinely needs: our own embed (Server
+     * 1 in both lanes, and the one the app is most likely to meet first) and one
+     * third-party, so the offline player has something to compare against.
+     * Everything else is learned — see {@link #manifest()}.
+     */
     private static JSONObject defaults() {
         JSONObject out = new JSONObject();
         try {
-            out.put("vidstuck", "vidstuck.cc");
-            out.put("zxcstream", "zxcstream.cc");
+            out.put("embed.theogpiratebot.to", "embed.theogpiratebot.to");
+            out.put("0vidads.top", "0vidads.top");
         } catch (Exception ignored) {
             /* defaults */
         }

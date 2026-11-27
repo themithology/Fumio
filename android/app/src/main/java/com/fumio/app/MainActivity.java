@@ -81,8 +81,12 @@ public class MainActivity extends BridgeActivity {
     private String pendingPlayEpisode;
     private String pendingPlayServer;
     private String pendingPlayQuery;
+    /**
+     * The title in an embed path, in all three shapes the site emits:
+     * /embed/movie/550, /player/tv/1399/1/2, /watch/movie/550, /movie/550.
+     */
     private static final Pattern EMBED_TITLE = Pattern.compile(
-        "(?i)/(movie|tv|anime)/(\\d+)(?:/(\\d+)(?:/(\\d+))?)?"
+        "(?i)/(?:embed/|player/|watch/)?(movie|tv|anime)/(\\d+)(?:/(\\d+)(?:/(\\d+))?)?"
     );
     private String playerScript = "";
     private String localAppUrl = "";
@@ -892,9 +896,14 @@ public class MainActivity extends BridgeActivity {
                 if (
                     request != null &&
                     !request.isForMainFrame() &&
-                    isPlayerEmbed(request.getUrl())
+                    isPlayerEmbed(request.getUrl()) &&
+                    // A player PAGE, not something inside one. The same domains
+                    // serve assets, APIs and /demo pages; handing those to the
+                    // player opened a black screen, and blanking them here
+                    // broke the provider's own page.
+                    isPlayerPage(request.getUrl())
                 ) {
-                    if (!playerActive && !suppressEmbedOpen) {
+                    if (!playerActive && !suppressEmbedOpen && embedTitle(request.getUrl()) != null) {
                         final Uri embed = request.getUrl();
                         view.post(() -> openAppPlayerFromEmbed(embed));
                     }
@@ -1507,11 +1516,67 @@ public class MainActivity extends BridgeActivity {
     }
 
     private void openAppPlayerFromEmbed(Uri url) {
-        if (url == null) return;
-        String path = url.getPath() == null ? "" : url.getPath();
+        String[] title = embedTitle(url);
+        if (title == null) return;
+        openAppPlayer(title[0], title[1], title[2], title[3]);
+    }
+
+    /**
+     * Which title is this embed URL, in OUR vocabulary?
+     *
+     * The site has three path grammars and the app only knew the first, so two
+     * providers fell through and opened inside the web shell — with the site's
+     * ads — instead of in our own player:
+     *
+     *   /embed/{movie|tv}/{id}[/{s}/{e}]    Server 1, TGVID, vidstuck
+     *   /player/(movie|tv)/{id}             zxcstream (Roxy)
+     *   /watch/{movie|tv}/{id}, /movie/{id} bingr, vidfast
+     *
+     * Static and WebView-free on purpose: this is the half a JVM test proves.
+     */
+    static String[] embedTitle(Uri url) {
+        return url == null ? null : embedTitle(url.getPath());
+    }
+
+    /** @see #embedTitle(Uri) — the same rule, on a path, so a JVM test can drive it. */
+    static String[] embedTitle(String path) {
+        if (path == null) return null;
         Matcher match = EMBED_TITLE.matcher(path);
-        if (!match.find()) return;
-        openAppPlayer(match.group(1), match.group(2), match.group(3), match.group(4));
+        if (!match.find()) return null;
+        String type = match.group(1) == null ? "movie" : match.group(1).toLowerCase(Locale.US);
+        String id = match.group(2);
+        if (id == null || id.isEmpty()) return null;
+        String season = match.group(3);
+        String episode = match.group(4);
+        // A tv URL with no season is the anime lane's shape. Saying "1, 1"
+        // would open an episode the provider never numbered that way.
+        if ("tv".equals(type) && (season == null || season.isEmpty())) {
+            season = null;
+            episode = null;
+        }
+        return new String[] { type, id, season, episode };
+    }
+
+    /**
+     * Is this a player PAGE rather than something inside one?
+     *
+     * The same domains publish health endpoints, /demo pages, assets and APIs.
+     * Handing any of those to the player opens a black screen.
+     */
+    static boolean isPlayerPage(Uri url) {
+        return url != null && isPlayerPage(url.getPath());
+    }
+
+    /** @see #isPlayerPage(Uri) */
+    static boolean isPlayerPage(String path) {
+        if (path == null) return false;
+        return (
+            path.contains("/embed/") ||
+            path.contains("/player/") ||
+            path.contains("/watch/") ||
+            path.startsWith("/movie/") ||
+            path.startsWith("/tv/")
+        );
     }
 
     private String firstQuery(Uri url, String key, String fallback) {
@@ -1779,52 +1844,90 @@ public class MainActivity extends BridgeActivity {
         return path != null && path.toLowerCase(Locale.US).startsWith("/download");
     }
 
+    /**
+     * A file-download link, as opposed to something to browse.
+     *
+     * The site's download path is now the /api/downloads broker: it hands the
+     * browser a short-lived SIGNED GRANT, and the server resolves that grant to
+     * a fresh file link. So the identity of a download is in the PATH and the
+     * grant, not in a provider's hostname — `tgdl.lovable.app`, `hubcloud` and
+     * `filepress` were the old picker and are gone from the site, which means a
+     * hardcoded hostname list silently stops matching the moment the backend
+     * moves (it did, on 2026-11-20).
+     *
+     * Kept: the broker paths, the signed-grant shape, and the one host the site
+     * still serves its own download window from.
+     */
     private boolean isDownloadHost(Uri url) {
         if (url == null) return false;
+        String path = url.getPath() == null ? "" : url.getPath().toLowerCase(Locale.US);
+        if (
+            path.startsWith("/api/downloads") ||
+            path.startsWith("/downloads/") ||
+            path.startsWith("/dl/") ||
+            path.contains("/file/") ||
+            // A signed grant is a long opaque token, never an id; a title page
+            // never carries one.
+            path.matches(".*/[A-Za-z0-9_-]{32,}(?:/.*)?")
+        ) {
+            return true;
+        }
         String host = url.getHost();
         if (host == null) return false;
         host = host.toLowerCase(Locale.US);
-        if (host.contains("vidsrc.party") || host.contains("tgdl.") || host.contains("hubcloud") || host.contains("filepress")) {
-            return true;
-        }
-        return hostMatches(url, "tgdl.lovable.app", "vidsrc.party");
+        if (host.contains("vidsrc.party")) return true;
+        // Any host the site itself published, on a file-ish path.
+        return LiveServers.isKnownHost(host) && path.matches(".*\\.(?:mkv|mp4|avi|m4v|webm|srt)$");
     }
+
+    /**
+     * The embed hosts the site currently uses.
+     *
+     * LEARNED, NOT HARDCODED. This list used to be fifteen literal hostnames
+     * compiled into the APK, and the site renames providers every few weeks:
+     * vidstuck.xyz → .cc → 0vidads.top, and its Server 2 stopped opening in our
+     * player until a new APK shipped. Server 1 (elfura / theogpiratebot.to) was
+     * never in the list at all.
+     *
+     * The site publishes the answer itself: GET /api/players?type=&id=&season=&
+     * episode= returns `servers: [{ key, label, url }]` — the live embed URL for
+     * every slot. {@link LiveServers} picks those up and keeps them, so a
+     * provider that moves is a data change on the web, not an app release.
+     *
+     * What is left here is only the PARTICLE the app cannot learn without asking
+     * the network first: enough to recognise a player URL on the very first
+     * launch, before any manifest has been fetched. Deliberately tiny.
+     */
+    private static final String[] EMBED_HOST_HINTS = {
+        "theogpiratebot.to", // our own embed, Server 1 in both lanes
+        "lovable.app", // TGVID ships as <name>.lovable.app
+        "0vidads.top",
+        "vidstuck.",
+        "zxcstream.",
+        "nxsha.",
+        "vidfast.",
+        "bingr.",
+        "megaplay.",
+        "zokoanime.",
+        "4animo.",
+    };
 
     private boolean isPlayerEmbed(Uri url) {
         if (url == null || isDownloadHost(url)) return false;
         String host = url.getHost();
         if (host == null) return false;
         host = host.toLowerCase(Locale.US);
-        if (
-            host.contains("vidsrc") ||
-            host.contains("videasy") ||
-            host.contains("vidfast") ||
-            host.contains("vidlink") ||
-            host.contains("vidstuck") ||
-            host.contains("zxcstream")
-        ) {
-            return true;
+        // OUR OWN site is never an "embed to swap out": its /watch route is
+        // handled by the route watcher and the overlay, and blanking a subframe
+        // on our own origin would break the page we are browsing.
+        if (isLiveSite(url) || isOwnOrigin(url)) return false;
+        if (LiveServers.isKnownHost(host)) return true;
+        for (String hint : EMBED_HOST_HINTS) {
+            if (hint.endsWith(".") ? host.contains(hint) : host.equals(hint) || host.endsWith("." + hint)) {
+                return true;
+            }
         }
-        return hostMatches(
-            url,
-            "vidstuck.xyz",
-            "vidstuck.cc",
-            "bingr.one",
-            "zxcstream.xyz",
-            "zxcstream.cc",
-            "2embed.cc",
-            "2embed.skin",
-            "multiembed.mov",
-            "autoembed.cc",
-            "smashystream.com",
-            "embed.su",
-            "111movies.com",
-            "moviesapi.club",
-            "tgvid.lovable.app",
-            "megaplay.site",
-            "zokoanime.com",
-            "4animo.com"
-        );
+        return false;
     }
 
     private String readAsset(String name) {
