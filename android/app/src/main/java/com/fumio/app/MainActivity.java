@@ -1917,6 +1917,10 @@ public class MainActivity extends BridgeActivity {
         String host = url.getHost();
         if (host == null) return false;
         host = host.toLowerCase(Locale.US);
+        // OUR OWN site is never an "embed to swap out": its /watch route is
+        // handled by the route watcher and the overlay, and blanking a subframe
+        // on our own origin would break the page we are browsing.
+        if (isLiveSite(url) || isOwnOrigin(url)) return false;
         if (LiveServers.isKnownHost(host)) return true;
         for (String hint : EMBED_HOST_HINTS) {
             if (hint.endsWith(".") ? host.contains(hint) : host.equals(hint) || host.endsWith("." + hint)) {
